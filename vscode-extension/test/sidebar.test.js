@@ -1,4 +1,8 @@
 /**
+ * @jest-environment jsdom
+ */
+
+/**
  * Tests for SidebarProvider.
  *
  * Uses the manual vscode mock from src/__tests__/__mocks__/vscode.ts.
@@ -8,6 +12,19 @@
 const vscode = require("vscode");
 
 const { SidebarProvider } = require("../src/sidebar");
+
+// ---------------------------------------------------------------------------
+// Track message listeners so we can clean up between renders. Each eval of the
+// inline script adds a new "message" listener; without cleanup, duplicate
+// listeners accumulate across tests.
+// ---------------------------------------------------------------------------
+
+const _messageListeners = [];
+const _origAddEventListener = window.addEventListener.bind(window);
+window.addEventListener = function (type, fn, opts) {
+  if (type === "message") _messageListeners.push(fn);
+  return _origAddEventListener(type, fn, opts);
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -260,5 +277,103 @@ describe("SidebarProvider", () => {
     // (the mock EventEmitter clears listeners on dispose)
     provider.onAction(actionHandler);
     expect(actionHandler).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Render-script tests: evaluate the inline webview script in jsdom and check
+// the resulting DOM. These exercise renderState() end-to-end.
+// ---------------------------------------------------------------------------
+
+function renderToDom(state) {
+  // Clean up message listeners left over from prior renders
+  _messageListeners.forEach((fn) => window.removeEventListener("message", fn));
+  _messageListeners.length = 0;
+
+  // Fresh root container
+  document.body.innerHTML = '<div id="root"></div>';
+
+  // Mock acquireVsCodeApi for the inline script
+  global.acquireVsCodeApi = () => ({ postMessage: () => {} });
+
+  // Extract the inline rendering script from a freshly-resolved webview
+  const tmpProvider = new SidebarProvider(vscode.Uri.file("/test/extension"));
+  const parts = makeWebviewView();
+  tmpProvider.resolveWebviewView(parts.view, {}, {});
+  const html = parts.webview.html;
+  tmpProvider.dispose();
+
+  const scriptMatch = html.match(/<script[^>]*>([\s\S]+?)<\/script>/);
+  if (!scriptMatch) throw new Error("Could not extract inline script from html");
+  const scriptText = scriptMatch[1];
+
+  // Direct eval so const/let declarations are scoped to this function call
+  eval(scriptText);
+
+  // Dispatch a render message; the script's listener calls renderState()
+  window.dispatchEvent(new MessageEvent("message", { data: { type: "render", state } }));
+
+  return document.getElementById("root").innerHTML;
+}
+
+function baseHarnesses() {
+  return [
+    { name: "claude-code", configured: false, projectName: null, backendLabel: null },
+    { name: "codex", configured: false, projectName: null, backendLabel: null },
+    { name: "cursor", configured: false, projectName: null, backendLabel: null },
+    { name: "copilot", configured: false, projectName: null, backendLabel: null },
+    { name: "gemini", configured: false, projectName: null, backendLabel: null },
+    { name: "kiro", configured: false, projectName: null, backendLabel: null },
+  ];
+}
+
+function withCopilot(overrides) {
+  const harnesses = baseHarnesses();
+  const idx = harnesses.findIndex((h) => h.name === "copilot");
+  harnesses[idx] = { ...harnesses[idx], ...overrides };
+  return {
+    harnesses,
+    userId: null,
+    codexBuffer: null,
+    bridgeError: null,
+  };
+}
+
+describe("SidebarProvider render-script (Copilot repo paths)", () => {
+  test("renders repo path count under Copilot when configured", () => {
+    const state = withCopilot({
+      configured: true,
+      projectName: "my-proj",
+      backendLabel: "Arize AX",
+      repoPaths: ["/a", "/b"],
+    });
+    const rendered = renderToDom(state);
+    const copilotRow = rendered.match(/<li class="harness-row" data-harness="copilot">[\s\S]*?<\/li>/)[0];
+    expect(copilotRow).toContain("2 workspaces");
+  });
+
+  test("single repo path renders singular 'workspace'", () => {
+    const state = withCopilot({
+      configured: true,
+      projectName: "my-proj",
+      backendLabel: "Arize AX",
+      repoPaths: ["/only"],
+    });
+    const rendered = renderToDom(state);
+    const copilotRow = rendered.match(/<li class="harness-row" data-harness="copilot">[\s\S]*?<\/li>/)[0];
+    expect(copilotRow).toContain("1 workspace");
+    expect(copilotRow).not.toContain("workspaces");
+  });
+
+  test("no extra row when copilot has no paths", () => {
+    const state = withCopilot({
+      configured: true,
+      projectName: "my-proj",
+      backendLabel: "Arize AX",
+      repoPaths: [],
+    });
+    const rendered = renderToDom(state);
+    const copilotRow = rendered.match(/<li class="harness-row" data-harness="copilot">[\s\S]*?<\/li>/)[0];
+    expect(copilotRow).not.toContain("workspace");
   });
 });

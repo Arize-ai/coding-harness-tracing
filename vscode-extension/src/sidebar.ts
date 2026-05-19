@@ -11,6 +11,11 @@ export interface SidebarViewState {
     configured: boolean;
     projectName: string | null;
     backendLabel: string | null;
+    // Copilot-only: list of repos where hooks are installed. May be undefined
+    // for other harnesses or until sidebarState.ts::toViewState passes it
+    // through from StatusPayload.harnesses[*].repo_paths.
+    // TODO(repo-paths-followup): wire repo_paths through in sidebarState.ts::toViewState.
+    repoPaths?: string[];
   }>;
   userId: string | null;
   codexBuffer: {
@@ -217,6 +222,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           if (h.projectName) meta += h.projectName;
           if (h.backendLabel) meta += (meta ? " · " : "") + h.backendLabel;
           if (meta) html += '<div class="harness-meta">' + escapeHtml(meta) + '</div>';
+          if (key === "copilot" && Array.isArray(h.repoPaths) && h.repoPaths.length > 0) {
+            var count = h.repoPaths.length;
+            var label = count === 1 ? "1 workspace" : count + " workspaces";
+            var joined = h.repoPaths.join(", ");
+            var truncated = joined.length > 40 ? joined.slice(0, 37) + "..." : joined;
+            html += '<div class="harness-meta">' + escapeHtml(label) + ' · <span title="' + escapeHtml(joined) + '">' + escapeHtml(truncated) + '</span></div>';
+          }
           html += '<div class="harness-actions">';
           html += '<button class="btn btn-secondary" data-action="uninstall" data-harness="' + key + '">Uninstall</button>';
           html += '</div>';
