@@ -77,6 +77,8 @@ def install(request: Dict[str, Any]) -> Dict[str, Any]:
     if harness == "kiro" and request.get("kiro_options"):
         extra_kwargs["agent_name"] = request["kiro_options"]["agent_name"]
         extra_kwargs["set_default"] = request["kiro_options"]["set_default"]
+    if harness == "copilot" and request.get("repo_path"):
+        extra_kwargs["repo_path"] = request["repo_path"]
 
     try:
         mod = _import_installer(harness)

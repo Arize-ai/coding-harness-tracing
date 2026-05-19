@@ -270,6 +270,81 @@ def test_install_non_kiro_does_not_receive_kiro_kwargs():
 
 
 # ---------------------------------------------------------------------------
+# Install — copilot repo_path pass-through
+# ---------------------------------------------------------------------------
+
+
+def test_install_copilot_with_repo_path_forwards_to_installer():
+    from core.vscode_bridge.models import build_install_request
+
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+
+    fake = _fake_module()
+    fake.install_noninteractive = _spy
+
+    req = build_install_request(
+        harness="copilot",
+        backend=_arize_backend(),
+        project_name="copilot",
+        repo_path="/repo/a",
+    )
+
+    with mock.patch("core.vscode_bridge.install._import_installer", return_value=fake):
+        result = install(req)
+
+    assert result["success"] is True
+    assert captured["repo_path"] == "/repo/a"
+    assert captured["target"] == "arize"
+    assert captured["project_name"] == "copilot"
+
+
+def test_install_copilot_without_repo_path_omits_kwarg():
+    from core.vscode_bridge.models import build_install_request
+
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+
+    fake = _fake_module()
+    fake.install_noninteractive = _spy
+
+    req = build_install_request(
+        harness="copilot",
+        backend=_arize_backend(),
+        project_name="copilot",
+    )
+
+    with mock.patch("core.vscode_bridge.install._import_installer", return_value=fake):
+        result = install(req)
+
+    assert result["success"] is True
+    assert "repo_path" not in captured
+
+
+def test_install_non_copilot_ignores_repo_path():
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+
+    fake = _fake_module()
+    fake.install_noninteractive = _spy
+
+    req = _base_request(harness="claude-code")
+    req["repo_path"] = "/x"
+
+    with mock.patch("core.vscode_bridge.install._import_installer", return_value=fake):
+        result = install(req)
+
+    assert result["success"] is True
+    assert "repo_path" not in captured
+
+
+# ---------------------------------------------------------------------------
 # Uninstall — success per harness
 # ---------------------------------------------------------------------------
 
