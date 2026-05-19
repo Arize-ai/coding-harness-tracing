@@ -71,6 +71,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Kiro: set the chosen agent as Kiro's default after install",
     )
+    install_p.add_argument(
+        "--repo-path",
+        default=None,
+        help="Copilot only: absolute path to the repo where hooks should be installed. Default: cwd.",
+    )
 
     # uninstall
     uninstall_p = sub.add_parser("uninstall", help="Uninstall tracing for a harness")
@@ -145,15 +150,28 @@ def _run_install(args: argparse.Namespace) -> int:
             set_default=args.set_default,
         )
 
-    request = build_install_request(
-        harness=args.harness,
-        backend=backend,
-        project_name=args.project_name,
-        user_id=args.user_id,
-        with_skills=args.with_skills,
-        logging=_build_logging_block(args),
-        kiro_options=kiro_options,
-    )
+    try:
+        request = build_install_request(
+            harness=args.harness,
+            backend=backend,
+            project_name=args.project_name,
+            user_id=args.user_id,
+            with_skills=args.with_skills,
+            logging=_build_logging_block(args),
+            kiro_options=kiro_options,
+            repo_path=args.repo_path,
+        )
+    except ValueError as exc:
+        from core.vscode_bridge.models import build_operation_result
+
+        result = build_operation_result(
+            success=False,
+            error="invalid_request",
+            harness=args.harness,
+            logs=[str(exc)],
+        )
+        return _drain_logs_and_emit(result)
+
     result = install(request)
     return _drain_logs_and_emit(result)
 

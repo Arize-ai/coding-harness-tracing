@@ -389,6 +389,100 @@ class TestInstallKiroFlags:
 
 
 # ---------------------------------------------------------------------------
+# Install subcommand — Copilot-specific --repo-path flag
+# ---------------------------------------------------------------------------
+
+
+class TestInstallRepoPath:
+    @mock.patch("core.vscode_bridge.install.install")
+    def test_install_copilot_with_repo_path_flag(self, mock_install, monkeypatch):
+        mock_install.return_value = {
+            "success": True,
+            "error": None,
+            "harness": "copilot",
+            "logs": [],
+        }
+        argv = [
+            "install",
+            "--harness",
+            "copilot",
+            "--target",
+            "arize",
+            "--endpoint",
+            "https://otlp.arize.com",
+            "--api-key",
+            "k",
+            "--space-id",
+            "s",
+            "--project-name",
+            "copilot",
+            "--repo-path",
+            "/repo/a",
+        ]
+        code, lines, stderr = _run(argv, monkeypatch)
+        assert code == 0
+        mock_install.assert_called_once()
+        call_args = mock_install.call_args[0][0]
+        assert call_args["repo_path"] == "/repo/a"
+
+    @mock.patch("core.vscode_bridge.install.install")
+    def test_install_without_repo_path_flag_defaults_to_none(self, mock_install, monkeypatch):
+        mock_install.return_value = {
+            "success": True,
+            "error": None,
+            "harness": "copilot",
+            "logs": [],
+        }
+        argv = [
+            "install",
+            "--harness",
+            "copilot",
+            "--target",
+            "arize",
+            "--endpoint",
+            "https://otlp.arize.com",
+            "--api-key",
+            "k",
+            "--space-id",
+            "s",
+            "--project-name",
+            "copilot",
+        ]
+        code, lines, stderr = _run(argv, monkeypatch)
+        assert code == 0
+        mock_install.assert_called_once()
+        call_args = mock_install.call_args[0][0]
+        assert call_args["repo_path"] is None
+
+    @mock.patch("core.vscode_bridge.install.install")
+    def test_install_repo_path_on_non_copilot_rejected_by_build_install_request(self, mock_install, monkeypatch):
+        argv = [
+            "install",
+            "--harness",
+            "claude-code",
+            "--target",
+            "arize",
+            "--endpoint",
+            "https://otlp.arize.com",
+            "--api-key",
+            "k",
+            "--space-id",
+            "s",
+            "--project-name",
+            "p",
+            "--repo-path",
+            "/repo/a",
+        ]
+        code, lines, stderr = _run(argv, monkeypatch)
+        assert code == 1
+        events = _parse_ndjson(lines)
+        result = events[-1]
+        assert result["event"] == "result"
+        assert result["payload"]["success"] is False
+        mock_install.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Uninstall subcommand
 # ---------------------------------------------------------------------------
 
