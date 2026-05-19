@@ -53,12 +53,19 @@ def _extract_harness_item(name: str, entry: Any) -> Dict[str, Any]:
                 set_default=False,
             )
 
+    repo_paths = None
+    if name == "copilot":
+        raw_paths = entry.get("repo_paths")
+        if isinstance(raw_paths, list) and raw_paths and all(isinstance(p, str) and p for p in raw_paths):
+            repo_paths = list(raw_paths)
+
     return build_harness_status_item(
         name=name,
         configured=True,
         project_name=entry.get("project_name"),
         backend=_extract_backend(entry),
         kiro_options=kiro_options,
+        repo_paths=repo_paths,
     )
 
 
