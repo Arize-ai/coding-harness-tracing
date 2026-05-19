@@ -32,6 +32,7 @@ export const window = {
   showInformationMessage: jest.fn((_msg: string, ..._rest: unknown[]) => Promise.resolve(undefined)),
   showWarningMessage: jest.fn((_msg: string, ..._rest: unknown[]) => Promise.resolve(undefined)),
   showQuickPick: jest.fn((_items: unknown[], _opts?: unknown) => Promise.resolve(undefined)),
+  showOpenDialog: jest.fn((_opts?: unknown) => Promise.resolve(undefined)),
   createOutputChannel: jest.fn((_name: string) => ({
     appendLine: jest.fn(),
     append: jest.fn(),
@@ -109,6 +110,10 @@ export const Uri = {
   file: jest.fn((path: string) => makeUri("file", path)),
   joinPath: jest.fn((base: { path: string }, ...segments: string[]) =>
     makeUri("file", base.path + "/" + segments.join("/"))),
+};
+
+export const workspace = {
+  workspaceFolders: undefined as Array<{ uri: { fsPath: string } }> | undefined,
 };
 
 export class EventEmitter {

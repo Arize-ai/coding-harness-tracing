@@ -91,6 +91,8 @@
     logToolContent: true,
     kiroAgentName: KIRO_DEFAULT_AGENT_NAME,
     kiroSetDefault: false,
+    workspaceFolder: "",
+    copilotRepoPath: "",
     installing: false,
     resultPayload: null,
     prefillHarness: null,
@@ -181,6 +183,9 @@
       var card = h("div", { className: cls, "data-harness": key, onClick: function () {
         state.harness = key;
         if (!state.projectName) state.projectName = key;
+        if (state.harness === "copilot" && !state.copilotRepoPath) {
+          state.copilotRepoPath = state.workspaceFolder;
+        }
         render();
       } }, [
         h("span", { className: "card-label" }, HARNESS_LABELS[key]),
@@ -288,6 +293,10 @@
         state.userId = v;
       }, "(optional)")
     );
+
+    if (state.harness === "copilot") {
+      container.appendChild(copilotRepoPathRow());
+    }
 
     if (state.harness === "kiro") {
       container.appendChild(
@@ -453,6 +462,7 @@
         tool_content: state.logToolContent,
       },
       kiro_options: null,
+      repo_path: state.harness === "copilot" ? (state.copilotRepoPath || null) : null,
     };
     if (state.harness === "kiro") {
       request.kiro_options = {
@@ -485,6 +495,34 @@
       children.push(h("div", { className: "hint" }, hint));
     }
     return h("div", { className: "form-group" }, children);
+  }
+
+  function copilotRepoPathRow() {
+    var input = h("input", {
+      type: "text",
+      name: "copilot_repo_path",
+      id: "field-copilot_repo_path",
+      value: state.copilotRepoPath || "",
+      onInput: function (e) {
+        state.copilotRepoPath = e.target.value;
+      },
+    });
+    var browseBtn = h("button", {
+      type: "button",
+      className: "btn btn-secondary",
+      onClick: function () {
+        vscode.postMessage({
+          type: "pickFolder",
+          current: state.copilotRepoPath || state.workspaceFolder,
+        });
+      },
+    }, "Browse...");
+    var inputRow = h("div", { className: "input-row" }, [input, browseBtn]);
+    return h("div", { className: "form-group" }, [
+      h("label", { htmlFor: "field-copilot_repo_path" }, "Workspace folder"),
+      inputRow,
+      h("div", { className: "hint" }, "Repo where Copilot Chat will read .github/hooks/hooks.json. Defaults to your VS Code workspace."),
+    ]);
   }
 
   function checkboxRow(name, label, checked, onChange) {
@@ -543,10 +581,16 @@
 
     switch (msg.type) {
       case "prefill":
+        if (typeof msg.workspace_folder === "string" && msg.workspace_folder) {
+          state.workspaceFolder = msg.workspace_folder;
+        }
         if (msg.harness && HARNESS_KEYS.indexOf(msg.harness) !== -1) {
           state.harness = msg.harness;
           state.prefillHarness = msg.harness;
           if (!state.projectName) state.projectName = msg.harness;
+        }
+        if (state.harness === "copilot" && !state.copilotRepoPath) {
+          state.copilotRepoPath = state.workspaceFolder;
         }
         if (msg.request) {
           var r = msg.request;
@@ -570,6 +614,13 @@
           // set_default always renders as unchecked on prefill — do NOT read it from r.kiro_options.set_default
         }
         render();
+        break;
+
+      case "folderPicked":
+        if (msg.path != null) {
+          state.copilotRepoPath = msg.path;
+          render();
+        }
         break;
 
       case "log":
