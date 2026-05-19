@@ -445,6 +445,177 @@ describe("Wizard UI", () => {
     setupWizard();
     expect(postMessageCalls[0]).toEqual({ type: "ready" });
   });
+
+  test("step 3 shows workspace folder field only for copilot harness", () => {
+    // Non-copilot: no workspace folder field
+    clickElement(getHarnessCards()[0]); // claude-code
+    clickElement(getNextButton());
+    setInputValue("field-endpoint", "otlp.arize.com:443");
+    setInputValue("field-api_key", "k");
+    setInputValue("field-space_id", "s");
+    clickElement(getNextButton());
+
+    expect(document.getElementById("field-copilot_repo_path")).toBeNull();
+
+    // Go back to step 1 and pick copilot
+    setupWizard();
+    postMessageCalls.length = 0;
+
+    const copilotCard = Array.from(getHarnessCards()).find(
+      (c) => c.getAttribute("data-harness") === "copilot"
+    );
+    clickElement(copilotCard);
+    clickElement(getNextButton());
+    setInputValue("field-endpoint", "otlp.arize.com:443");
+    setInputValue("field-api_key", "k");
+    setInputValue("field-space_id", "s");
+    clickElement(getNextButton());
+
+    expect(document.getElementById("field-copilot_repo_path")).not.toBeNull();
+  });
+
+  test("copilot repo path defaults to workspace_folder from prefill", () => {
+    dispatchMessage({
+      type: "prefill",
+      harness: "copilot",
+      workspace_folder: "/my/workspace",
+    });
+
+    // Navigate through to step 3
+    clickElement(getNextButton()); // step 2
+    clickElement(document.querySelector('[data-backend="phoenix"]'));
+    setInputValue("field-endpoint", "http://localhost:6006");
+    clickElement(getNextButton()); // step 3
+
+    const field = document.getElementById("field-copilot_repo_path");
+    expect(field).not.toBeNull();
+    expect(field.value).toBe("/my/workspace");
+  });
+
+  test("selecting copilot card after prefill workspace_folder defaults the path", () => {
+    // Prefill only carries workspace_folder, no harness
+    dispatchMessage({ type: "prefill", workspace_folder: "/ws-from-prefill" });
+
+    // User then selects copilot manually
+    const copilotCard = Array.from(getHarnessCards()).find(
+      (c) => c.getAttribute("data-harness") === "copilot"
+    );
+    clickElement(copilotCard);
+    clickElement(getNextButton());
+
+    clickElement(document.querySelector('[data-backend="phoenix"]'));
+    setInputValue("field-endpoint", "http://localhost:6006");
+    clickElement(getNextButton());
+
+    const field = document.getElementById("field-copilot_repo_path");
+    expect(field.value).toBe("/ws-from-prefill");
+  });
+
+  test("clicking Browse posts pickFolder with current value", () => {
+    dispatchMessage({
+      type: "prefill",
+      harness: "copilot",
+      workspace_folder: "/ws",
+    });
+
+    clickElement(getNextButton());
+    clickElement(document.querySelector('[data-backend="phoenix"]'));
+    setInputValue("field-endpoint", "http://localhost:6006");
+    clickElement(getNextButton());
+
+    postMessageCalls.length = 0;
+
+    // Find the Browse button — it sits in the same .form-group as the
+    // copilot_repo_path input.
+    const field = document.getElementById("field-copilot_repo_path");
+    const formGroup = field.closest(".form-group");
+    const browseBtn = Array.from(formGroup.querySelectorAll("button")).find(
+      (b) => b.textContent.indexOf("Browse") !== -1
+    );
+    expect(browseBtn).toBeDefined();
+    clickElement(browseBtn);
+
+    const pickMsg = postMessageCalls.find((m) => m.type === "pickFolder");
+    expect(pickMsg).toBeDefined();
+    expect(pickMsg.current).toBe("/ws");
+  });
+
+  test("folderPicked message updates the workspace folder input", () => {
+    dispatchMessage({
+      type: "prefill",
+      harness: "copilot",
+      workspace_folder: "/ws",
+    });
+
+    clickElement(getNextButton());
+    clickElement(document.querySelector('[data-backend="phoenix"]'));
+    setInputValue("field-endpoint", "http://localhost:6006");
+    clickElement(getNextButton());
+
+    dispatchMessage({ type: "folderPicked", path: "/picked/path" });
+
+    const field = document.getElementById("field-copilot_repo_path");
+    expect(field.value).toBe("/picked/path");
+  });
+
+  test("folderPicked with null path does not change input value", () => {
+    dispatchMessage({
+      type: "prefill",
+      harness: "copilot",
+      workspace_folder: "/ws",
+    });
+
+    clickElement(getNextButton());
+    clickElement(document.querySelector('[data-backend="phoenix"]'));
+    setInputValue("field-endpoint", "http://localhost:6006");
+    clickElement(getNextButton());
+
+    const before = document.getElementById("field-copilot_repo_path").value;
+    dispatchMessage({ type: "folderPicked", path: null });
+
+    const field = document.getElementById("field-copilot_repo_path");
+    expect(field.value).toBe(before);
+  });
+
+  test("install request includes repo_path for copilot and null otherwise", () => {
+    // Copilot path: install request carries the user-entered repo_path
+    dispatchMessage({
+      type: "prefill",
+      harness: "copilot",
+      workspace_folder: "/ws",
+    });
+
+    clickElement(getNextButton());
+    clickElement(document.querySelector('[data-backend="phoenix"]'));
+    setInputValue("field-endpoint", "http://localhost:6006");
+    clickElement(getNextButton());
+
+    setInputValue("field-copilot_repo_path", "/some/repo");
+    clickElement(getNextButton());
+
+    clickElement(getInstallButton());
+
+    let installMsg = postMessageCalls.find((m) => m.type === "install");
+    expect(installMsg).toBeDefined();
+    expect(installMsg.request.repo_path).toBe("/some/repo");
+
+    // Non-copilot: repo_path should be null
+    setupWizard();
+    postMessageCalls.length = 0;
+
+    clickElement(getHarnessCards()[0]); // claude-code
+    clickElement(getNextButton());
+    setInputValue("field-endpoint", "otlp.arize.com:443");
+    setInputValue("field-api_key", "k");
+    setInputValue("field-space_id", "s");
+    clickElement(getNextButton());
+    clickElement(getNextButton());
+    clickElement(getInstallButton());
+
+    installMsg = postMessageCalls.find((m) => m.type === "install");
+    expect(installMsg).toBeDefined();
+    expect(installMsg.request.repo_path).toBeNull();
+  });
 });
 
 // ---- Helpers ----

@@ -108,20 +108,43 @@ export class WizardPanel implements vscode.Disposable {
         await this._handleUninstall(msg.harness as HarnessKey);
         break;
 
+      case "pickFolder":
+        await this._handlePickFolder(typeof msg.current === "string" ? msg.current : undefined);
+        break;
+
       case "cancel":
         this.dispose();
         break;
     }
   }
 
+  private async _handlePickFolder(current?: string): Promise<void> {
+    const defaultUri = current
+      ? vscode.Uri.file(current)
+      : vscode.workspace.workspaceFolders?.[0]?.uri ?? undefined;
+    const result = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      defaultUri,
+      openLabel: "Select workspace folder",
+    });
+    this._post({ type: "folderPicked", path: result?.[0]?.fsPath ?? null });
+  }
+
   private async _sendPrefill(): Promise<void> {
     const harness = this._opts.prefillHarness;
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? undefined;
 
     let status;
     try {
       status = await this._installer.loadStatus();
     } catch {
-      this._post(harness ? { type: "prefill", harness } : { type: "prefill" });
+      this._post(
+        harness
+          ? { type: "prefill", harness, workspace_folder: workspaceFolder }
+          : { type: "prefill", workspace_folder: workspaceFolder },
+      );
       return;
     }
 
@@ -132,6 +155,7 @@ export class WizardPanel implements vscode.Disposable {
         this._post({
           type: "prefill",
           harness,
+          workspace_folder: workspaceFolder,
           request: {
             backend: {
               target: item.backend.target,
@@ -156,6 +180,7 @@ export class WizardPanel implements vscode.Disposable {
       this._post({
         type: "prefill",
         harness,
+        workspace_folder: workspaceFolder,
         request: {
           backend: {
             target: donor.backend.target,
@@ -179,11 +204,12 @@ export class WizardPanel implements vscode.Disposable {
         ? {
             type: "prefill",
             harness,
+            workspace_folder: workspaceFolder,
             request: { user_id: status.user_id, with_skills: false },
           }
         : harness
-        ? { type: "prefill", harness }
-        : { type: "prefill" },
+        ? { type: "prefill", harness, workspace_folder: workspaceFolder }
+        : { type: "prefill", workspace_folder: workspaceFolder },
     );
   }
 

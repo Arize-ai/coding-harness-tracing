@@ -28,6 +28,7 @@ function makeHarness(
     backend: null,
     scope: null,
     kiro_options: null,
+    repo_paths: null,
     ...overrides,
   };
 }
@@ -78,6 +79,72 @@ describe("WizardPanel._sendPrefill", () => {
 
   afterEach(() => {
     WizardPanel.currentPanel?.dispose();
+    (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = undefined;
+  });
+
+  it("prefill includes workspace_folder from vscode.workspace.workspaceFolders", async () => {
+    (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = [
+      { uri: { fsPath: "/ws" } },
+    ];
+
+    const installer = makeInstaller(makeStatus());
+    WizardPanel.open(extensionUri, installer);
+
+    const panel = getCreatedPanel();
+    panel.webview._simulateMessage({ type: "ready" });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(panel.webview.postMessage).toHaveBeenCalled();
+    const prefillCall = panel.webview.postMessage.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === "prefill",
+    );
+    expect(prefillCall).toBeDefined();
+    expect((prefillCall![0] as { workspace_folder?: string }).workspace_folder).toBe("/ws");
+  });
+
+  it("pickFolder triggers showOpenDialog and posts folderPicked with chosen path", async () => {
+    (vscode.window.showOpenDialog as jest.Mock).mockResolvedValueOnce([
+      { fsPath: "/chosen" },
+    ]);
+
+    const installer = makeInstaller(makeStatus());
+    WizardPanel.open(extensionUri, installer);
+
+    const panel = getCreatedPanel();
+    panel.webview._simulateMessage({ type: "pickFolder" });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(vscode.window.showOpenDialog).toHaveBeenCalledTimes(1);
+    const dialogOpts = (vscode.window.showOpenDialog as jest.Mock).mock.calls[0][0];
+    expect(dialogOpts.canSelectFolders).toBe(true);
+    expect(dialogOpts.canSelectFiles).toBe(false);
+
+    const folderPickedCall = panel.webview.postMessage.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === "folderPicked",
+    );
+    expect(folderPickedCall).toBeDefined();
+    expect(folderPickedCall![0]).toEqual({ type: "folderPicked", path: "/chosen" });
+  });
+
+  it("pickFolder cancelled posts folderPicked with null path", async () => {
+    (vscode.window.showOpenDialog as jest.Mock).mockResolvedValueOnce(undefined);
+
+    const installer = makeInstaller(makeStatus());
+    WizardPanel.open(extensionUri, installer);
+
+    const panel = getCreatedPanel();
+    panel.webview._simulateMessage({ type: "pickFolder" });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(vscode.window.showOpenDialog).toHaveBeenCalledTimes(1);
+    const folderPickedCall = panel.webview.postMessage.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === "folderPicked",
+    );
+    expect(folderPickedCall).toBeDefined();
+    expect(folderPickedCall![0]).toEqual({ type: "folderPicked", path: null });
   });
 
   it("prefill for kiro forwards kiro_options.agent_name", async () => {
