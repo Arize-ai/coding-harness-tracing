@@ -468,3 +468,68 @@ def test_status_kiro_no_options_when_entry_not_dict(config_dir):
     kiro = {h["name"]: h for h in result["harnesses"]}["kiro"]
     assert kiro["configured"] is False
     assert kiro["kiro_options"] is None
+
+
+# ---- copilot repo_paths ----
+
+
+def test_status_surfaces_copilot_repo_paths(config_dir):
+    """Copilot entry with repo_paths → list is surfaced in payload."""
+    _write_yaml(
+        config_dir,
+        {
+            "harnesses": {
+                "copilot": {
+                    "project_name": "p",
+                    "target": "phoenix",
+                    "endpoint": "http://x",
+                    "api_key": "",
+                    "repo_paths": ["/a", "/b"],
+                },
+            },
+        },
+    )
+    result = load_status()
+    copilot = {h["name"]: h for h in result["harnesses"]}["copilot"]
+    assert copilot["repo_paths"] == ["/a", "/b"]
+
+
+def test_status_copilot_without_repo_paths_field(config_dir):
+    """Copilot entry without repo_paths key → repo_paths is None."""
+    _write_yaml(
+        config_dir,
+        {
+            "harnesses": {
+                "copilot": {
+                    "project_name": "p",
+                    "target": "phoenix",
+                    "endpoint": "http://x",
+                    "api_key": "",
+                },
+            },
+        },
+    )
+    result = load_status()
+    copilot = {h["name"]: h for h in result["harnesses"]}["copilot"]
+    assert copilot["repo_paths"] is None
+
+
+def test_status_other_harnesses_have_null_repo_paths(config_dir):
+    """Non-copilot harnesses have repo_paths=None."""
+    _write_yaml(
+        config_dir,
+        {
+            "harnesses": {
+                "claude-code": {
+                    "project_name": "my-project",
+                    "target": "arize",
+                    "endpoint": "https://otlp.arize.com",
+                    "api_key": "key123",
+                    "space_id": "sp-1",
+                },
+            },
+        },
+    )
+    result = load_status()
+    cc = {h["name"]: h for h in result["harnesses"]}["claude-code"]
+    assert cc["repo_paths"] is None
