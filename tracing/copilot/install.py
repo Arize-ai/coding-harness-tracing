@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from core.config import get_value, load_config
+from core.config import get_value, load_config, save_config, set_value
 from core.setup import (
     dry_run,
     ensure_shared_runtime,
@@ -130,9 +130,18 @@ def install_noninteractive(
     user_id: str = "",
     with_skills: bool = False,
     logging_block: "dict | None" = None,
+    repo_path: "str | None" = None,
 ) -> None:
-    """Install with no prompts. All decisions made by caller."""
+    """Install with no prompts. All decisions made by caller.
+
+    Copilot hooks are written into ``<repo>/.github/hooks/hooks.json``. When
+    ``repo_path`` is ``None``, the current working directory is used — this
+    keeps the CLI flow (``./install.sh copilot`` from inside a repo) working
+    without changes.
+    """
     ensure_shared_runtime()
+
+    repo = Path(repo_path).expanduser().resolve() if repo_path else Path.cwd().resolve()
 
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
@@ -159,25 +168,56 @@ def install_noninteractive(
         )
         write_logging_config(effective_logging)
 
-    hooks_dir = Path.cwd() / HOOKS_DIR
+    # Record this repo under harnesses.copilot.repo_paths. write_config /
+    # merge_harness_entry above either replace the whole entry or only touch
+    # project_name/collector, so neither preserves repo_paths — we re-load
+    # and re-apply here.
+    if dry_run():
+        info(f"would record repo_path {repo}")
+    else:
+        config = load_config()
+        existing_paths = get_value(config, f"harnesses.{HARNESS_NAME}.repo_paths") or []
+        repo_str = str(repo)
+        if repo_str not in existing_paths:
+            existing_paths = [*existing_paths, repo_str]
+        set_value(config, f"harnesses.{HARNESS_NAME}.repo_paths", existing_paths)
+        save_config(config)
+
+    hooks_dir = repo / HOOKS_DIR
 
     if not dry_run():
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
     _install_hooks(hooks_dir)
 
-    info("Copilot tracing installed")
+    info(f"Copilot tracing installed at {repo}")
 
 
 def uninstall_noninteractive() -> None:
-    """Uninstall with no prompts."""
-    hooks_dir = Path.cwd() / HOOKS_DIR
+    """Uninstall with no prompts.
 
-    _uninstall_hooks(hooks_dir)
+    Removes hooks from every repo previously recorded under
+    ``harnesses.copilot.repo_paths``. Falls back to ``Path.cwd()`` for legacy
+    installs that predate per-repo tracking.
+    """
+    config = load_config()
+    paths = get_value(config, f"harnesses.{HARNESS_NAME}.repo_paths") or []
+
+    if not paths:
+        info("no repo_paths recorded; falling back to current directory")
+        paths = [str(Path.cwd().resolve())]
+
+    for path in paths:
+        hooks_dir = Path(path) / HOOKS_DIR
+        try:
+            _uninstall_hooks(hooks_dir)
+        except OSError as exc:
+            info(f"could not remove hooks from {path}: {exc}")
+            continue
 
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
-    info("Copilot tracing uninstalled")
+    info(f"Copilot tracing uninstalled from {len(paths)} repo(s)")
 
 
 def install() -> None:
@@ -213,6 +253,7 @@ def install() -> None:
         project_name=project_name,
         user_id=user_id,
         logging_block=logging_block,
+        repo_path=None,
     )
 
 
