@@ -44,6 +44,7 @@ export interface HarnessStatusItem {
   backend: Backend | null;
   scope: string | null;
   kiro_options: KiroOptions | null;
+  repo_paths: string[] | null;
 }
 
 /** Full status payload returned by the bridge. */
@@ -65,6 +66,7 @@ export interface InstallRequest {
   with_skills: boolean;
   logging: LoggingFlags | null;
   kiro_options: KiroOptions | null;
+  repo_path: string | null;
 }
 
 /** Result of an install, reconfigure, or uninstall operation. */
