@@ -22,6 +22,7 @@ HarnessStatusItem = {
     "backend": Backend | None,
     "scope": str | None,           # currently always None; reserved
     "kiro_options": {"agent_name": str, "set_default": bool} | None,
+    "repo_paths": list[str] | None,  # copilot only; absolute repo paths
 }
 
 StatusPayload = {
@@ -41,6 +42,7 @@ InstallRequest = {
     "with_skills": bool,
     "logging": {"prompts": bool, "tool_details": bool, "tool_content": bool} | None,
     "kiro_options": {"agent_name": str, "set_default": bool} | None,
+    "repo_path": str | None,       # copilot only; absolute path to target repo
 }
 
 OperationResult = {
@@ -164,6 +166,7 @@ def build_harness_status_item(
     backend: Optional[Dict[str, Any]] = None,
     scope: Optional[str] = None,
     kiro_options: Optional[Dict[str, Any]] = None,
+    repo_paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Build a HarnessStatusItem dict."""
     _validate_harness(name)
@@ -174,6 +177,14 @@ def build_harness_status_item(
             kiro_options.get("agent_name", ""),
             kiro_options.get("set_default", False),
         )
+    if repo_paths is not None and name != "copilot":
+        raise ValueError("repo_paths only valid when harness is 'copilot'")
+    if repo_paths is not None:
+        if not isinstance(repo_paths, list):
+            raise ValueError("repo_paths must be a list of non-empty strings")
+        for item in repo_paths:
+            if not isinstance(item, str) or not item:
+                raise ValueError("repo_paths must be a list of non-empty strings")
     return {
         "name": name,
         "configured": bool(configured),
@@ -181,6 +192,7 @@ def build_harness_status_item(
         "backend": backend,
         "scope": scope,
         "kiro_options": kiro_options,
+        "repo_paths": repo_paths,
     }
 
 
@@ -217,6 +229,7 @@ def build_install_request(
     with_skills: bool = False,
     logging: Optional[Dict[str, bool]] = None,
     kiro_options: Optional[Dict[str, Any]] = None,
+    repo_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an InstallRequest dict."""
     _validate_harness(harness)
@@ -228,6 +241,10 @@ def build_install_request(
             kiro_options.get("agent_name", ""),
             kiro_options.get("set_default", False),
         )
+    if repo_path is not None and harness != "copilot":
+        raise ValueError("repo_path only valid when harness is 'copilot'")
+    if repo_path is not None:
+        _require_str(repo_path, "repo_path")
     return {
         "harness": harness,
         "backend": backend,
@@ -236,6 +253,7 @@ def build_install_request(
         "with_skills": bool(with_skills),
         "logging": _normalize_logging(logging),
         "kiro_options": kiro_options,
+        "repo_path": repo_path,
     }
 
 

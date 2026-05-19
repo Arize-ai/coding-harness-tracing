@@ -76,6 +76,7 @@ class TestBuildHarnessStatusItem:
             "backend": None,
             "scope": None,
             "kiro_options": None,
+            "repo_paths": None,
         }
 
     def test_configured(self):
@@ -103,6 +104,7 @@ class TestBuildHarnessStatusItem:
             "backend",
             "scope",
             "kiro_options",
+            "repo_paths",
         }
 
     def test_kiro_options_for_kiro(self):
@@ -191,6 +193,7 @@ class TestBuildInstallRequest:
             "with_skills": False,
             "logging": None,
             "kiro_options": None,
+            "repo_path": None,
         }
 
     def test_full(self):
@@ -228,6 +231,7 @@ class TestBuildInstallRequest:
             "with_skills",
             "logging",
             "kiro_options",
+            "repo_path",
         }
 
     def test_kiro_options_for_kiro(self):
@@ -411,3 +415,73 @@ class TestBuildKiroOptions:
     def test_rejects_empty_name(self):
         with pytest.raises(ValueError, match="agent_name"):
             build_kiro_options("")
+
+
+# ---------------------------------------------------------------------------
+# Copilot repo paths (HarnessStatusItem.repo_paths, InstallRequest.repo_path)
+# ---------------------------------------------------------------------------
+
+
+class TestRepoPaths:
+    def test_status_item_with_repo_paths(self):
+        h = build_harness_status_item(name="copilot", repo_paths=["/a", "/b"])
+        assert h["repo_paths"] == ["/a", "/b"]
+
+    def test_status_item_default_none(self):
+        h = build_harness_status_item(name="copilot")
+        assert h["repo_paths"] is None
+
+    def test_status_item_empty_list(self):
+        h = build_harness_status_item(name="copilot", repo_paths=[])
+        assert h["repo_paths"] == []
+
+    def test_status_item_rejects_non_copilot(self):
+        with pytest.raises(ValueError, match="repo_paths only valid when harness is 'copilot'"):
+            build_harness_status_item(name="claude-code", repo_paths=["/x"])
+
+    def test_status_item_rejects_non_string_item(self):
+        with pytest.raises(ValueError):
+            build_harness_status_item(name="copilot", repo_paths=[123])
+
+    def test_status_item_rejects_empty_string_item(self):
+        with pytest.raises(ValueError):
+            build_harness_status_item(name="copilot", repo_paths=[""])
+
+    def test_install_request_with_repo_path(self):
+        backend = build_backend("phoenix", "http://localhost:6006")
+        r = build_install_request(
+            harness="copilot",
+            backend=backend,
+            project_name="proj",
+            repo_path="/foo",
+        )
+        assert r["repo_path"] == "/foo"
+
+    def test_install_request_default_none(self):
+        backend = build_backend("phoenix", "http://localhost:6006")
+        r = build_install_request(
+            harness="copilot",
+            backend=backend,
+            project_name="proj",
+        )
+        assert r["repo_path"] is None
+
+    def test_install_request_rejects_non_copilot(self):
+        backend = build_backend("phoenix", "http://localhost:6006")
+        with pytest.raises(ValueError, match="repo_path only valid when harness is 'copilot'"):
+            build_install_request(
+                harness="claude-code",
+                backend=backend,
+                project_name="proj",
+                repo_path="/foo",
+            )
+
+    def test_install_request_rejects_empty_string(self):
+        backend = build_backend("phoenix", "http://localhost:6006")
+        with pytest.raises(ValueError, match="repo_path"):
+            build_install_request(
+                harness="copilot",
+                backend=backend,
+                project_name="proj",
+                repo_path="",
+            )
