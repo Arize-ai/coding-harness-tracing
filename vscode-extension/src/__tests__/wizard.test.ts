@@ -96,9 +96,11 @@ describe("WizardPanel._sendPrefill", () => {
     await new Promise((r) => setImmediate(r));
 
     expect(panel.webview.postMessage).toHaveBeenCalled();
-    const calls = panel.webview.postMessage.mock.calls;
-    const lastMsg = calls[calls.length - 1][0];
-    expect(lastMsg.workspace_folder).toBe("/ws");
+    const prefillCall = panel.webview.postMessage.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === "prefill",
+    );
+    expect(prefillCall).toBeDefined();
+    expect((prefillCall![0] as { workspace_folder?: string }).workspace_folder).toBe("/ws");
   });
 
   it("pickFolder triggers showOpenDialog and posts folderPicked with chosen path", async () => {

@@ -150,6 +150,17 @@ body {
   margin-top: 2px;
 }
 
+.form-group .input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.form-group .input-row input[type="text"] {
+  flex: 1;
+  width: auto;
+}
+
 /* ---- Backend toggle ---- */
 
 .backend-toggle {
