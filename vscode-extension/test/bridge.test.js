@@ -197,6 +197,86 @@ describe("bridge client", () => {
     expect(argv).toContain("--log-tool-content");
   });
 
+  // ── install passes --repo-path ───────────────────────────────────────
+
+  test("install passes --repo-path when set", async () => {
+    stubBridgeExists();
+    const child = fakeChild();
+    nextChild = child;
+
+    const p = install({
+      harness: "copilot",
+      backend: {
+        target: "arize",
+        endpoint: "https://otlp.arize.com/v1",
+        api_key: "key123",
+        space_id: "sp1",
+      },
+      project_name: "proj",
+      user_id: null,
+      with_skills: false,
+      logging: null,
+      kiro_options: null,
+      repo_path: "/repo/a",
+    });
+    await awaitSpawn();
+
+    pushLines(
+      child.stdout,
+      JSON.stringify({
+        event: "result",
+        payload: { success: true, error: null, harness: "copilot", logs: [] },
+      })
+    );
+    child.stdout.push(null);
+    child.emit("close", 0);
+
+    await p;
+
+    const argv = cp.spawn.mock.calls[0][1];
+    const flagIdx = argv.indexOf("--repo-path");
+    expect(flagIdx).toBeGreaterThan(-1);
+    expect(argv[flagIdx + 1]).toBe("/repo/a");
+  });
+
+  test("install omits --repo-path when null/undefined", async () => {
+    stubBridgeExists();
+    const child = fakeChild();
+    nextChild = child;
+
+    const p = install({
+      harness: "copilot",
+      backend: {
+        target: "arize",
+        endpoint: "https://otlp.arize.com/v1",
+        api_key: "key123",
+        space_id: "sp1",
+      },
+      project_name: "proj",
+      user_id: null,
+      with_skills: false,
+      logging: null,
+      kiro_options: null,
+      repo_path: null,
+    });
+    await awaitSpawn();
+
+    pushLines(
+      child.stdout,
+      JSON.stringify({
+        event: "result",
+        payload: { success: true, error: null, harness: "copilot", logs: [] },
+      })
+    );
+    child.stdout.push(null);
+    child.emit("close", 0);
+
+    await p;
+
+    const argv = cp.spawn.mock.calls[0][1];
+    expect(argv).not.toContain("--repo-path");
+  });
+
   // ── uninstall with success=false ─────────────────────────────────────
 
   test("uninstall: result with success=false resolves (does not throw)", async () => {
