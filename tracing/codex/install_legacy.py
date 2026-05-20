@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import re
+import signal
+import time
 from pathlib import Path
 
 from core.setup import BIN_DIR, dry_run, info
@@ -245,6 +247,40 @@ def _strip_v1_otel_block(path: Path) -> None:
     info(f"Removed legacy [otel.exporter.otlp-http] block from {path}")
 
 
+def _stop_legacy_buffer(pid_file: Path) -> None:
+    """Best-effort termination of a v1 codex-buffer process from its pidfile."""
+    try:
+        pid_text = pid_file.read_text().strip()
+        pid = int(pid_text)
+    except (OSError, ValueError):
+        pid = 0
+
+    if pid > 1 and pid != os.getpid():
+        try:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(50):
+                time.sleep(0.1)
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+        except ProcessLookupError:
+            pass
+        except OSError as e:
+            info(f"Could not stop legacy buffer service (pid {pid}): {e}")
+
+    try:
+        pid_file.unlink()
+    except OSError:
+        pass
+    info("Stopped legacy codex-buffer service")
+
+
 def cleanup_legacy_install(codex_config_file: Path | None = None) -> None:
     """Run all detection-based legacy-artifact removals. Idempotent.
 
@@ -264,13 +300,7 @@ def cleanup_legacy_install(codex_config_file: Path | None = None) -> None:
         if dry_run():
             info(f"would stop legacy codex-buffer service (pid file: {pid_file})")
         else:
-            try:
-                from tracing.codex.codex_buffer_ctl import buffer_stop
-
-                buffer_stop()
-                info("Stopped legacy codex-buffer service")
-            except Exception as e:
-                info(f"Could not stop legacy buffer service: {e}")
+            _stop_legacy_buffer(pid_file)
 
     # 2. Remove proxy shim.
     for path in _codex_proxy_shim_paths():

@@ -19,7 +19,6 @@ dev = [
 
 [project.scripts]
 # Core tools
-arize-codex-buffer = "tracing.codex.codex_buffer_ctl:main"
 arize-config = "core.config:main"
 # Claude Code hooks
 arize-hook-session-start = "tracing.claude_code.hooks.handlers:session_start"
@@ -79,7 +78,6 @@ markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
 [tool.coverage.run]
 source = ["core", "tracing"]
 omit = [
-    "tracing/codex/codex_buffer.py",
     "**/constants.py",
 ]
 

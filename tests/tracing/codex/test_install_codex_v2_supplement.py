@@ -409,23 +409,6 @@ class TestInstallLegacyModuleSurface:
         assert hasattr(install_legacy, "cleanup_legacy_install")
         assert callable(install_legacy.cleanup_legacy_install)
 
-    def test_install_legacy_module_does_not_import_buffer_at_top(self):
-        """buffer_stop is imported lazily inside cleanup_legacy_install so that
-        a future deletion of codex_buffer_ctl doesn't break install."""
-        import tracing.codex.install_legacy as legacy
-
-        # buffer_stop should not be a module-level attribute
-        assert not hasattr(legacy, "buffer_stop"), (
-            "buffer_stop is imported at module top — must remain lazy to allow " "future deletion of codex_buffer_ctl"
-        )
-
-    def test_install_module_does_not_import_buffer_at_top(self):
-        """install.py must not import buffer_start/buffer_stop/buffer_status."""
-        for name in ("buffer_start", "buffer_stop", "buffer_status"):
-            assert not hasattr(codex_install, name), (
-                f"{name} is imported at module top in install.py — " "the v2 layout no longer needs the buffer service"
-            )
-
 
 # ---------------------------------------------------------------------------
 # config.yaml has no collector entry under harnesses.codex

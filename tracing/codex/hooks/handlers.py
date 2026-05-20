@@ -357,17 +357,5 @@ def notify():
         error(f"codex notify hook failed: {e}")
 
 
-def drain_idle():
-    """No-op stub kept for the legacy arize-codex-proxy.
-
-    The proxy used to call this after `codex exec` exited to flush the
-    in-process event buffer. The buffer is being removed in favor of
-    real Codex lifecycle hooks; until the proxy is fully retired, this
-    stub keeps `from tracing.codex.hooks.handlers import drain_idle`
-    from raising and avoids spurious stderr noise on every exec.
-    """
-    return
-
-
 if __name__ == "__main__":
     notify()
