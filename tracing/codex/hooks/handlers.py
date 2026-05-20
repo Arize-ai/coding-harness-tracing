@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
-"""Codex hook handler — creates OpenInference LLM spans from agent-turn-complete events.
+"""Codex notify hook handler.
 
-Replaces tracing/codex/hooks/notify.sh (445 lines). Registered as the
-``arize-hook-codex-notify`` CLI entry point.
+Registered as the ``arize-hook-codex-notify`` CLI entry point. Codex passes
+the notify event JSON on ``sys.argv[1]`` (NOT stdin); no stdout response is
+expected.
 
-Input contract: JSON as sys.argv[1] (NOT stdin -- Codex passes JSON as a CLI arg).
-No stdout output -- Codex doesn't expect a response.
+Once Codex's lifecycle hooks (``SessionStart``/``UserPromptSubmit``/``Stop``)
+are trusted, this hook only writes ``pending_token_usage`` and
+``last_assistant_message`` into the per-thread state file so the ``Stop``
+hook can attach exact token counts to its parent span. Before hooks are
+trusted (first-run users who haven't approved ``/hooks`` yet), notify falls
+back to building a single LLM span from the notify payload directly.
 """
 import json
 import os
 import sys
-import time
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 from core.common import (
-    build_multi_span,
     build_span,
     debug_dump,
     env,
@@ -28,7 +30,6 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
-from tracing.codex.codex_buffer_ctl import buffer_ensure
 from tracing.codex.hooks.adapter import (
     SCOPE_NAME,
     SERVICE_NAME,
@@ -39,12 +40,8 @@ from tracing.codex.hooks.adapter import (
     resolve_session,
 )
 
-# HTTP timeout for the /flush-idle request to the buffer service.
-_DRAIN_HTTP_TIMEOUT_SECONDS = 5
-
-
 # ---------------------------------------------------------------------------
-# Helpers
+# Payload helpers
 # ---------------------------------------------------------------------------
 
 
@@ -77,12 +74,7 @@ def _nested_get(d: dict, *keys):
 
 
 def _as_text(node) -> str:
-    """Recursively extract text from a nested message structure.
-
-    Handles: str, list (join with newlines), dict (try .text, .content,
-    .message, .data, .value, then json.dumps as fallback), None -> "".
-    Matches the jq as_text function in notify.sh lines 37-44.
-    """
+    """Recursively extract text from a nested message structure."""
     if node is None:
         return ""
     if isinstance(node, str):
@@ -100,23 +92,13 @@ def _as_text(node) -> str:
 
 
 def _extract_user_prompt(user_input) -> str:
-    """Extract the last user message from input-messages.
-
-    input-messages can be:
-    - list of message objects -> find last with role=="user", extract content
-    - list of strings -> use last non-empty string
-    - plain string -> use directly
-
-    Matches the jq expression at bash lines 63-79.
-    """
+    """Extract the last user message from input-messages."""
     if isinstance(user_input, list):
-        # Try: last user-role message object
         for msg in reversed(user_input):
             if isinstance(msg, dict) and msg.get("role") == "user":
                 text = _as_text(msg.get("content", ""))
                 if text:
                     return text
-        # Fallback: last non-empty string in the array
         for msg in reversed(user_input):
             if isinstance(msg, str) and msg:
                 return msg
@@ -132,13 +114,7 @@ def _extract_user_prompt(user_input) -> str:
 
 
 def _find_token_usage(input_json: dict):
-    """Search for token usage dict in multiple payload locations.
-
-    Tries (matching bash lines 127-134):
-    1. input_json itself: .token_usage / .token-usage / .usage
-    2. input_json["last-assistant-message"]: same keys
-    3. input_json["last-assistant-message"]["message"]: same keys
-    """
+    """Search for token usage dict in multiple payload locations."""
     usage_keys = ("token_usage", "token-usage", "usage")
     search_locations = [
         input_json,
@@ -156,11 +132,7 @@ def _find_token_usage(input_json: dict):
 
 
 def _extract_token_counts(usage: dict) -> dict:
-    """Extract prompt/completion/total counts, trying multiple key variants.
-
-    Returns {"prompt": int|None, "completion": int|None, "total": int|None}.
-    Auto-computes total if prompt + completion are present but total isn't.
-    """
+    """Extract prompt/completion/total counts, trying multiple key variants."""
 
     def pick_first(*keys):
         for k in keys:
@@ -205,91 +177,6 @@ def _extract_token_counts(usage: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Tool call extraction
-# ---------------------------------------------------------------------------
-
-
-def _find_tool_calls(input_json: dict):
-    """Search for tool calls list in multiple payload locations.
-
-    Tries keys: tool_calls, tool-calls, toolCalls, tool_invocations,
-    toolInvocations, tools, tool_results.
-    Searches: root, last-assistant-message, last-assistant-message.message
-    """
-    tool_keys = (
-        "tool_calls",
-        "tool-calls",
-        "toolCalls",
-        "tool_invocations",
-        "toolInvocations",
-        "tools",
-        "tool_results",
-    )
-    search_locations = [
-        input_json,
-        _flex_get_obj(input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"),
-        _nested_get(input_json, "last-assistant-message", "message"),
-    ]
-    for obj in search_locations:
-        if not isinstance(obj, dict):
-            continue
-        for key in tool_keys:
-            val = obj.get(key)
-            if val is not None:
-                if isinstance(val, list):
-                    return val
-                # Wrap non-list in a list (matches bash: [.] fallback)
-                return [val]
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Event buffer drain
-# ---------------------------------------------------------------------------
-
-
-def _drain_events(thread_id: str, state, collector_port: int) -> list:
-    """Drain buffered events from the collector for this thread.
-
-    HTTP GET http://127.0.0.1:{port}/drain/{thread_id}?since_ns={last}&wait_ms=8000&quiet_ms=1200
-
-    Retry schedule (matches bash drain_attempts array at line 225):
-    - Attempt 1: immediate
-    - Attempt 2: wait 1.2s, then request
-    - Attempt 3: wait 2.0s, then request
-
-    Returns list of event dicts. Returns [] on any failure.
-    """
-    if not thread_id:
-        log("Skipping event buffer drain because thread-id is missing")
-        return []
-
-    last_ns = state.get("last_collector_time_ns") or "0"
-    url = f"http://127.0.0.1:{collector_port}/drain/{thread_id}"
-    query = f"since_ns={last_ns}&wait_ms=8000&quiet_ms=1200"
-    retry_waits = [0, 1.2, 2.0]  # seconds (matches bash: 0, 1200ms, 2000ms)
-
-    for wait in retry_waits:
-        if wait > 0:
-            time.sleep(wait)
-        try:
-            req = urllib.request.Request(f"{url}?{query}")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                events = json.loads(resp.read())
-        except Exception:
-            events = []
-
-        if not isinstance(events, list):
-            events = []
-
-        log(f"Collector drain attempt (thread={thread_id}, wait={wait}s) => {len(events)} events")
-        if events:
-            return events
-
-    return []
-
-
-# ---------------------------------------------------------------------------
 # Span sending
 # ---------------------------------------------------------------------------
 
@@ -301,239 +188,33 @@ def _send_span(payload: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Child span building from collector events
+# Fallback: legacy single-span path
 # ---------------------------------------------------------------------------
 
 
-def _build_child_spans(
-    events: list, trace_id: str, parent_span_id: str, session_id: str, start_time: int, attrs: dict
-) -> "tuple[list, int, int]":
-    """Build child spans from collector events and enrich parent attrs in-place.
+def _send_legacy_single_span(
+    state,
+    thread_id: str,
+    turn_id: str,
+    user_prompt: str,
+    assistant_output: str,
+    usage,
+) -> None:
+    """Build a single LLM span from the notify payload alone.
 
-    Returns (list of child span payloads, earliest event start time, latest event end time).
-    Modifies attrs dict in-place with enrichments from events.
+    Used when Codex lifecycle hooks haven't been trusted yet (`/hooks` not
+    approved). Once Stop is wired up, this path is unused for that session.
     """
-    child_spans = []
-
-    # --- Adjust timing from event timestamps (bash lines 259-266) ---
-    timestamps_ns = []
-    for e in events:
-        try:
-            t = int(e.get("time_ns", 0))
-            if t > 0:
-                timestamps_ns.append(t)
-        except (ValueError, TypeError):
-            pass
-
-    event_start_time = start_time
-    event_end_time = start_time
-    if timestamps_ns:
-        event_start_time = min(timestamps_ns) // 1_000_000
-        event_end_time = max(timestamps_ns) // 1_000_000
-        attrs["codex.trace.duration_ms"] = event_end_time - event_start_time
-
-    # --- Model name enrichment (bash lines 270-277) ---
-    for e in events:
-        if e.get("event") in ("codex.conversation_starts", "codex.api_request"):
-            a = e.get("attrs", {})
-            model = a.get("model") or a.get("llm.model_name") or a.get("model_name")
-            if model:
-                attrs["llm.model_name"] = model
-                break
-
-    # --- Token enrichment from SSE events (bash lines 280-315) ---
-    sse_events = [
-        e
-        for e in events
-        if e.get("event") == "codex.sse_event"
-        and (
-            (e.get("attrs", {}).get("type") == "response.completed")
-            or (e.get("attrs", {}).get("sse.type") == "response.completed")
-            or (e.get("attrs", {}).get("event.kind") == "response.completed")
-        )
-    ]
-    if sse_events:
-        ea = sse_events[-1].get("attrs", {})
-        _enrich_tokens_from_event_attrs(ea, attrs)
-
-    # --- Sandbox/approval from conversation_starts (bash lines 317-326) ---
-    for e in events:
-        if e.get("event") == "codex.conversation_starts":
-            a = e.get("attrs", {})
-            sandbox = a.get("sandbox") or a.get("sandbox_mode")
-            approval = a.get("approval_mode") or a.get("approval")
-            if sandbox:
-                attrs["codex.sandbox_mode"] = sandbox
-            if approval:
-                attrs["codex.approval_mode"] = approval
-            break
-
-    # --- TOOL child spans from tool_decision + tool_result pairs ---
-    decisions = [e for e in events if e.get("event") == "codex.tool_decision"]
-    results = [e for e in events if e.get("event") == "codex.tool_result"]
-
-    # Index results by call_id for fast matching
-    results_by_call_id = {}
-    for r in results:
-        cid = r.get("attrs", {}).get("call_id", "")
-        if cid:
-            results_by_call_id[cid] = r
-
-    for i, decision in enumerate(decisions):
-        da = decision.get("attrs", {})
-        tool_name = da.get("tool_name") or da.get("tool.name") or da.get("name") or "unknown_tool"
-        call_id = da.get("call_id", "")
-        decision_ns = _safe_int(decision.get("time_ns", 0))
-        approval_status = (
-            da.get("approved") or da.get("approval") or da.get("decision") or da.get("status") or "unknown"
-        )
-
-        # Match result by call_id first, then by index
-        result = results_by_call_id.get(call_id)
-        if result is None and i < len(results):
-            result = results[i]
-
-        result_ns = _safe_int(result.get("time_ns", 0)) if result else decision_ns
-        tool_input = ""
-        tool_output = ""
-        tool_duration_ms = 0
-        if result:
-            ra = result.get("attrs", {})
-            # arguments contains the tool input as JSON (e.g. {"cmd":"pwd","workdir":"..."})
-            tool_input = str(ra.get("arguments") or ra.get("input") or "")
-            tool_input = redact_content(env.log_tool_details, tool_input)
-            tool_output = str(ra.get("output") or ra.get("result") or ra.get("tool.output") or "")
-            tool_output = redact_content(env.log_tool_content, tool_output)
-            tool_duration_ms = _safe_int(ra.get("duration_ms", 0))
-
-        tool_start_ms = decision_ns // 1_000_000 or event_start_time
-        tool_end_ms = result_ns // 1_000_000 or tool_start_ms
-        if not tool_end_ms or tool_end_ms == tool_start_ms:
-            tool_end_ms = tool_start_ms + tool_duration_ms
-
-        tool_attrs = {
-            "openinference.span.kind": "TOOL",
-            "tool.name": tool_name,
-            "input.value": tool_input,
-            "output.value": tool_output,
-            "codex.tool.approval_status": approval_status,
-            "session.id": session_id,
-        }
-        if call_id:
-            tool_attrs["codex.tool.call_id"] = call_id
-
-        child_span = build_span(
-            tool_name,
-            "TOOL",
-            generate_span_id(),
-            trace_id,
-            parent_span_id,
-            tool_start_ms,
-            tool_end_ms,
-            tool_attrs,
-            SERVICE_NAME,
-            SCOPE_NAME,
-        )
-        child_spans.append(child_span)
-
-    return child_spans, event_start_time, event_end_time
-
-
-def _enrich_tokens_from_event_attrs(ea: dict, attrs: dict) -> None:
-    """Extract token counts from SSE event attrs and apply to parent attrs.
-
-    Matches bash lines 286-313 — tries multiple key variants for each count.
-    """
-
-    def _pick(d, *keys):
-        for k in keys:
-            v = d.get(k)
-            if v is not None:
-                try:
-                    return int(v)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-    model_name = _pick(ea, "model", "llm.model_name", "model_name")
-    prompt = _pick(ea, "prompt_tokens", "input_tokens", "input_token_count", "usage.prompt_tokens")
-    completion = _pick(ea, "completion_tokens", "output_tokens", "output_token_count", "usage.completion_tokens")
-    total = _pick(ea, "total_tokens", "usage.total_tokens")
-
-    if total is None and prompt is not None and completion is not None:
-        total = prompt + completion
-
-    if prompt is not None:
-        attrs["llm.token_count.prompt"] = prompt
-    if completion is not None:
-        attrs["llm.token_count.completion"] = completion
-    if total is not None:
-        attrs["llm.token_count.total"] = total
-    if model_name is not None:
-        attrs["llm.model_name"] = model_name
-
-
-def _safe_int(val) -> int:
-    """Convert to int, returning 0 on failure."""
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return 0
-
-
-# ---------------------------------------------------------------------------
-# Main handler
-# ---------------------------------------------------------------------------
-
-
-def _handle_notify(input_json: dict) -> None:
-    """Main notify handler, broken into phases matching notify.sh."""
-    buffer_ensure()
-
-    # Phase 1: Event filtering (bash lines 22-27)
-    event_type = input_json.get("type", "")
-    if event_type != "agent-turn-complete":
-        log(f"Ignoring event type: {event_type}")
-        return
-
-    # Phase 2: Parse payload with flexible key names (bash lines 29-90)
-    thread_id = _flex_get(input_json, "thread-id", "thread_id", "threadId")
-    turn_id = _flex_get(input_json, "turn-id", "turn_id", "turnId")
-    cwd = _flex_get(input_json, "cwd", "working-directory", "working_directory")
-    user_input = _flex_get_obj(input_json, "input-messages", "input_messages", "inputMessages")
-    assistant_msg = _flex_get_obj(
-        input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"
-    )
-
-    debug_prefix = f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}"
-    debug_dump(f"{debug_prefix}_raw", input_json)
-
-    assistant_output = _as_text(assistant_msg)
-    user_prompt = _extract_user_prompt(user_input)
-
-    if not assistant_output:
-        assistant_output = "(No response)"
-
-    # Redact prompt and model response unless opted in via ARIZE_LOG_PROMPTS.
-    user_prompt = redact_content(env.log_prompts, user_prompt)
-    assistant_output = redact_content(env.log_prompts, assistant_output)
-
-    debug_dump(f"{debug_prefix}_text", {"input": user_prompt, "assistant": assistant_output})
-
-    # Phase 3: Resolve session and state (bash lines 48-56)
-    state = resolve_session(thread_id)
-    ensure_session_initialized(state, thread_id, cwd or os.getcwd())
-    session_id = state.get("session_id")
     state.increment("trace_count")
     trace_count = state.get("trace_count")
+    session_id = state.get("session_id")
     project_name = state.get("project_name")
     user_id = state.get("user_id")
 
-    # Phase 4: Generate IDs and build base attributes (bash lines 92-123)
     trace_id = generate_trace_id()
     span_id = generate_span_id()
     start_time = get_timestamp_ms()
-    end_time = start_time  # Turn already completed, no precise timing from notify
+    end_time = start_time
 
     output_messages = [{"message.role": "assistant", "message.content": assistant_output}]
 
@@ -551,11 +232,8 @@ def _handle_notify(input_json: dict) -> None:
     if user_id:
         attrs["user.id"] = user_id
 
-    # Phase 5: Token enrichment from notify payload (bash lines 125-166)
-    usage = _find_token_usage(input_json)
     if usage:
         attrs["codex.token_usage"] = json.dumps(usage)
-        debug_dump(f"{debug_prefix}_token_usage", usage)
         counts = _extract_token_counts(usage)
         if counts["prompt"] is not None:
             attrs["llm.token_count.prompt"] = counts["prompt"]
@@ -564,53 +242,6 @@ def _handle_notify(input_json: dict) -> None:
         if counts["total"] is not None:
             attrs["llm.token_count.total"] = counts["total"]
 
-    # Phase 6: Tool call extraction from notify payload (bash lines 168-211)
-    tool_calls = _find_tool_calls(input_json)
-    if tool_calls:
-        count = len(tool_calls)
-        attrs["llm.tool_call_count"] = count
-        if count > 0:
-            preview = tool_calls[:5]
-            attrs["llm.tool_calls"] = json.dumps(preview)
-            if count > 5:
-                attrs["llm.tool_calls_omitted"] = count - 5
-        debug_dump(f"{debug_prefix}_tool_calls", tool_calls)
-
-    # Phase 7: Drain collector event buffer (bash lines 213-254)
-    collector_port = int(os.environ.get("ARIZE_COLLECTOR_PORT", "4318"))
-    events = _drain_events(thread_id, state, collector_port)
-    debug_dump(f"{debug_prefix}_collector_events", events)
-
-    if events:
-        max_ns = 0
-        for e in events:
-            try:
-                t = int(e.get("time_ns", 0))
-                if t > max_ns:
-                    max_ns = t
-            except (ValueError, TypeError):
-                pass
-        if max_ns > 0:
-            state.set("last_collector_time_ns", str(max_ns))
-
-    # Phase 8: Enrich parent span and build child spans from events
-    child_spans: list = []
-    if events:
-        log(f"Processing {len(events)} collector events")
-        child_spans, event_start, event_end = _build_child_spans(
-            events,
-            trace_id,
-            span_id,
-            session_id or "",
-            start_time,
-            attrs,
-        )
-        # Use event-derived timing if available
-        if event_start != start_time or event_end != start_time:
-            start_time = event_start
-            end_time = event_end
-
-    # Phase 9: Build and send (bash lines 424-440)
     parent_span = build_span(
         f"Turn {trace_count}",
         "LLM",
@@ -623,21 +254,11 @@ def _handle_notify(input_json: dict) -> None:
         SERVICE_NAME,
         SCOPE_NAME,
     )
-    debug_dump(f"{debug_prefix}_parent_span", parent_span)
+    debug_dump(f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}_span", parent_span)
+    _send_span(parent_span)
 
-    if child_spans:
-        log(f"Building multi-span payload: 1 parent + {len(child_spans)} children")
-        all_spans = [parent_span] + child_spans
-        multi_payload = build_multi_span(all_spans, SERVICE_NAME, SCOPE_NAME)
-        debug_dump(f"{debug_prefix}_multi_span", multi_payload)
-        _send_span(multi_payload)
-    else:
-        debug_dump(f"{debug_prefix}_span", parent_span)
-        _send_span(parent_span)
+    log(f"Turn {trace_count} sent via legacy notify path (thread={thread_id}, turn={turn_id})")
 
-    log(f"Turn {trace_count} sent (thread={thread_id}, turn={turn_id}, children={len(child_spans)})")
-
-    # Phase 10: Periodic GC (bash lines 442-445)
     try:
         tc = int(trace_count or "0")
     except (ValueError, TypeError):
@@ -647,18 +268,81 @@ def _handle_notify(input_json: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Main handler
+# ---------------------------------------------------------------------------
+
+
+def _handle_notify(input_json: dict) -> None:
+    """Slim notify handler: writes token usage + last assistant message to state.
+
+    When Codex hooks are active (SessionStart/UserPromptSubmit have run), this
+    just records the notify payload into state and lets the Stop hook build
+    the span tree. When hooks are not yet trusted, falls back to a single-span
+    send so first-run users still get traces.
+    """
+    # Phase 1: only handle agent-turn-complete
+    if input_json.get("type") != "agent-turn-complete":
+        log(f"Ignoring event type: {input_json.get('type')}")
+        return
+
+    # Phase 2: parse the payload
+    thread_id = _flex_get(input_json, "thread-id", "thread_id", "threadId")
+    turn_id = _flex_get(input_json, "turn-id", "turn_id", "turnId")
+    cwd = _flex_get(input_json, "cwd", "working-directory", "working_directory")
+    user_input = _flex_get_obj(input_json, "input-messages", "input_messages", "inputMessages")
+    assistant_msg = _flex_get_obj(
+        input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"
+    )
+
+    debug_prefix = f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}"
+    debug_dump(f"{debug_prefix}_raw", input_json)
+
+    user_prompt = redact_content(env.log_prompts, _extract_user_prompt(user_input))
+    assistant_output = redact_content(env.log_prompts, _as_text(assistant_msg)) or "(No response)"
+
+    debug_dump(f"{debug_prefix}_text", {"input": user_prompt, "assistant": assistant_output})
+
+    state = resolve_session(thread_id)
+    ensure_session_initialized(state, thread_id, cwd or os.getcwd())
+
+    # Phase 3: detect whether lifecycle hooks have already populated state.
+    # Hook entry points write `model` (SessionStart) and `turn_start_ms`
+    # (UserPromptSubmit). Either being present means hooks are active and
+    # Stop will build the span — notify just stages data into state.
+    hooks_active = bool(state.get("model")) or bool(state.get("turn_start_ms"))
+
+    usage = _find_token_usage(input_json)
+    if usage:
+        counts = _extract_token_counts(usage)
+        pending = {
+            "prompt_tokens": counts["prompt"],
+            "completion_tokens": counts["completion"],
+            "total_tokens": counts["total"],
+            "model": usage.get("model") or "",
+        }
+        state.set("pending_token_usage", json.dumps(pending))
+        debug_dump(f"{debug_prefix}_token_usage", usage)
+    if assistant_output:
+        state.set("last_assistant_message", assistant_output)
+
+    # Phase 4: fall through to legacy single-span path when hooks aren't
+    # active yet, so first-run users still get traces before approving /hooks.
+    if not hooks_active:
+        _send_legacy_single_span(state, thread_id, turn_id, user_prompt, assistant_output, usage)
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 
 def notify():
-    """Entry point for arize-hook-codex-notify. Codex hook.
+    """Entry point for arize-hook-codex-notify.
 
-    Input contract: JSON as sys.argv[1] (NOT stdin -- Codex passes JSON as a CLI arg).
-    No stdout output -- Codex doesn't expect a response.
+    Input contract: JSON as sys.argv[1] (NOT stdin -- Codex passes notify
+    JSON as a CLI arg). No stdout output -- Codex doesn't expect a response.
     """
     try:
-        # Load env file before anything else (matches bash line 13)
         load_env_file(Path.home() / ".codex" / "arize-env.sh")
 
         if not check_requirements():
@@ -669,111 +353,6 @@ def notify():
         _handle_notify(input_json)
     except Exception as e:
         error(f"codex notify hook failed: {e}")
-
-
-def drain_idle():
-    """Entry point for arize-hook-codex-drain. Flushes all buffered conversations.
-
-    Called by the proxy after `codex exec` exits. Since codex has already
-    terminated, every buffered conversation is by definition complete —
-    we fetch everything unconditionally and build span trees from the events.
-    """
-    try:
-        load_env_file(Path.home() / ".codex" / "arize-env.sh")
-
-        if not check_requirements():
-            return
-
-        buffer_ensure()
-
-        port = int(os.environ.get("ARIZE_COLLECTOR_PORT", "4318"))
-
-        # Codex has already exited, so all events are at the buffer and no new
-        # events can arrive. Pass timeout_seconds=0 to grab every conversation.
-        url = f"http://127.0.0.1:{port}/flush-idle?timeout_seconds=0"
-        try:
-            with urllib.request.urlopen(url, timeout=_DRAIN_HTTP_TIMEOUT_SECONDS) as resp:
-                conversations = json.loads(resp.read())
-        except Exception as e:
-            error(f"Failed to fetch idle conversations: {e}")
-            return
-
-        if not conversations:
-            return
-
-        log(f"Draining {len(conversations)} idle conversation(s)")
-
-        for conv_id, events in conversations.items():
-            if not events:
-                continue
-
-            log(f"Processing {len(events)} events for conversation {conv_id}")
-
-            # Resolve session for this conversation
-            state = resolve_session(conv_id)
-            ensure_session_initialized(state, conv_id, os.getcwd())
-            session_id = state.get("session_id")
-            state.increment("trace_count")
-            trace_count = state.get("trace_count")
-            project_name = state.get("project_name")
-            user_id = state.get("user_id")
-
-            # Generate IDs
-            trace_id = generate_trace_id()
-            span_id = generate_span_id()
-            start_time = get_timestamp_ms()
-            end_time = start_time
-
-            # Build parent span attrs from events
-            attrs = {
-                "session.id": session_id,
-                "trace.number": trace_count,
-                "project.name": project_name,
-                "openinference.span.kind": "LLM",
-                "codex.thread_id": conv_id,
-                "codex.drain_source": "flush-idle",
-            }
-            if user_id:
-                attrs["user.id"] = user_id
-
-            # Build child spans and enrich parent from events
-            child_spans, event_start, event_end = _build_child_spans(
-                events,
-                trace_id,
-                span_id,
-                session_id,
-                start_time,
-                attrs,
-            )
-            if event_start != start_time or event_end != start_time:
-                start_time = event_start
-                end_time = event_end
-
-            # Build and send
-            parent_span = build_span(
-                f"Turn {trace_count}",
-                "LLM",
-                span_id,
-                trace_id,
-                "",
-                start_time,
-                end_time,
-                attrs,
-                SERVICE_NAME,
-                SCOPE_NAME,
-            )
-
-            if child_spans:
-                all_spans = [parent_span] + child_spans
-                multi_payload = build_multi_span(all_spans, SERVICE_NAME, SCOPE_NAME)
-                _send_span(multi_payload)
-            else:
-                _send_span(parent_span)
-
-            log(f"Drained conversation {conv_id}: turn {trace_count}, {len(child_spans)} children")
-
-    except Exception as e:
-        error(f"codex drain-idle failed: {e}")
 
 
 if __name__ == "__main__":
