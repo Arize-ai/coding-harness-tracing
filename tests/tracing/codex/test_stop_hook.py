@@ -262,7 +262,7 @@ class TestLateTokens:
 
 class TestNothingToFinalize:
 
-    def test_empty_state_returns_without_sending(self, codex_state):
+    def test_empty_state_returns_without_sending(self, codex_state, _mock_sleep):
         sm = codex_state["manager"]
         thread_id = codex_state["thread_id"]
         _seed_session(sm)  # only session-scoped keys; no turn data
@@ -271,6 +271,8 @@ class TestNothingToFinalize:
             finalize_turn(sm, thread_id)
 
         send.assert_not_called()
+        # Empty-state guard must run before token polling -- no sleeps spent.
+        assert _mock_sleep == []
 
 
 # ---------------------------------------------------------------------------

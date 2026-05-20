@@ -34,26 +34,17 @@ _TOKEN_POLL_TIMEOUT_MS = 500
 _TOKEN_POLL_INTERVAL_MS = 50
 
 
-def _safe_int(val) -> int:
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return 0
-
-
-def _wait_for_pending_tokens(thread_id: str, state: StateManager) -> "dict | None":
+def _wait_for_pending_tokens(state: StateManager) -> "dict | None":
     """Poll the state file briefly for token usage data written by the notify hook.
 
-    Returns the parsed pending_token_usage dict (or None if not present after the
-    poll window). The StateManager doesn't expose a reload() method, so we
-    re-resolve the session on each tick to force a fresh read.
+    Each StateManager.get() does a fresh read from disk, so a separate writer
+    (the notify hook) lands its update without needing reload semantics here.
     """
     waited = 0
     raw = state.get("pending_token_usage")
     while not raw and waited < _TOKEN_POLL_TIMEOUT_MS:
         time.sleep(_TOKEN_POLL_INTERVAL_MS / 1000.0)
         waited += _TOKEN_POLL_INTERVAL_MS
-        state = resolve_session(thread_id)
         raw = state.get("pending_token_usage")
     if not raw:
         return None
@@ -82,10 +73,6 @@ def finalize_turn(state: StateManager, thread_id: str) -> None:
     hook when it detects an orphaned turn (e.g. on the next UserPromptSubmit or
     on a SessionStart with source clear/resume).
     """
-    pending_token_usage = _wait_for_pending_tokens(thread_id, state)
-
-    state = resolve_session(thread_id)
-
     session_id = state.get("session_id") or thread_id
     project_name = state.get("project_name") or ""
     user_id = state.get("user_id")
@@ -98,10 +85,13 @@ def finalize_turn(state: StateManager, thread_id: str) -> None:
 
     rows = span_buffer.read_all(thread_id)
     tool_entries = span_buffer.join_by_call_id(rows)
+    existing_tokens = state.get("pending_token_usage")
 
-    if not tool_entries and not user_prompt and not last_assistant_message and not pending_token_usage:
+    if not tool_entries and not user_prompt and not last_assistant_message and not existing_tokens:
         log("stop hook: nothing to finalize")
         return
+
+    pending_token_usage = _wait_for_pending_tokens(state)
 
     state.increment("trace_count")
     new_trace_count = state.get("trace_count") or "0"
@@ -212,13 +202,7 @@ def finalize_turn(state: StateManager, thread_id: str) -> None:
         error(f"send_span raised: {e}")
 
     for key in ("turn_start_ms", "user_prompt", "pending_token_usage", "last_assistant_message"):
-        try:
-            state.delete(key)
-        except Exception:
-            try:
-                state.set(key, "")
-            except Exception:
-                pass
+        state.delete(key)
 
     span_buffer.delete(thread_id)
 
