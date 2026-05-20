@@ -130,6 +130,16 @@ def gc_stale_state_files() -> None:
                     lock_path.rmdir()
                 except OSError:
                     pass
+    for f in STATE_DIR.glob("spans_*.jsonl"):
+        try:
+            file_age = now - f.stat().st_mtime
+        except OSError:
+            continue
+        if file_age > 86400:  # 24 hours, same threshold
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def check_requirements() -> bool:
