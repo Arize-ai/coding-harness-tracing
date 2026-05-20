@@ -9,51 +9,46 @@ Configure OpenInference tracing for OpenAI Codex CLI sessions to Arize AX (cloud
 
 ## Architecture Overview
 
-Codex tracing uses direct send for span export and a lightweight buffer service for event buffering:
+Codex tracing uses real Codex CLI lifecycle hooks plus the legacy `notify` hook as a token-usage backstop. Spans are sent directly to the backend from the `Stop` hook:
 
-1. **Direct send** (`core/common.py`) — spans are sent directly to Phoenix (REST) or Arize AX (gRPC) from the notify handler via `send_span()`. Per-harness backend credentials are read from `harnesses.codex.*` in config.
+1. **Direct send** (`core/common.py`) — spans are sent directly to Phoenix (REST) or Arize AX (gRPC) from the hook handlers via `send_span()`. Per-harness backend credentials are read from `harnesses.codex.*` in config.
 
-2. **Codex Buffer Service** (`tracing/codex/codex_buffer.py`, default port 4318) — a lightweight HTTP server that only buffers Codex OTLP log events between hook invocations. No export logic. Managed via `arize-codex-buffer`.
+2. **Real Codex hooks** — `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, and `Stop` events are dispatched to three entry points:
+   - `arize-hook-codex-session` (`SessionStart`, `UserPromptSubmit`) — mutates per-thread state file at `~/.arize/harness/state/codex/state_<thread_id>.yaml`.
+   - `arize-hook-codex-tool` (`PreToolUse`, `PostToolUse`, `PermissionRequest`) — appends rows to `~/.arize/harness/state/codex/spans_<thread_id>.jsonl`.
+   - `arize-hook-codex-stop` (`Stop`) — reads state + JSONL, builds the parent LLM span plus TOOL child spans, sends the multi-span payload, then clears turn-scoped state and deletes the JSONL.
 
-3. **Notify hook** (`arize-hook-codex-notify`) — Fires on `agent-turn-complete` events. Drains buffered events from the buffer service, transforms them into OpenInference child spans (TOOL spans for tool calls, LLM spans for API requests), enriches the parent Turn span with model name and token counts, and sends the complete span tree directly to the backend.
+3. **Notify hook** (`arize-hook-codex-notify`) — Fires on `agent-turn-complete`. Real Codex hook payloads don't carry exact token counts, so `notify` is kept purely as a token-usage backstop: it extracts `token_usage` and `last-assistant-message` from the notify payload and writes them into the state file. If the state file doesn't exist (hooks not yet trusted, first run), notify falls back to its legacy behavior of emitting a single flat Turn span.
 
 ```
 Codex CLI
   |
-  |-- [otel] otlp-http --> POST /v1/logs --> buffer service (port 4318, buffers by thread-id)
+  |-- SessionStart / UserPromptSubmit --> arize-hook-codex-session
+  |     |--> updates state_<thread_id>.yaml
   |
-  |-- notify hook (agent-turn-complete) --> arize-hook-codex-notify
-        |
-        |--> GET /drain/{thread_id} (port 4318) --> get buffered events
-        |--> Transform events into child spans
-        |--> Build multi-span OTLP payload (Turn parent + children)
+  |-- PreToolUse / PostToolUse / PermissionRequest --> arize-hook-codex-tool
+  |     |--> appends row to spans_<thread_id>.jsonl
+  |
+  |-- agent-turn-complete (notify) --> arize-hook-codex-notify
+  |     |--> writes token_usage into state_<thread_id>.yaml
+  |
+  |-- Stop --> arize-hook-codex-stop
+        |--> reads state + spans JSONL
+        |--> builds parent LLM span + TOOL child spans
         |--> send_span() --> Phoenix/Arize AX
+        |--> clears turn-scoped state, deletes spans JSONL
 ```
 
-**Graceful degradation**: If the buffer service isn't running or returns no buffered events, the notify hook falls back to a single flat Turn span.
+**Graceful degradation**: If hooks aren't trusted yet (Codex requires explicit `/hooks` approval), the `notify` hook still produces a single flat Turn span.
 
-## Codex Exec Tracing
+## Trust prompt
 
-Interactive Codex tracing uses the `notify` hook and `[otel.exporter.otlp-http]`
-configured in `~/.codex/config.toml`. The notify hook fires after each agent
-turn to drain buffered events and send spans.
+Codex requires explicit user trust for non-managed hooks before they fire. After install, the user must:
 
-`codex exec` tracing requires the `arize-codex-proxy` entry point. The proxy
-runs the real Codex binary and then drains buffered events after the process
-exits. Without the proxy, `codex exec` bypasses the notify hook entirely.
+1. Start a Codex session: `codex`
+2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
 
-The installer creates a `~/.arize/harness/bin/codex` shim that points to
-`arize-codex-proxy` and adds `~/.arize/harness/bin` to supported shell profiles
-for sh, bash, zsh, and PowerShell. On Windows, it also updates the user PATH.
-Users should open a new shell after install so the PATH update is visible.
-
-To verify exec tracing is active, run:
-
-```bash
-command -v codex
-```
-
-The output should resolve to `~/.arize/harness/bin/codex`.
+Without this one-time approval, the real hooks never fire and tracing falls back to `notify`-only (single LLM span per turn, no tool spans).
 
 ## How to Use This Skill
 
@@ -133,9 +128,8 @@ Then proceed to [Configure Codex](#configure-codex).
 This section configures:
 1. **Backend config** at `~/.arize/harness/config.yaml`
 2. **Environment variables** in `~/.codex/arize-env.sh`
-3. **Notify hook** in `~/.codex/config.toml`
-4. **Codex Buffer Service** — buffers native OTLP events for rich span trees
-5. **Native OTLP export** in `~/.codex/config.toml` — routes to the buffer service
+3. **Hook entries** in `~/.codex/config.toml` (real Codex hooks + `notify` token-usage backstop)
+4. **Trust prompt** inside Codex (`/hooks`) — required before non-managed hooks fire
 
 ### Determine the integration path
 
@@ -145,7 +139,7 @@ Common locations:
 - If cloned: `./coding-harness-tracing/tracing/codex`
 - If installed via the curl installer: `~/.arize/harness/tracing/codex`
 
-Store this as `INTEGRATION_PATH` for the notify hook config.
+Store this as `INTEGRATION_PATH` for the hook config.
 
 ### Step 1: Write the backend config
 
@@ -155,7 +149,7 @@ Write `~/.arize/harness/config.yaml` with the backend credentials. The config fi
 
 **Phoenix:**
 ```bash
-mkdir -p ~/.arize/harness/{bin,run,logs}
+mkdir -p ~/.arize/harness/{logs,state/codex}
 # Merge: add/update harnesses.codex, preserve existing backend settings
 arize-config set harnesses.codex.project_name codex
 ```
@@ -168,14 +162,11 @@ harnesses:
     target: phoenix
     endpoint: http://localhost:6006
     api_key: ""
-    collector:
-      host: 127.0.0.1
-      port: 4318
 ```
 
 **Arize AX:**
 ```bash
-mkdir -p ~/.arize/harness/{bin,run,logs}
+mkdir -p ~/.arize/harness/{logs,state/codex}
 arize-config set harnesses.codex.project_name codex
 ```
 
@@ -188,78 +179,63 @@ harnesses:
     endpoint: otlp.arize.com:443
     api_key: <key>
     space_id: <space-id>
-    collector:
-      host: 127.0.0.1
-      port: 4318
 ```
 
 ### Step 2: Write the environment file (optional)
 
 Environment variables are optional overrides — all backend credentials are in `~/.arize/harness/config.yaml`. If the user needs env-var overrides, create `~/.codex/arize-env.sh`:
 
-**Phoenix:**
 ```bash
 cat > ~/.codex/arize-env.sh << 'EOF'
 export ARIZE_TRACE_ENABLED=true
-export ARIZE_CODEX_BUFFER_PORT=4318
 EOF
 chmod 600 ~/.codex/arize-env.sh
 ```
 
 If the user wants to associate spans with a user ID, add `export ARIZE_USER_ID="<user-id>"`.
 
-**Arize AX:**
-```bash
-cat > ~/.codex/arize-env.sh << 'EOF'
-export ARIZE_TRACE_ENABLED=true
-export ARIZE_CODEX_BUFFER_PORT=4318
-EOF
-chmod 600 ~/.codex/arize-env.sh
-```
+### Step 3: Add the hook entries to config.toml
 
-If the user wants to associate spans with a user ID, add `export ARIZE_USER_ID="<user-id>"`.
-
-### Step 3: Add the notify hook to config.toml
-
-Read `~/.codex/config.toml`. Add the `notify` line at the top level (NOT inside any `[section]`):
+Read `~/.codex/config.toml`. Add the `notify` line at the top level (NOT inside any `[section]`) — this is the token-usage backstop:
 
 ```toml
 notify = ["~/.arize/harness/venv/bin/arize-hook-codex-notify"]
 ```
 
-**Important:** If `notify` already exists in the config, update the existing line.
-
-### Step 4: Configure OTLP export to buffer service
-
-Add an `[otel]` section that routes Codex's native events to the buffer service (port 4318):
+Then add one `[[hooks.<Event>]]` entry per real Codex lifecycle event:
 
 ```toml
-[otel]
-[otel.exporter.otlp-http]
-endpoint = "http://127.0.0.1:4318/v1/logs"
-protocol = "json"
+[[hooks.SessionStart]]
+command = ["~/.arize/harness/venv/bin/arize-hook-codex-session"]
+
+[[hooks.UserPromptSubmit]]
+command = ["~/.arize/harness/venv/bin/arize-hook-codex-session"]
+
+[[hooks.PreToolUse]]
+command = ["~/.arize/harness/venv/bin/arize-hook-codex-tool"]
+
+[[hooks.PostToolUse]]
+command = ["~/.arize/harness/venv/bin/arize-hook-codex-tool"]
+
+[[hooks.PermissionRequest]]
+command = ["~/.arize/harness/venv/bin/arize-hook-codex-tool"]
+
+[[hooks.Stop]]
+command = ["~/.arize/harness/venv/bin/arize-hook-codex-stop"]
 ```
 
-This routes Codex native telemetry to the buffer service, which buffers events until the notify hook drains them for child-span assembly.
+**Important:** If `notify` already exists in the config, update the existing line. If `[[hooks.<Event>]]` entries already exist that match our handlers (managed block), leave them alone — the installer manages the block idempotently.
 
-### Step 5: Start the buffer service
+### Step 4: Approve the hooks inside Codex
 
-Start the Codex buffer service:
-```bash
-arize-codex-buffer start
-```
+Codex requires explicit user trust for non-managed hooks before they fire. The user must:
 
-Check its status or stop it with:
-```bash
-arize-codex-buffer status
-arize-codex-buffer stop
-```
+1. Start a Codex session: `codex`
+2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
 
-(The CLI supports `start`, `stop`, and `status` subcommands. The PID is recorded at `~/.arize/harness/run/codex-buffer.pid` so `start` is safe to re-run — it no-ops if the service is already up.)
+Until this is done, only the `notify` token-usage backstop will run (flat single-span tracing). The real hooks will not fire.
 
-The buffer service is a single lightweight process (~5MB RSS, stdlib Python, zero CPU when idle). It only buffers events — span export is handled directly by the notify hook.
-
-**Note:** The installer handles Steps 1-5 automatically.  The manual steps above are for users who prefer to configure things themselves or need to troubleshoot.
+**Note:** The installer handles Steps 1-3 automatically. Step 4 (the `/hooks` trust prompt) is a one-time user action — the installer cannot automate it.
 
 ### Validate
 
@@ -269,24 +245,22 @@ After writing the config, validate:
 ```bash
 cat ~/.codex/config.toml
 ```
-Visually confirm the `notify` line is at the top level and the `[otel]` section points to `127.0.0.1:4318`.
+Visually confirm the `notify` line is at the top level and the `[[hooks.SessionStart]]`, `[[hooks.UserPromptSubmit]]`, `[[hooks.PreToolUse]]`, `[[hooks.PostToolUse]]`, `[[hooks.PermissionRequest]]`, and `[[hooks.Stop]]` entries are present.
 
 2. **Check env file:**
 ```bash
 source ~/.codex/arize-env.sh && echo "ARIZE_TRACE_ENABLED=$ARIZE_TRACE_ENABLED"
 ```
 
-3. **Check buffer service is running:**
-```bash
-arize-codex-buffer status
-```
+3. **Check the hooks are trusted inside Codex:**
+   Start `codex`, run `/hooks`, and confirm each `arize-hook-codex-*` entry is listed and approved.
 
 4. **Phoenix connectivity** (if using Phoenix):
 ```bash
 curl -sf ${PHOENIX_ENDPOINT}/v1/traces >/dev/null && echo "Phoenix reachable" || echo "Phoenix not reachable"
 ```
 
-6. **Dry run test:**
+5. **Dry run test:**
 ```bash
 ARIZE_DRY_RUN=true arize-hook-codex-notify '{"type":"agent-turn-complete","thread-id":"test-123","turn-id":"turn-1","cwd":"/tmp","input-messages":"hello","last-assistant-message":"hi there"}'
 ```
@@ -296,14 +270,13 @@ Should print: `[arize] DRY RUN:` followed by the span name.
 
 Tell the user:
 - Configuration saved to `~/.codex/config.toml`, `~/.codex/arize-env.sh`, and `~/.arize/harness/config.yaml`
-- Spans are sent directly to the backend from the notify hook
-- The buffer service (port 4318) captures Codex native events for child-span assembly
-- Traces will appear as rich span trees with child spans for tool calls and API requests
-- Token totals live on the parent Turn LLM span, not on request child spans
-- If the buffer service has no buffered events, tracing still works with flat Turn spans (graceful degradation)
+- Spans are sent directly to the backend from the `Stop` hook
+- The real Codex hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`) build rich span trees with TOOL children per tool call
+- The `notify` hook is now a token-usage backstop — it writes exact token counts into the per-thread state file so they appear on the parent LLM span
+- Until the user approves the hooks via `/hooks` inside Codex, only the `notify`-based fallback runs (single flat LLM span per turn)
 - Mention `ARIZE_DRY_RUN=true` to test without sending data
 - Mention `ARIZE_VERBOSE=true` and `ARIZE_TRACE_DEBUG=true` for debug output
-- Logs: buffer service at `~/.arize/harness/logs/codex-buffer.log`, harness at `~/.arize/harness/logs/codex.log` (errors always; routine activity requires `ARIZE_VERBOSE=true` in `~/.codex/arize-env.sh` or the shell)
+- Logs: `~/.arize/harness/logs/codex.log` (errors always; routine activity requires `ARIZE_VERBOSE=true` in `~/.codex/arize-env.sh` or the shell)
 
 ### Environment Variables Reference
 
@@ -321,7 +294,6 @@ Tell the user:
 | `ARIZE_VERBOSE` | No | `false` | Enable verbose logging |
 | `ARIZE_TRACE_DEBUG` | No | `false` | Write debug JSON to `~/.arize/harness/state/codex/debug/` |
 | `ARIZE_LOG_FILE` | No | `~/.arize/harness/logs/codex.log` | Log file path |
-| `ARIZE_CODEX_BUFFER_PORT` | No | `4318` | Port for the Codex buffer service |
 
 ## Troubleshoot
 
@@ -330,15 +302,14 @@ Common issues and fixes:
 | Problem | Fix |
 |---------|-----|
 | Traces not appearing | Check `ARIZE_TRACE_ENABLED` is `true` in `~/.codex/arize-env.sh` |
-| Notify hook not firing | Verify `notify` line in `~/.codex/config.toml` points to correct path |
+| Hooks not firing | Run `codex` → `/hooks` and confirm each `arize-hook-codex-*` entry is trusted. If they aren't listed at all, re-run the installer. |
+| `notify` hook not firing | Verify `notify` line in `~/.codex/config.toml` points to correct path |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
-| Buffer service not running | Check config: `cat ~/.arize/harness/config.yaml`. Start: `arize-codex-buffer start` |
-| No output in terminal | Notify runs in background; check `~/.arize/harness/logs/codex.log` and `~/.arize/harness/logs/codex-buffer.log` |
+| No output in terminal | Hooks run in background; check `~/.arize/harness/logs/codex.log` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` in env or `export ARIZE_DRY_RUN=true` |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` in env or `export ARIZE_VERBOSE=true` |
 | Wrong project name | Set `ARIZE_PROJECT_NAME` in `~/.codex/arize-env.sh` (default: `codex`) |
-| Existing notify hook | Codex supports only one `notify` — create a wrapper script that calls both |
-| Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.yaml` |
-| Flat spans only (no children) | Check buffer service: `arize-codex-buffer status`. Verify `[otel]` in config.toml points to `127.0.0.1:4318` |
-| Buffer service not starting | Check Python 3.9+ is available. Check port 4318 isn't in use. See `~/.arize/harness/logs/codex-buffer.log` |
+| Existing `notify` hook | Codex supports only one `notify` — create a wrapper script that calls both |
+| Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.yaml ~/.arize/harness/state/codex/spans_*.jsonl` |
+| Flat spans only (no children) | The real hooks haven't been trusted yet. Run `codex` → `/hooks` and approve each `arize-hook-codex-*` entry. |
 | User ID not appearing on spans | Set `ARIZE_USER_ID` in `~/.codex/arize-env.sh` or export before running Codex |
