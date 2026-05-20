@@ -127,10 +127,6 @@ class TestPyprojectEntryPointsUpdated:
         """pyproject.toml must not reference core.hooks anywhere in entry points."""
         assert "core.hooks" not in self.pyproject_text
 
-    def test_no_codex_buffer_ctl_in_pyproject(self):
-        """pyproject.toml must not reference codex_buffer_ctl (deleted in v2)."""
-        assert "codex_buffer_ctl" not in self.pyproject_text
-
     def test_total_entry_point_count(self):
         """Entry point count should match expected harness + setup + arize-config."""
         expected_count = (
@@ -246,17 +242,3 @@ class TestHooksDirsInHarnessPackages:
         assert hooks_dir.is_dir(), f"{pkg}/hooks/ must exist"
         for fname in expected_files:
             assert (hooks_dir / fname).is_file(), f"{pkg}/hooks/{fname} must exist"
-
-
-# ---------------------------------------------------------------------------
-# 8. Coverage omit updated
-# ---------------------------------------------------------------------------
-
-
-class TestCoverageConfig:
-    """pyproject.toml coverage omit does not reference the deleted buffer."""
-
-    def test_coverage_omit_path(self):
-        text = (REPO_ROOT / "pyproject.toml").read_text()
-        assert "tracing/codex/codex_buffer.py" not in text
-        assert "core/codex_buffer.py" not in text

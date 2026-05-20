@@ -50,3 +50,4 @@ run/
 .github/hooks/
 */node_modules/
 wheel.json
+docs/superpowers/*

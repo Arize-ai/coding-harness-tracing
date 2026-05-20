@@ -26,15 +26,6 @@ LOG_DIR = BASE_DIR / "logs"
 BIN_DIR = BASE_DIR / "bin"
 VENV_DIR = BASE_DIR / "venv"
 
-# --- Codex buffer service runtime ---
-CODEX_BUFFER_BIN = BIN_DIR / "arize-codex-buffer"
-CODEX_BUFFER_PID_FILE = PID_DIR / "codex-buffer.pid"
-CODEX_BUFFER_LOG_FILE = LOG_DIR / "codex-buffer.log"
-
-# --- Buffer service network defaults ---
-DEFAULT_BUFFER_HOST = "127.0.0.1"
-DEFAULT_BUFFER_PORT = 4318
-
 # --- Per-harness state ---
 STATE_BASE_DIR = BASE_DIR / "state"
 
