@@ -17,7 +17,6 @@ import sys
 from pathlib import Path
 
 from core.config import get_value, load_config
-from core.setup import BIN_DIR  # noqa: F401 — kept for tests that monkeypatch this attribute
 from core.setup import (
     CONFIG_FILE,
     dry_run,
@@ -37,7 +36,6 @@ from core.setup import (
     write_logging_config,
 )
 from tracing.codex.constants import (
-    BUFFER_PORT,
     CODEX_CONFIG_DIR,
     CODEX_CONFIG_FILE,
     CODEX_ENV_FILE,
@@ -72,12 +70,6 @@ _HOOK_EVENTS = (
     "PermissionRequest",
     "Stop",
 )
-
-# v1 OTLP endpoint pattern (used by `_codex_toml_apply` to strip a stale v1
-# otel exporter block on upgrade — buffer service is gone in v2). Matches
-# any 127.0.0.1 endpoint ending in /v1/logs to catch installs where the user
-# changed the buffer port via config.yaml.
-_V1_OTEL_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
 
 
 # ---------------------------------------------------------------------------
@@ -407,13 +399,9 @@ def _codex_toml_apply(
     tool_cmd: str,
     stop_cmd: str,
 ) -> None:
-    """Write the v2 hooks-based layout to ~/.codex/config.toml. Idempotent.
-
-    Also strips any stale v1 ``[otel.exporter.otlp-http]`` block pointing at
-    the local buffer service (the buffer service is gone in v2).
-    """
+    """Write the v2 hooks-based layout to ~/.codex/config.toml. Idempotent."""
     if dry_run():
-        info(f"would update {path} with notify + 5 hook entries")
+        info(f"would update {path} with notify + 6 hook entries")
         return
 
     data = _toml_load(path)
@@ -426,23 +414,12 @@ def _codex_toml_apply(
         existing_notify.append(notify_cmd)
     data["notify"] = existing_notify
 
-    # Strip v1 local-buffer otel exporter block if present.
-    otel = data.get("otel")
-    if isinstance(otel, dict):
-        exporter = otel.get("exporter")
-        if isinstance(exporter, dict):
-            otlp = exporter.get("otlp-http")
-            if isinstance(otlp, dict):
-                endpoint = otlp.get("endpoint", "")
-                if isinstance(endpoint, str) and _V1_OTEL_ENDPOINT_RE.match(endpoint):
-                    del exporter["otlp-http"]
-                    if not exporter:
-                        del otel["exporter"]
-                    if not otel:
-                        del data["otel"]
-
     # Write [[hooks.<Event>]] entries. Replace any prior entry pointing at our cmd.
-    hooks = data.setdefault("hooks", {})
+    existing_hooks = data.get("hooks")
+    if not isinstance(existing_hooks, dict):
+        existing_hooks = {}
+    data["hooks"] = existing_hooks
+    hooks = existing_hooks
     hook_specs = (
         ("SessionStart", session_cmd),
         ("UserPromptSubmit", session_cmd),
@@ -468,49 +445,6 @@ def _codex_toml_apply(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     _toml_write(data, path)
-
-
-def _codex_toml_remove(path: Path, notify_cmd: str, otel_endpoint: str) -> None:
-    """Remove our notify command and otel exporter from codex config.toml. Idempotent.
-
-    Kept for legacy v1 uninstall compatibility; not used by the v2 install path.
-    """
-    if not path.is_file():
-        return
-
-    if dry_run():
-        info(f"would revert {path}: remove notify={notify_cmd} and otel exporter")
-        return
-
-    data = _toml_load(path)
-    changed = False
-
-    # Remove our notify entry only if it matches
-    existing_notify = data.get("notify", [])
-    if isinstance(existing_notify, list) and notify_cmd in existing_notify:
-        existing_notify.remove(notify_cmd)
-        if existing_notify:
-            data["notify"] = existing_notify
-        else:
-            del data["notify"]
-        changed = True
-    elif isinstance(existing_notify, str) and existing_notify == notify_cmd:
-        del data["notify"]
-        changed = True
-
-    # Remove otel exporter only if it points at our endpoint
-    if "otel" in data and "exporter" in data["otel"] and "otlp-http" in data["otel"]["exporter"]:
-        otlp_http = data["otel"]["exporter"]["otlp-http"]
-        if isinstance(otlp_http, dict) and otlp_http.get("endpoint") == otel_endpoint:
-            del data["otel"]["exporter"]["otlp-http"]
-            changed = True
-            if not data["otel"]["exporter"]:
-                del data["otel"]["exporter"]
-            if not data["otel"]:
-                del data["otel"]
-
-    if changed:
-        _toml_write(data, path)
 
 
 def _codex_toml_remove_v2(path: Path, notify_cmd: str, hook_cmds: list[str]) -> None:
@@ -571,10 +505,7 @@ def _write_env_file(path: Path, user_id: str = "") -> None:
         info(f"would write env file {path}")
         return
 
-    lines = [
-        "export ARIZE_TRACE_ENABLED=true",
-        f"export ARIZE_CODEX_BUFFER_PORT={BUFFER_PORT}",
-    ]
+    lines = ["export ARIZE_TRACE_ENABLED=true"]
     if user_id:
         lines.append(f"export ARIZE_USER_ID={user_id}")
 
@@ -612,7 +543,7 @@ def install(with_skills: bool = False) -> None:
         return
 
     # 1. Migrate any v1 artifacts (idempotent; no-op on fresh installs).
-    cleanup_legacy_install()
+    cleanup_legacy_install(CODEX_CONFIG_FILE)
 
     # 2. Shared runtime + harness entry.
     ensure_shared_runtime()
@@ -677,7 +608,7 @@ def install(with_skills: bool = False) -> None:
 def uninstall() -> None:
     """Uninstall codex tracing harness."""
     # 1. Clean up any lingering v1 artifacts first (no-op if absent).
-    cleanup_legacy_install()
+    cleanup_legacy_install(CODEX_CONFIG_FILE)
 
     # 2. Revert TOML — remove our notify entry and hook entries.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))

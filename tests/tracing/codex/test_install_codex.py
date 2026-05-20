@@ -48,7 +48,6 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.setattr("core.constants.CONFIG_FILE", config_file)
     monkeypatch.setattr("core.config.CONFIG_FILE", config_file)
 
-    monkeypatch.setattr(codex_install, "BIN_DIR", install_dir / "bin")
     monkeypatch.setattr(codex_install, "CODEX_CONFIG_DIR", codex_dir)
     monkeypatch.setattr(codex_install, "CODEX_CONFIG_FILE", codex_dir / "config.toml")
     monkeypatch.setattr(codex_install, "CODEX_ENV_FILE", codex_dir / "arize-env.sh")

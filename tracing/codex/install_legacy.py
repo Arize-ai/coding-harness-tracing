@@ -14,9 +14,14 @@ import re
 from pathlib import Path
 
 from core.setup import BIN_DIR, dry_run, info
+from tracing.codex.constants import CODEX_CONFIG_FILE
 
 _PATH_MARKER_BEGIN = "# >>> arize codex tracing PATH >>>"
 _PATH_MARKER_END = "# <<< arize codex tracing PATH <<<"
+
+# v1 OTLP endpoint pattern. Matches any 127.0.0.1 endpoint ending in /v1/logs
+# to catch installs where the user customized the buffer port via config.yaml.
+_V1_OTEL_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
 
 
 def _codex_proxy_shim_path() -> Path:
@@ -201,23 +206,71 @@ def _remove_windows_user_path_block() -> None:
         pass
 
 
-def cleanup_legacy_install() -> None:
+def _strip_v1_otel_block(path: Path) -> None:
+    """Strip a stale v1 ``[otel.exporter.otlp-http]`` block pointing at the
+    local buffer service from ~/.codex/config.toml. Idempotent; no-op if the
+    file or block is absent, or if the endpoint targets a foreign collector.
+    """
+    if not path.is_file():
+        return
+
+    # Lazy-import the TOML helpers from install.py to avoid a module-load
+    # cycle (install.py imports from this module).
+    from tracing.codex.install import _toml_load, _toml_write
+
+    data = _toml_load(path)
+    otel = data.get("otel")
+    if not isinstance(otel, dict):
+        return
+    exporter = otel.get("exporter")
+    if not isinstance(exporter, dict):
+        return
+    otlp = exporter.get("otlp-http")
+    if not isinstance(otlp, dict):
+        return
+    endpoint = otlp.get("endpoint", "")
+    if not (isinstance(endpoint, str) and _V1_OTEL_ENDPOINT_RE.match(endpoint)):
+        return
+
+    if dry_run():
+        info(f"would strip legacy [otel.exporter.otlp-http] block from {path}")
+        return
+
+    del exporter["otlp-http"]
+    if not exporter:
+        del otel["exporter"]
+    if not otel:
+        del data["otel"]
+    _toml_write(data, path)
+    info(f"Removed legacy [otel.exporter.otlp-http] block from {path}")
+
+
+def cleanup_legacy_install(codex_config_file: Path | None = None) -> None:
     """Run all detection-based legacy-artifact removals. Idempotent.
 
-    Called once at the top of install() before the new layout is written.
-    Each step is gated by an _is_our_* check so it never touches anything
-    that isn't ours.
+    Called once at the top of install() and uninstall() so v1 artifacts are
+    cleaned up on both paths. Each step is gated by an _is_our_* check or
+    equivalent so it never touches anything that isn't ours.
+
+    *codex_config_file* defaults to ``~/.codex/config.toml`` and is parameterized
+    so callers (and tests) can redirect it without monkeypatching this module.
     """
+    if codex_config_file is None:
+        codex_config_file = CODEX_CONFIG_FILE
+
     # 1. Stop the buffer service if its PID file exists.
     pid_file = Path.home() / ".arize" / "harness" / "run" / "codex-buffer.pid"
     if pid_file.is_file():
-        try:
-            from tracing.codex.codex_buffer_ctl import buffer_stop
+        if dry_run():
+            info(f"would stop legacy codex-buffer service (pid file: {pid_file})")
+        else:
+            try:
+                from tracing.codex.codex_buffer_ctl import buffer_stop
 
-            buffer_stop()
-            info("Stopped legacy codex-buffer service")
-        except Exception as e:
-            info(f"Could not stop legacy buffer service: {e}")
+                buffer_stop()
+                info("Stopped legacy codex-buffer service")
+            except Exception as e:
+                info(f"Could not stop legacy buffer service: {e}")
 
     # 2. Remove proxy shim.
     for path in _codex_proxy_shim_paths():
@@ -229,3 +282,6 @@ def cleanup_legacy_install() -> None:
     _remove_codex_proxy_path_blocks()
     if os.name == "nt":
         _remove_windows_user_path_block()
+
+    # 4. Strip the legacy [otel.exporter.otlp-http] block from ~/.codex/config.toml.
+    _strip_v1_otel_block(codex_config_file)
