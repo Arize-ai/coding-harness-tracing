@@ -18,6 +18,8 @@ dev = [
 ]
 
 [project.scripts]
+# VS Code bridge
+arize-vscode-bridge = "core.vscode_bridge:main"
 # Core tools
 arize-codex-buffer = "tracing.codex.codex_buffer_ctl:main"
 arize-config = "core.config:main"

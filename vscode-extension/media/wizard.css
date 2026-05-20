@@ -1,0 +1,334 @@
+/* Arize Agent Kit — Wizard Styles */
+
+:root {
+  --wizard-bg: var(--vscode-editor-background, #1e1e1e);
+  --wizard-fg: var(--vscode-editor-foreground, #cccccc);
+  --wizard-border: var(--vscode-panel-border, #444444);
+  --wizard-accent: var(--vscode-button-background, #0e639c);
+  --wizard-accent-hover: var(--vscode-button-hoverBackground, #1177bb);
+  --wizard-accent-fg: var(--vscode-button-foreground, #ffffff);
+  --wizard-input-bg: var(--vscode-input-background, #3c3c3c);
+  --wizard-input-fg: var(--vscode-input-foreground, #cccccc);
+  --wizard-input-border: var(--vscode-input-border, #555555);
+  --wizard-card-bg: var(--vscode-editorWidget-background, #252526);
+  --wizard-card-selected: var(--vscode-list-activeSelectionBackground, #094771);
+  --wizard-success: var(--vscode-testing-iconPassed, #73c991);
+  --wizard-error: var(--vscode-testing-iconFailed, #f14c4c);
+  --wizard-muted: var(--vscode-descriptionForeground, #999999);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--vscode-font-family, system-ui, -apple-system, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--wizard-fg);
+  background: var(--wizard-bg);
+  line-height: 1.5;
+}
+
+#wizard-root {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+/* ---- Step indicator ---- */
+
+.wizard-steps-indicator {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.wizard-step-dot {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--wizard-border);
+  transition: background 0.2s;
+}
+
+.wizard-step-dot.active {
+  background: var(--wizard-accent);
+}
+
+.wizard-step-dot.completed {
+  background: var(--wizard-success);
+}
+
+/* ---- Step containers ---- */
+
+.wizard-step {
+  display: none;
+}
+
+.wizard-step.visible {
+  display: block;
+}
+
+.wizard-step h2 {
+  font-size: 1.2em;
+  margin-bottom: 4px;
+}
+
+.wizard-step p.subtitle {
+  color: var(--wizard-muted);
+  margin-bottom: 16px;
+}
+
+/* ---- Harness cards (step 1) ---- */
+
+.harness-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.harness-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--wizard-card-bg);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.harness-card:hover {
+  border-color: var(--wizard-border);
+}
+
+.harness-card.selected {
+  border-color: var(--wizard-accent);
+  background: var(--wizard-card-selected);
+}
+
+.harness-card .card-label {
+  font-weight: 600;
+}
+
+/* ---- Form groups (steps 2–3) ---- */
+
+.form-group {
+  margin-bottom: 14px;
+}
+
+.form-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"] {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--wizard-input-bg);
+  color: var(--wizard-input-fg);
+  border: 1px solid var(--wizard-input-border);
+  border-radius: 4px;
+  font-size: inherit;
+  font-family: inherit;
+}
+
+.form-group input:focus {
+  outline: 1px solid var(--wizard-accent);
+  border-color: var(--wizard-accent);
+}
+
+.form-group .hint {
+  color: var(--wizard-muted);
+  font-size: 0.9em;
+  margin-top: 2px;
+}
+
+.form-group .input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.form-group .input-row input[type="text"] {
+  flex: 1;
+  width: auto;
+}
+
+/* ---- Backend toggle ---- */
+
+.backend-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.backend-toggle button {
+  flex: 1;
+  padding: 8px;
+  background: var(--wizard-card-bg);
+  color: var(--wizard-fg);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.backend-toggle button:hover {
+  border-color: var(--wizard-border);
+}
+
+.backend-toggle button.selected {
+  border-color: var(--wizard-accent);
+  background: var(--wizard-card-selected);
+}
+
+/* ---- Checkbox / toggle rows ---- */
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.toggle-row input[type="checkbox"] {
+  accent-color: var(--wizard-accent);
+  width: 16px;
+  height: 16px;
+}
+
+.toggle-row label {
+  cursor: pointer;
+}
+
+/* ---- Review table (step 4) ---- */
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+.review-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--wizard-border);
+}
+
+.review-table td:first-child {
+  color: var(--wizard-muted);
+  white-space: nowrap;
+  width: 140px;
+}
+
+/* ---- Buttons ---- */
+
+.wizard-nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+
+.btn-primary {
+  background: var(--wizard-accent);
+  color: var(--wizard-accent-fg);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--wizard-accent-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--wizard-fg);
+  border: 1px solid var(--wizard-border);
+}
+
+.btn-secondary:hover {
+  background: var(--wizard-card-bg);
+}
+
+.btn-danger {
+  background: var(--wizard-error);
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  opacity: 0.9;
+}
+
+/* ---- Log area (step 4) ---- */
+
+#wizard-log {
+  background: var(--wizard-input-bg);
+  border: 1px solid var(--wizard-border);
+  border-radius: 4px;
+  padding: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  margin-top: 12px;
+  display: none;
+}
+
+#wizard-log.visible {
+  display: block;
+}
+
+#wizard-log .log {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+#wizard-log .log-info {
+  color: var(--wizard-fg);
+}
+
+#wizard-log .log-error {
+  color: var(--wizard-error);
+}
+
+/* ---- Result state ---- */
+
+.result-banner {
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-top: 16px;
+  font-weight: 600;
+}
+
+.result-banner.success {
+  background: rgba(115, 201, 145, 0.15);
+  color: var(--wizard-success);
+}
+
+.result-banner.failure {
+  background: rgba(241, 76, 76, 0.15);
+  color: var(--wizard-error);
+}

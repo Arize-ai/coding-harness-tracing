@@ -756,32 +756,28 @@ def _codex_proxy_path_status(shim_path: Path) -> tuple[str, "str | None"]:
 # ---------------------------------------------------------------------------
 
 
-def install(with_skills: bool = False) -> None:
-    """Install codex tracing harness."""
-    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
-        info("Aborted.")
-        return
-
+def install_noninteractive(
+    *,
+    target: str,
+    credentials: dict,
+    project_name: str,
+    user_id: str = "",
+    with_skills: bool = False,
+    logging_block: "dict | None" = None,
+) -> None:
+    """Install with no prompts. All decisions made by caller."""
     # 1. Ensure shared runtime directories
     ensure_shared_runtime()
 
-    # 2. Prompt for credentials if needed; write harness entry
+    # 2. Write harness entry
     config = load_config(str(CONFIG_FILE))
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-
-    project_name = prompt_project_name("codex")
     collector = {"host": "127.0.0.1", "port": 4318}
 
     if existing_entry:
-        info(f"Reusing existing backend: {existing_entry.get('target')}")
-        # Preserve existing collector if present, otherwise set default
         existing_collector = existing_entry.get("collector")
         merge_harness_entry(HARNESS_NAME, project_name, collector=existing_collector or collector)
-        user_id = get_value(config, "user_id") or ""
     else:
-        existing_harnesses = config.get("harnesses", {}) if config else {}
-        target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
-        user_id = prompt_user_id()
         if not dry_run():
             write_config(
                 target=target,
@@ -794,13 +790,19 @@ def install(with_skills: bool = False) -> None:
         else:
             info("would write config.yaml with backend credentials")
 
-    # Logging settings are global. Prompt only if no `logging:` block exists yet —
-    # subsequent harness installs reuse what the first wizard wrote.
+    # Logging: use caller-supplied block, or default if absent from config.
+    config = load_config(str(CONFIG_FILE))
     if (config.get("logging") if config else None) is None:
-        logging_block = prompt_content_logging()
-        write_logging_config(logging_block)
-    else:
-        info("Using existing logging settings from config.yaml")
+        effective_logging = (
+            logging_block
+            if logging_block is not None
+            else {
+                "prompts": True,
+                "tool_details": True,
+                "tool_content": True,
+            }
+        )
+        write_logging_config(effective_logging)
 
     # 3. Ensure codex config dir exists
     if not dry_run():
@@ -861,8 +863,8 @@ def install(with_skills: bool = False) -> None:
     info("Codex tracing installed successfully")
 
 
-def uninstall() -> None:
-    """Uninstall codex tracing harness."""
+def uninstall_noninteractive() -> None:
+    """Uninstall with no prompts."""
     # 1. Stop buffer service
     if not dry_run():
         buffer_stop()
@@ -905,6 +907,53 @@ def uninstall() -> None:
     info("Unlinked skills")
 
     info("Codex tracing uninstalled")
+
+
+def install(with_skills: bool = False) -> None:
+    """Install codex tracing harness."""
+    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
+        info("Aborted.")
+        return
+
+    config = load_config(str(CONFIG_FILE))
+    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
+
+    project_name = prompt_project_name("codex")
+
+    if existing_entry:
+        info(f"Reusing existing backend: {existing_entry.get('target')}")
+        target = existing_entry.get("target", "phoenix")
+        credentials = {
+            "endpoint": existing_entry.get("endpoint", ""),
+            "api_key": existing_entry.get("api_key", ""),
+        }
+        if existing_entry.get("space_id"):
+            credentials["space_id"] = existing_entry["space_id"]
+        user_id = get_value(config, "user_id") or ""
+    else:
+        existing_harnesses = config.get("harnesses", {}) if config else {}
+        target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
+        user_id = prompt_user_id()
+
+    logging_block = None
+    if (config.get("logging") if config else None) is None:
+        logging_block = prompt_content_logging()
+    else:
+        info("Using existing logging settings from config.yaml")
+
+    install_noninteractive(
+        target=target,
+        credentials=credentials,
+        project_name=project_name,
+        user_id=user_id,
+        with_skills=with_skills,
+        logging_block=logging_block,
+    )
+
+
+def uninstall() -> None:
+    """Uninstall codex tracing harness."""
+    uninstall_noninteractive()
 
 
 # ---------------------------------------------------------------------------

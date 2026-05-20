@@ -10,7 +10,7 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | `Claude Plugin (see below)`| `claude-code-tracing` |
 | [OpenAI Codex CLI](tracing/codex/README.md) | `install.sh` / `install.bat` | `codex` |
 | [Cursor IDE / CLI](tracing/cursor/README.md) | `install.sh` / `install.bat` | `cursor` |
-| [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `install.sh` / `install.bat` | `copilot` |
+| [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `install.sh` / `install.bat` | `copilot` (per-repo: hooks live in each workspace's `.github/hooks/`) |
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
 
@@ -206,6 +206,10 @@ Most settings live in `config.yaml`, but a small set of env vars affect runtime 
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | Phoenix endpoint and (optional) API key. |
 
 Claude Code reads env vars from `~/.claude/settings.json` under the `env` block; Codex from `~/.codex/arize-env.sh`; Cursor / Copilot / Gemini / Kiro pick up host shell env. See the per-harness READMEs for details.
+
+## VS Code extension (optional)
+
+A VS Code extension provides a guided setup wizard, sidebar status view, and per-harness reconfigure/uninstall controls. See [`vscode-extension/README.md`](vscode-extension/README.md) for installation and usage details.
 
 ## Links
 

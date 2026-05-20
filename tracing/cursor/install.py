@@ -34,12 +34,16 @@ from tracing.cursor.constants import (
 )
 
 
-def install(with_skills: bool = False) -> None:
-    """Install Cursor tracing: configure backend, register hooks, optionally symlink skills."""
-    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
-        info("Aborted.")
-        return
-
+def install_noninteractive(
+    *,
+    target: str,
+    credentials: dict,
+    project_name: str,
+    user_id: str = "",
+    with_skills: bool = False,
+    logging_block: "dict | None" = None,
+) -> None:
+    """Install with no prompts. All decisions made by caller."""
     ensure_shared_runtime()
 
     # Create cursor state dir
@@ -49,31 +53,32 @@ def install(with_skills: bool = False) -> None:
     else:
         state_dir.mkdir(parents=True, exist_ok=True)
 
-    # If this harness has no entry yet, prompt for backend; otherwise just update project_name.
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-    if not existing_entry:
-        existing_harnesses = config.get("harnesses") if config else None
-        target, credentials = prompt_backend(existing_harnesses)
-        project_name = prompt_project_name(HARNESS_NAME)
-        user_id = prompt_user_id()
+
+    if existing_entry:
+        merge_harness_entry(HARNESS_NAME, project_name)
+    else:
         if not dry_run():
             from core.setup import write_config
 
             write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
         else:
             info("would write config.yaml with backend credentials")
-    else:
-        project_name = prompt_project_name(get_value(config, f"harnesses.{HARNESS_NAME}.project_name") or HARNESS_NAME)
-        merge_harness_entry(HARNESS_NAME, project_name)
 
-    # Logging settings are global. Prompt only if no `logging:` block exists yet —
-    # subsequent harness installs reuse what the first wizard wrote.
+    # Logging: use caller-supplied block, or default if absent from config.
+    config = load_config()
     if (config.get("logging") if config else None) is None:
-        logging_block = prompt_content_logging()
-        write_logging_config(logging_block)
-    else:
-        info("Using existing logging settings from config.yaml")
+        effective_logging = (
+            logging_block
+            if logging_block is not None
+            else {
+                "prompts": True,
+                "tool_details": True,
+                "tool_content": True,
+            }
+        )
+        write_logging_config(effective_logging)
 
     _register_cursor_hooks()
     if with_skills:
@@ -81,12 +86,58 @@ def install(with_skills: bool = False) -> None:
     info(f"Cursor tracing installed ({HOOKS_FILE})")
 
 
-def uninstall() -> None:
-    """Remove Cursor tracing hooks, harness entry, and skill symlinks."""
+def uninstall_noninteractive() -> None:
+    """Uninstall with no prompts."""
     _unregister_cursor_hooks()
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
     info("Cursor tracing uninstalled")
+
+
+def install(with_skills: bool = False) -> None:
+    """Install Cursor tracing: configure backend, register hooks, optionally symlink skills."""
+    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
+        info("Aborted.")
+        return
+
+    config = load_config()
+    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
+
+    if not existing_entry:
+        existing_harnesses = config.get("harnesses") if config else None
+        target, credentials = prompt_backend(existing_harnesses)
+        project_name = prompt_project_name(HARNESS_NAME)
+        user_id = prompt_user_id()
+    else:
+        project_name = prompt_project_name(get_value(config, f"harnesses.{HARNESS_NAME}.project_name") or HARNESS_NAME)
+        target = existing_entry.get("target", "phoenix")
+        credentials = {
+            "endpoint": existing_entry.get("endpoint", ""),
+            "api_key": existing_entry.get("api_key", ""),
+        }
+        if existing_entry.get("space_id"):
+            credentials["space_id"] = existing_entry["space_id"]
+        user_id = ""
+
+    logging_block = None
+    if (config.get("logging") if config else None) is None:
+        logging_block = prompt_content_logging()
+    else:
+        info("Using existing logging settings from config.yaml")
+
+    install_noninteractive(
+        target=target,
+        credentials=credentials,
+        project_name=project_name,
+        user_id=user_id,
+        with_skills=with_skills,
+        logging_block=logging_block,
+    )
+
+
+def uninstall() -> None:
+    """Remove Cursor tracing hooks, harness entry, and skill symlinks."""
+    uninstall_noninteractive()
 
 
 def _load_hooks() -> dict:

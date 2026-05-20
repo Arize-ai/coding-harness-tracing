@@ -35,27 +35,24 @@ from tracing.claude_code.constants import (
 )
 
 
-def install(with_skills: bool = False) -> None:
-    """Install Claude Code tracing: configure backend, register hooks, optionally symlink skills."""
-    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
-        info("Aborted.")
-        return
-
+def install_noninteractive(
+    *,
+    target: str,
+    credentials: dict,
+    project_name: str,
+    user_id: str = "",
+    with_skills: bool = False,
+    logging_block: "dict | None" = None,
+) -> None:
+    """Install with no prompts. All decisions made by caller."""
     ensure_shared_runtime()
 
     config = load_config()
     existing_entry = (config.get("harnesses") or {}).get(HARNESS_NAME)
 
     if existing_entry:
-        # Already configured — just let user update project_name.
-        project_name = prompt_project_name(existing_entry.get("project_name") or HARNESS_NAME)
         merge_harness_entry(HARNESS_NAME, project_name)
     else:
-        # New install. Pass existing harnesses so prompt_backend can offer copy-from.
-        existing_harnesses = config.get("harnesses", {})
-        target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
-        project_name = prompt_project_name(HARNESS_NAME)
-        user_id = prompt_user_id()
         if not dry_run():
             write_config(
                 target=target,
@@ -67,13 +64,19 @@ def install(with_skills: bool = False) -> None:
         else:
             info("would write config.yaml with harness entry")
 
-    # Logging settings are global. Prompt only if no `logging:` block exists yet —
-    # subsequent harness installs reuse what the first wizard wrote.
+    # Logging: use caller-supplied block, or default if absent from config.
+    config = load_config()
     if config.get("logging") is None:
-        logging_block = prompt_content_logging()
-        write_logging_config(logging_block)
-    else:
-        info("Using existing logging settings from config.yaml")
+        effective_logging = (
+            logging_block
+            if logging_block is not None
+            else {
+                "prompts": True,
+                "tool_details": True,
+                "tool_content": True,
+            }
+        )
+        write_logging_config(effective_logging)
 
     _register_claude_hooks(project_name)
     if with_skills:
@@ -81,12 +84,58 @@ def install(with_skills: bool = False) -> None:
     info(f"Claude Code tracing installed ({SETTINGS_FILE})")
 
 
-def uninstall() -> None:
-    """Remove Claude Code tracing hooks, harness entry, and skill symlinks."""
+def uninstall_noninteractive() -> None:
+    """Uninstall with no prompts."""
     _unregister_claude_hooks()
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
     info("Claude Code tracing uninstalled")
+
+
+def install(with_skills: bool = False) -> None:
+    """Install Claude Code tracing: configure backend, register hooks, optionally symlink skills."""
+    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
+        info("Aborted.")
+        return
+
+    config = load_config()
+    existing_entry = (config.get("harnesses") or {}).get(HARNESS_NAME)
+
+    if existing_entry:
+        project_name = prompt_project_name(existing_entry.get("project_name") or HARNESS_NAME)
+        target = existing_entry.get("target", "phoenix")
+        credentials = {
+            "endpoint": existing_entry.get("endpoint", ""),
+            "api_key": existing_entry.get("api_key", ""),
+        }
+        if existing_entry.get("space_id"):
+            credentials["space_id"] = existing_entry["space_id"]
+        user_id = ""
+    else:
+        existing_harnesses = config.get("harnesses", {})
+        target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
+        project_name = prompt_project_name(HARNESS_NAME)
+        user_id = prompt_user_id()
+
+    logging_block = None
+    if config.get("logging") is None:
+        logging_block = prompt_content_logging()
+    else:
+        info("Using existing logging settings from config.yaml")
+
+    install_noninteractive(
+        target=target,
+        credentials=credentials,
+        project_name=project_name,
+        user_id=user_id,
+        with_skills=with_skills,
+        logging_block=logging_block,
+    )
+
+
+def uninstall() -> None:
+    """Remove Claude Code tracing hooks, harness entry, and skill symlinks."""
+    uninstall_noninteractive()
 
 
 def _load_settings() -> dict:

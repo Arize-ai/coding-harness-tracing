@@ -1,0 +1,37 @@
+# TypeScript source (bundled into dist/extension.js by esbuild)
+src/**
+test/**
+**/*.test.ts
+**/*.test.js
+**/__tests__/**
+**/__mocks__/**
+
+# Build tooling
+tsconfig.json
+jest.config.js
+jest.config.ui.js
+esbuild.js
+build-wheel.js
+
+# Dependencies — the extension is bundled, so node_modules is not needed at runtime
+node_modules/**
+
+# Sourcemaps and build leftovers
+dist/**/*.map
+out/**
+
+# VCS / editor
+.gitignore
+.git/**
+.vscode/**
+.editorconfig
+.eslint*
+.prettier*
+
+# Generated / local
+*.vsix
+*.log
+**/.DS_Store
+
+# Force-include the bundled wheel (in case any parent rule above ever excludes it)
+!python/**

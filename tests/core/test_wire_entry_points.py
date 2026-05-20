@@ -82,6 +82,11 @@ EXPECTED_SETUP_ENTRY_POINTS = {
     "arize-setup-kiro": "core.setup.kiro:main",
 }
 
+# VS Code bridge entry point
+EXPECTED_VSCODE_ENTRY_POINTS = {
+    "arize-vscode-bridge": "core.vscode_bridge:main",
+}
+
 
 def _parse_pyproject_scripts():
     """Parse [project.scripts] from pyproject.toml."""
@@ -125,6 +130,12 @@ class TestPyprojectEntryPointsUpdated:
         assert name in self.scripts, f"Missing setup entry point: {name}"
         assert self.scripts[name] == target
 
+    @pytest.mark.parametrize("name,target", list(EXPECTED_VSCODE_ENTRY_POINTS.items()))
+    def test_vscode_entry_point(self, name, target):
+        """arize-vscode-bridge points at core.vscode_bridge:main."""
+        assert name in self.scripts, f"Missing vscode entry point: {name}"
+        assert self.scripts[name] == target
+
     def test_no_core_hooks_in_pyproject(self):
         """pyproject.toml must not reference core.hooks anywhere in entry points."""
         assert "core.hooks" not in self.pyproject_text
@@ -134,9 +145,12 @@ class TestPyprojectEntryPointsUpdated:
         assert "core.codex_buffer_ctl" not in self.pyproject_text
 
     def test_total_entry_point_count(self):
-        """Entry point count should match expected harness + setup + arize-config."""
+        """Entry point count should match expected harness + setup + vscode + arize-config."""
         expected_count = (
-            len(EXPECTED_HARNESS_ENTRY_POINTS) + len(EXPECTED_SETUP_ENTRY_POINTS) + 1
+            len(EXPECTED_HARNESS_ENTRY_POINTS)
+            + len(EXPECTED_SETUP_ENTRY_POINTS)
+            + len(EXPECTED_VSCODE_ENTRY_POINTS)
+            + 1
         )  # +1 for arize-config
         assert (
             len(self.scripts) == expected_count

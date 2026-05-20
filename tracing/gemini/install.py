@@ -165,10 +165,59 @@ def _uninstall_hooks() -> None:
 # ---------------------------------------------------------------------------
 
 
-def install() -> None:
-    """Install Gemini tracing hooks and register in config.yaml."""
+def install_noninteractive(
+    *,
+    target: str,
+    credentials: dict,
+    project_name: str,
+    user_id: str = "",
+    with_skills: bool = False,
+    logging_block: "dict | None" = None,
+) -> None:
+    """Install with no prompts. All decisions made by caller."""
     ensure_shared_runtime()
 
+    config = load_config()
+    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
+
+    if existing_entry and isinstance(existing_entry, dict) and "target" in existing_entry:
+        merge_harness_entry(HARNESS_NAME, project_name)
+    else:
+        if not dry_run():
+            write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
+        else:
+            info("would write config.yaml with backend credentials")
+
+    # Logging: use caller-supplied block, or default if absent from config.
+    config = load_config()
+    if (config.get("logging") if config else None) is None:
+        effective_logging = (
+            logging_block
+            if logging_block is not None
+            else {
+                "prompts": True,
+                "tool_details": True,
+                "tool_content": True,
+            }
+        )
+        write_logging_config(effective_logging)
+
+    _install_hooks()
+
+    info("Gemini tracing installed")
+
+
+def uninstall_noninteractive() -> None:
+    """Uninstall with no prompts."""
+    _uninstall_hooks()
+
+    remove_harness_entry(HARNESS_NAME)
+    unlink_skills(HARNESS_NAME)
+    info("Gemini tracing uninstalled")
+
+
+def install() -> None:
+    """Install Gemini tracing hooks and register in config.yaml."""
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
 
@@ -177,33 +226,35 @@ def install() -> None:
         target, credentials = prompt_backend(existing_harnesses)
         project_name = prompt_project_name(HARNESS_NAME)
         user_id = prompt_user_id()
-        if not dry_run():
-            write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
-        else:
-            info("would write config.yaml with backend credentials")
     else:
         project_name = prompt_project_name(existing_entry.get("project_name") or HARNESS_NAME)
-        merge_harness_entry(HARNESS_NAME, project_name)
+        target = existing_entry.get("target", "phoenix")
+        credentials = {
+            "endpoint": existing_entry.get("endpoint", ""),
+            "api_key": existing_entry.get("api_key", ""),
+        }
+        if existing_entry.get("space_id"):
+            credentials["space_id"] = existing_entry["space_id"]
+        user_id = ""
 
-    # Logging settings are global. Prompt only if no `logging:` block exists yet.
+    logging_block = None
     if (config.get("logging") if config else None) is None:
         logging_block = prompt_content_logging()
-        write_logging_config(logging_block)
     else:
         info("Using existing logging settings from config.yaml")
 
-    _install_hooks()
-
-    info("Gemini tracing installed")
+    install_noninteractive(
+        target=target,
+        credentials=credentials,
+        project_name=project_name,
+        user_id=user_id,
+        logging_block=logging_block,
+    )
 
 
 def uninstall() -> None:
     """Remove Gemini tracing hooks and deregister from config.yaml."""
-    _uninstall_hooks()
-
-    remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
-    info("Gemini tracing uninstalled")
+    uninstall_noninteractive()
 
 
 # ---------------------------------------------------------------------------

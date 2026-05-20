@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from core.config import get_value, load_config
+from core.config import get_value, load_config, save_config, set_value
 from core.setup import (
     INSTALL_DIR,
     dry_run,
@@ -40,16 +41,35 @@ from tracing.kiro.constants import (
     KIRO_AGENTS_DIR,
 )
 
+_VALID_AGENT_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
-def install(with_skills: bool = False, agent_name: str | None = None) -> None:
-    """Install Kiro tracing: configure backend, write hooks into an agent config."""
-    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
-        info("Aborted.")
-        return
+
+def _resolve_kiro_bin() -> str | None:
+    """Return path to kiro-cli binary, or None if not findable."""
+    return shutil.which(HARNESS_BIN) or _macos_app_kiro_path()
+
+
+def install_noninteractive(
+    *,
+    target: str,
+    credentials: dict,
+    project_name: str,
+    user_id: str = "",
+    with_skills: bool = False,
+    logging_block: "dict | None" = None,
+    agent_name: str | None = None,
+    set_default: bool = False,
+) -> None:
+    """Install Kiro tracing with no prompts. All decisions made by caller."""
+    chosen_name = agent_name or DEFAULT_AGENT_NAME
+    if not _VALID_AGENT_NAME_RE.fullmatch(chosen_name):
+        raise ValueError("invalid agent name")
+
+    if _resolve_kiro_bin() is None:
+        raise RuntimeError("kiro-cli not found; install the Kiro CLI before configuring Arize tracing for Kiro")
 
     ensure_shared_runtime()
 
-    # Per-harness state dir
     state_dir = INSTALL_DIR / "state" / HARNESS_NAME
     if dry_run():
         info(f"would create {state_dir}")
@@ -58,45 +78,128 @@ def install(with_skills: bool = False, agent_name: str | None = None) -> None:
 
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-    if not existing_entry:
-        existing_harnesses = config.get("harnesses") if config else None
-        target, credentials = prompt_backend(existing_harnesses)
-        project_name = prompt_project_name(HARNESS_NAME)
-        user_id = prompt_user_id()
+
+    if existing_entry:
+        merge_harness_entry(HARNESS_NAME, project_name)
+    else:
         if not dry_run():
             write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
         else:
             info("would write config.yaml with backend credentials")
-    else:
-        project_name = prompt_project_name(get_value(config, f"harnesses.{HARNESS_NAME}.project_name") or HARNESS_NAME)
-        merge_harness_entry(HARNESS_NAME, project_name)
 
+    # Persist agent_name under harnesses.kiro.agent_name
+    if not dry_run():
+        config = load_config()
+        set_value(config, f"harnesses.{HARNESS_NAME}.agent_name", chosen_name)
+        save_config(config)
+    else:
+        info(f"would set harnesses.{HARNESS_NAME}.agent_name = {chosen_name}")
+
+    # Logging: only write when absent from config.
+    config = load_config()
     if (config.get("logging") if config else None) is None:
-        logging_block = prompt_content_logging()
-        write_logging_config(logging_block)
-    else:
-        info("Using existing logging settings from config.yaml")
+        effective_logging = (
+            logging_block
+            if logging_block is not None
+            else {
+                "prompts": True,
+                "tool_details": True,
+                "tool_content": True,
+            }
+        )
+        write_logging_config(effective_logging)
 
-    chosen = agent_name or _prompt_agent_name()
-    agent_path = _resolve_agent_path(chosen)
-    _register_kiro_hooks(agent_path, chosen)
+    # Single-agent-traced semantics: clear our hooks from every existing agent
+    # before installing fresh into the chosen one.
+    _unregister_all_kiro_hooks()
 
+    agent_path = _resolve_agent_path(chosen_name)
+    _register_kiro_hooks(agent_path, chosen_name)
     info(f"Hooks registered in {agent_path}")
-    _maybe_set_default(chosen)
+
+    if set_default and not dry_run():
+        kiro_bin = _resolve_kiro_bin()
+        if kiro_bin:
+            result = subprocess.run(
+                [kiro_bin, "agent", "set-default", chosen_name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                info(f"'{chosen_name}' is now Kiro's default agent")
+            else:
+                info(f"Failed to set default: {result.stderr.strip() or result.stdout.strip()}")
 
     if with_skills:
         symlink_skills(HARNESS_NAME)
 
-    info(f"Kiro tracing installed.\n" f"  Agent file: {agent_path}\n" f"  Run:        kiro-cli chat --agent {chosen}\n")
+    info(
+        f"Kiro tracing installed.\n"
+        f"  Agent file: {agent_path}\n"
+        f"  Run:        kiro-cli chat --agent {chosen_name}\n"
+    )
+
+
+def uninstall_noninteractive() -> None:
+    """Remove Kiro tracing with no prompts."""
+    _unregister_all_kiro_hooks()
+    remove_harness_entry(HARNESS_NAME)
+    unlink_skills(HARNESS_NAME)
+    info("Kiro tracing uninstalled")
+
+
+def install(with_skills: bool = False, agent_name: str | None = None) -> None:
+    """Install Kiro tracing: configure backend, write hooks into an agent config."""
+    if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
+        info("Aborted.")
+        return
+
+    config = load_config()
+    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
+
+    if existing_entry:
+        project_name = prompt_project_name(get_value(config, f"harnesses.{HARNESS_NAME}.project_name") or HARNESS_NAME)
+        target = existing_entry.get("target", "phoenix")
+        credentials = {
+            "endpoint": existing_entry.get("endpoint", ""),
+            "api_key": existing_entry.get("api_key", ""),
+        }
+        if existing_entry.get("space_id"):
+            credentials["space_id"] = existing_entry["space_id"]
+        user_id = ""
+    else:
+        existing_harnesses = config.get("harnesses") if config else None
+        target, credentials = prompt_backend(existing_harnesses)
+        project_name = prompt_project_name(HARNESS_NAME)
+        user_id = prompt_user_id()
+
+    logging_block = None
+    if (config.get("logging") if config else None) is None:
+        logging_block = prompt_content_logging()
+    else:
+        info("Using existing logging settings from config.yaml")
+
+    chosen = agent_name or _prompt_agent_name()
+
+    install_noninteractive(
+        target=target,
+        credentials=credentials,
+        project_name=project_name,
+        user_id=user_id,
+        with_skills=with_skills,
+        logging_block=logging_block,
+        agent_name=chosen,
+        set_default=False,
+    )
+
+    _maybe_set_default(chosen)
 
 
 def uninstall() -> None:
     """Remove our hooks from every Kiro agent file. Delete the agent file
     only when we created it (matches AGENT_SKELETON description)."""
-    _unregister_all_kiro_hooks()
-    remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
-    info("Kiro tracing uninstalled")
+    uninstall_noninteractive()
 
 
 def _prompt_agent_name() -> str:
@@ -147,7 +250,7 @@ def _register_kiro_hooks(agent_path: Path, name: str) -> None:
     _save_agent(agent_path, data)
 
     # Best-effort validation; non-fatal if Kiro CLI isn't on PATH.
-    kiro_bin = shutil.which(HARNESS_BIN) or _macos_app_kiro_path()
+    kiro_bin = _resolve_kiro_bin()
     if kiro_bin:
         result = subprocess.run(
             [kiro_bin, "agent", "validate", "--path", str(agent_path)],
@@ -212,7 +315,7 @@ def _maybe_set_default(name: str) -> None:
     if dry_run():
         info(f"would run: kiro-cli agent set-default {name}")
         return
-    kiro_bin = shutil.which(HARNESS_BIN) or _macos_app_kiro_path()
+    kiro_bin = _resolve_kiro_bin()
     if not kiro_bin:
         info(
             "Could not find kiro-cli on PATH; skipping set-default. " f"Run manually: kiro-cli agent set-default {name}"

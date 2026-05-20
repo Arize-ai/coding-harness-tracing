@@ -1,0 +1,117 @@
+{
+  "name": "coding-harness-tracing",
+  "displayName": "Arize Coding Harness Tracing",
+  "publisher": "arize",
+  "version": "0.0.1",
+  "description": "Arize tracing for AI coding agents (Claude Code, Codex, Cursor, Copilot, Gemini, Kiro).",
+  "license": "MIT",
+  "homepage": "https://github.com/Arize-ai/coding-harness-tracing#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Arize-ai/coding-harness-tracing.git",
+    "directory": "vscode-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/Arize-ai/coding-harness-tracing/issues"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "icon": "media/icon.png",
+  "keywords": [
+    "arize",
+    "tracing",
+    "observability",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "cursor",
+    "copilot",
+    "gemini"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "arize.setup",
+        "title": "Arize: Set Up Tracing"
+      },
+      {
+        "command": "arize.reconfigure",
+        "title": "Arize: Reconfigure Tracing"
+      },
+      {
+        "command": "arize.uninstall",
+        "title": "Arize: Uninstall Harness"
+      },
+      {
+        "command": "arize.refreshStatus",
+        "title": "Arize: Refresh Status"
+      },
+      {
+        "command": "arize.setUser",
+        "title": "Arize: Set User ID"
+      },
+      {
+        "command": "arize.startCodexBuffer",
+        "title": "Arize: Start Codex Buffer"
+      },
+      {
+        "command": "arize.stopCodexBuffer",
+        "title": "Arize: Stop Codex Buffer"
+      },
+      {
+        "command": "arize.statusBarMenu",
+        "title": "Arize: Status Menu"
+      },
+      {
+        "command": "arize.uninstallAll",
+        "title": "Arize: Uninstall All Tracing"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "arize",
+          "title": "Arize Tracing",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "arize": [
+        {
+          "type": "webview",
+          "id": "arize-sidebar",
+          "name": "Arize Tracing"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "npm run build:wheel && node esbuild.js",
+    "build:wheel": "node build-wheel.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "vscode:prepublish": "npm run build",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "vscode:uninstall": "node ./dist/uninstall.js"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.1",
+    "esbuild": "^0.20.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.3.0"
+  }
+}
