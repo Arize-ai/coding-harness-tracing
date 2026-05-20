@@ -14,6 +14,7 @@ from tracing.codex.hooks.handlers import (
     _find_token_usage,
     _flex_get,
     _handle_notify,
+    _read_tokens_from_rollout,
     _send_legacy_single_span,
     _send_span,
     notify,
@@ -497,3 +498,129 @@ class TestErrorHandling:
 
         with mock.patch.object(sys, "argv", ["hook"]):
             notify()
+
+
+# ---------------------------------------------------------------------------
+# Codex rollout JSONL token-usage parser
+# ---------------------------------------------------------------------------
+
+
+class TestReadTokensFromRollout:
+
+    def _write_rollout(self, tmp_path, *records):
+        import json as _json
+
+        path = tmp_path / "rollout.jsonl"
+        path.write_text("\n".join(_json.dumps(r) for r in records) + "\n")
+        return path
+
+    def _task_started(self, turn_id):
+        return {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn_id, "started_at": 0}}
+
+    def _token_count(self, last_usage, total_usage=None):
+        return {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": last_usage,
+                    "total_token_usage": total_usage or last_usage,
+                },
+            },
+        }
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        missing = tmp_path / "does-not-exist.jsonl"
+        assert _read_tokens_from_rollout("s", "u", rollout_path=missing) is None
+
+    def test_returns_none_with_empty_ids(self, tmp_path):
+        path = self._write_rollout(tmp_path, self._task_started("u"))
+        assert _read_tokens_from_rollout("", "u", rollout_path=path) is None
+        assert _read_tokens_from_rollout("s", "", rollout_path=path) is None
+
+    def test_returns_none_when_no_token_count_in_turn(self, tmp_path):
+        path = self._write_rollout(tmp_path, self._task_started("u1"))
+        assert _read_tokens_from_rollout("s", "u1", rollout_path=path) is None
+
+    def test_sums_single_token_count_event(self, tmp_path):
+        path = self._write_rollout(
+            tmp_path,
+            self._task_started("u1"),
+            self._token_count(
+                {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "total_tokens": 120,
+                    "cached_input_tokens": 80,
+                    "reasoning_output_tokens": 5,
+                    "non_cached_input_tokens": 20,
+                }
+            ),
+        )
+
+        usage = _read_tokens_from_rollout("s", "u1", rollout_path=path)
+
+        assert usage is not None
+        assert usage["prompt_tokens"] == 100
+        assert usage["completion_tokens"] == 20
+        assert usage["total_tokens"] == 120
+        assert usage["cached_input_tokens"] == 80
+        assert usage["reasoning_output_tokens"] == 5
+
+    def test_sums_multiple_events_within_turn(self, tmp_path):
+        # Two LLM calls within one turn — Codex emits a `token_count` per call
+        # carrying that call's delta in `last_token_usage`. We sum them.
+        path = self._write_rollout(
+            tmp_path,
+            self._task_started("u1"),
+            self._token_count({"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}),
+            self._token_count({"input_tokens": 30, "output_tokens": 5, "total_tokens": 35}),
+        )
+
+        usage = _read_tokens_from_rollout("s", "u1", rollout_path=path)
+
+        assert usage["prompt_tokens"] == 40
+        assert usage["completion_tokens"] == 7
+        assert usage["total_tokens"] == 47
+
+    def test_stops_at_next_task_started(self, tmp_path):
+        # Token events for a later turn must not be summed into ours.
+        path = self._write_rollout(
+            tmp_path,
+            self._task_started("u1"),
+            self._token_count({"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}),
+            self._task_started("u2"),
+            self._token_count({"input_tokens": 999, "output_tokens": 99, "total_tokens": 1098}),
+        )
+
+        usage = _read_tokens_from_rollout("s", "u1", rollout_path=path)
+        assert usage["total_tokens"] == 110
+
+    def test_ignores_events_before_matching_task_started(self, tmp_path):
+        # Pre-turn token events (from a prior turn) must not bleed in.
+        path = self._write_rollout(
+            tmp_path,
+            self._task_started("other"),
+            self._token_count({"input_tokens": 999, "output_tokens": 99, "total_tokens": 1098}),
+            self._task_started("u1"),
+            self._token_count({"input_tokens": 7, "output_tokens": 1, "total_tokens": 8}),
+        )
+
+        usage = _read_tokens_from_rollout("s", "u1", rollout_path=path)
+        assert usage["total_tokens"] == 8
+
+    def test_skips_malformed_lines(self, tmp_path):
+        import json as _json
+
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(
+            "not json\n"
+            + _json.dumps(self._task_started("u1"))
+            + "\n"
+            + "{also not json\n"
+            + _json.dumps(self._token_count({"input_tokens": 5, "output_tokens": 1, "total_tokens": 6}))
+            + "\n"
+        )
+
+        usage = _read_tokens_from_rollout("s", "u1", rollout_path=path)
+        assert usage["total_tokens"] == 6

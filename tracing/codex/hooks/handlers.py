@@ -42,6 +42,12 @@ from tracing.codex.hooks.adapter import (
     resolve_session,
 )
 
+# Root of Codex's per-session rollout transcripts. Files live under
+# `<root>/<YYYY>/<MM>/<DD>/rollout-<timestamp>-<session_id>.jsonl` and contain
+# the full event stream for the session, including structured token usage
+# events that aren't carried in the notify payload itself.
+_CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+
 # ---------------------------------------------------------------------------
 # Payload helpers
 # ---------------------------------------------------------------------------
@@ -176,6 +182,106 @@ def _extract_token_counts(usage: dict) -> dict:
         total = prompt + completion
 
     return {"prompt": prompt, "completion": completion, "total": total}
+
+
+# ---------------------------------------------------------------------------
+# Codex rollout JSONL parser -- token-usage source
+# ---------------------------------------------------------------------------
+
+
+def _find_rollout_file(session_id: str, sessions_root: "Path | None" = None) -> "Path | None":
+    """Locate the rollout JSONL file for a given session_id.
+
+    File names embed the session_id, so a filename-pattern match is fast even
+    on a deep directory tree.
+    """
+    root = sessions_root or _CODEX_SESSIONS_ROOT
+    if not root.is_dir() or not session_id:
+        return None
+    try:
+        for path in root.rglob(f"rollout-*-{session_id}.jsonl"):
+            return path
+    except OSError:
+        return None
+    return None
+
+
+def _read_tokens_from_rollout(
+    session_id: str,
+    turn_id: str,
+    rollout_path: "Path | None" = None,
+) -> "dict | None":
+    """Extract a turn's token usage from Codex's session rollout JSONL.
+
+    The rollout contains structured `event_msg` records. We locate the
+    `task_started` event for our `turn_id`, then accumulate `last_token_usage`
+    from every `token_count` event up to the next `task_started` (or EOF).
+    This sums all LLM calls that ran during the turn.
+
+    Returns a dict shaped like `notify`'s expected token_usage (with
+    `prompt_tokens`, `completion_tokens`, `total_tokens`, plus the raw Codex
+    keys), or None if no matching turn or no token events are found.
+    """
+    if not session_id or not turn_id:
+        return None
+    path = rollout_path if rollout_path is not None else _find_rollout_file(session_id)
+    if path is None or not path.is_file():
+        return None
+
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cached_input_tokens",
+        "non_cached_input_tokens",
+        "reasoning_output_tokens",
+    )
+    sums: dict = {k: 0 for k in fields}
+    saw_any = False
+    in_turn = False
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") != "event_msg":
+                    continue
+                payload = obj.get("payload") or {}
+                ptype = payload.get("type")
+                if ptype == "task_started":
+                    if payload.get("turn_id") == turn_id:
+                        in_turn = True
+                    elif in_turn:
+                        # Reached the next turn; stop accumulating.
+                        break
+                elif ptype == "token_count" and in_turn:
+                    last = (payload.get("info") or {}).get("last_token_usage") or {}
+                    for k in fields:
+                        v = last.get(k)
+                        if isinstance(v, int):
+                            sums[k] += v
+                            saw_any = True
+    except OSError:
+        return None
+
+    if not saw_any:
+        return None
+
+    return {
+        "prompt_tokens": sums["input_tokens"] or None,
+        "completion_tokens": sums["output_tokens"] or None,
+        "total_tokens": sums["total_tokens"] or None,
+        "cached_input_tokens": sums["cached_input_tokens"],
+        "non_cached_input_tokens": sums["non_cached_input_tokens"],
+        "reasoning_output_tokens": sums["reasoning_output_tokens"],
+        "model": "",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +580,14 @@ def _handle_notify(input_json: dict) -> None:
     ensure_session_initialized(state, thread_id, cwd or os.getcwd())
 
     usage = _find_token_usage(input_json)
+    if not usage:
+        # Codex's notify payload doesn't carry token counts; recover them from
+        # the session rollout JSONL by summing the turn's `last_token_usage`
+        # events.
+        usage = _read_tokens_from_rollout(thread_id, turn_id)
+        if usage:
+            debug_dump(f"{debug_prefix}_tokens_from_rollout", usage)
+
     _finalize_turn_and_ship(
         state,
         thread_id,
