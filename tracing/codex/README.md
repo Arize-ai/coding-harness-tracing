@@ -3,7 +3,7 @@
 Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for the OpenAI Codex CLI. Spans are exported to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix).
 
 ## Setup
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, registers the `notify` hook in `~/.codex/config.toml`, starts the Codex buffer service, and creates the `arize-codex-proxy` shim at `~/.arize/harness/bin/codex` so `codex exec` is traced. Open a new shell after install so the PATH update takes effect.
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, and registers the hook entries plus the `notify` token-usage backstop in `~/.codex/config.toml`. After installing, approve the hooks via Codex's `/hooks` command (one time per user account).
 
 Pass `--with-skills` to also symlink the `manage-codex-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Codex tracing configuration.
 
@@ -67,38 +67,40 @@ install.bat uninstall codex
 | Phoenix endpoint | `http://localhost:6006` |
 | Arize AX endpoint | `otlp.arize.com:443` |
 | Hook config file | `~/.codex/config.toml` |
-| Hook events handled | `agent-turn-complete` (via `notify`); buffer drain on `codex exec` exit |
-| Buffer service host:port | `127.0.0.1` : `4318` |
-| Codex exec shim | `~/.arize/harness/bin/codex` (added to PATH) |
+| Hook events handled | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop` (via real Codex hooks); `agent-turn-complete` (via `notify`) for token usage |
 | Env override file | `~/.codex/arize-env.sh` |
-| State directory | `~/.arize/harness/state/codex/` |
-| Buffer PID | `~/.arize/harness/run/codex-buffer.pid` |
+| State directory | `~/.arize/harness/state/codex/` (state files + tool span JSONLs) |
 | Log file | `~/.arize/harness/logs/codex.log` |
+
+## Trust prompt
+
+Codex requires explicit user trust for non-managed hooks before they fire. After install, run:
+
+1. `codex` (start a session)
+2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
+
+Without this one-time approval, hooks won't fire and traces will be limited to the `notify`-based fallback (single LLM span per turn, no tool spans).
 
 ## Verifying tracing
 
-After opening a new shell (so the updated PATH picks up the proxy shim):
+Run any Codex command:
 
 ```bash
-# Run any Codex command — both interactive (`codex`) and one-shot (`codex exec`)
-# routes are traced.
 codex exec "explain what this file does" path/to/file.py
 ```
 
 Then check:
 
-- The buffer service is running: `ps aux | grep arize-codex-buffer` (PID is also stored in `~/.arize/harness/run/codex-buffer.pid`).
-- Hook activity in `~/.arize/harness/logs/codex.log` and buffer activity in `~/.arize/harness/logs/codex-buffer.log`.
+- Hook activity in `~/.arize/harness/logs/codex.log`.
+- Per-thread state files in `~/.arize/harness/state/codex/` show recent activity.
 - Spans appear in your configured project in Arize AX or Phoenix.
 
 Errors are always logged. For routine hook activity, add `export ARIZE_VERBOSE=true` to `~/.codex/arize-env.sh` (or your shell) and re-run. See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_TRACE_DEBUG`, etc.).
 
 ## Troubleshooting
 
-**`codex` is not running through the shim.** Confirm `which codex` returns `~/.arize/harness/bin/codex`. If a system Codex install is shadowing the shim, ensure `~/.arize/harness/bin` is earlier on your `PATH`, or open a new shell so the installer-applied PATH update takes effect.
+**Hooks not firing.** Run `codex` → `/hooks` and confirm the `arize-hook-codex-*` entries are listed and trusted. If they aren't listed at all, re-run the installer.
 
-**Buffer service won't start.** Port `4318` may be in use. Check `lsof -iTCP:4318 -sTCP:LISTEN`. Stop the conflicting process or change the port under `harnesses.codex.collector.port` in `~/.arize/harness/config.yaml`, then re-run `./install.sh codex`.
+**No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded. Check `~/.arize/harness/logs/codex.log` for backend/auth errors. Confirm the hooks are trusted via `/hooks`.
 
-**No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded into the environment. Check `~/.arize/harness/logs/codex.log` for backend/auth errors.
-
-**Disable temporarily.** Remove the `notify` entry from `~/.codex/config.toml` to pause hook execution without uninstalling, or uninstall fully with `./install.sh uninstall codex`.
+**Disable temporarily.** Untrust the entries via `codex` → `/hooks`, or set `ARIZE_TRACE_ENABLED=false` in `~/.codex/arize-env.sh` and restart Codex. Full uninstall: `./install.sh uninstall codex`.
