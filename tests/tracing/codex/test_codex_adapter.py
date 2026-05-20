@@ -226,6 +226,20 @@ class TestGcStaleStateFiles:
             f.unlink()
         adapter.gc_stale_state_files()  # should not raise
 
+    def test_gc_removes_aged_spans_jsonl(self, codex_state_dir, disable_env_vars):
+        """gc_stale_state_files unlinks spans_*.jsonl files older than 24h."""
+        aged = codex_state_dir / "spans_t1.jsonl"
+        aged.write_text('{"kind":"tool_start"}\n')
+        fresh = codex_state_dir / "spans_t2.jsonl"
+        fresh.write_text('{"kind":"tool_start"}\n')
+        old_time = time.time() - 25 * 3600
+        os.utime(aged, (old_time, old_time))
+
+        adapter.gc_stale_state_files()
+
+        assert not aged.exists()
+        assert fresh.exists()
+
 
 # ── check_requirements tests ─────────────────────────────────────────────────
 
