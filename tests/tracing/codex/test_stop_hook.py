@@ -186,7 +186,8 @@ class TestPollingWithoutTokens:
         _seed_session(sm)
         sm.set("turn_start_ms", "1000")
         sm.set("user_prompt", "hello")
-        sm.set("last_assistant_message", "hi")
+        # Neither last_assistant_message nor pending_token_usage seeded —
+        # the wait should poll the full window before giving up.
 
         sent: list = []
         with mock.patch(
@@ -200,8 +201,8 @@ class TestPollingWithoutTokens:
         assert "llm.token_count.prompt" not in parent_attrs
         assert "llm.token_count.completion" not in parent_attrs
         assert "llm.token_count.total" not in parent_attrs
-        # 10 sleeps of 0.05 each = 500 ms total polling
-        assert len(_mock_sleep) == 10
+        # 40 sleeps of 0.05s each = 2000 ms total polling
+        assert len(_mock_sleep) == 40
         assert all(abs(s - 0.05) < 1e-9 for s in _mock_sleep)
 
 
@@ -218,9 +219,9 @@ class TestLateTokens:
         _seed_session(sm)
         sm.set("turn_start_ms", "1000")
         sm.set("user_prompt", "hello")
-        sm.set("last_assistant_message", "hi")
+        # No pre-seeded notify data: wait should poll until fake_sleep injects
+        # both pending_token_usage and last_assistant_message.
 
-        # Each sleep tick simulates the notify hook landing 200 ms in.
         sleep_calls: list = []
         state_file = codex_state["state_dir"] / f"state_{thread_id}.yaml"
 
@@ -236,6 +237,7 @@ class TestLateTokens:
                     "pending_token_usage",
                     json.dumps({"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18, "model": "gpt-5"}),
                 )
+                writer.set("last_assistant_message", "hi")
 
         monkeypatch.setattr("tracing.codex.hooks.stop.time.sleep", fake_sleep)
 
@@ -251,7 +253,7 @@ class TestLateTokens:
         assert parent_attrs["llm.token_count.prompt"]["intValue"] == 7
         assert parent_attrs["llm.token_count.completion"]["intValue"] == 11
         assert parent_attrs["llm.token_count.total"]["intValue"] == 18
-        # Polling stops as soon as data appears -- never reaches 10 sleeps.
+        # Polling stops as soon as data appears -- well short of the 40-sleep timeout.
         assert len(sleep_calls) < 10
 
 

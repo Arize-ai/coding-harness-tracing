@@ -29,22 +29,27 @@ from tracing.codex.hooks.adapter import (
     resolve_session,
 )
 
-# Maximum time to wait for the notify hook to populate token usage in state.
-_TOKEN_POLL_TIMEOUT_MS = 500
-_TOKEN_POLL_INTERVAL_MS = 50
+# Maximum time to wait for the notify hook to populate its state writes.
+# notify and Stop fire concurrently with no ordering guarantee, so this bounds
+# the race window — long enough to catch the typical case, short enough to
+# avoid noticeable end-of-turn latency in Codex's UI.
+_NOTIFY_POLL_TIMEOUT_MS = 2000
+_NOTIFY_POLL_INTERVAL_MS = 50
 
 
-def _wait_for_pending_tokens(state: StateManager) -> "dict | None":
-    """Poll the state file briefly for token usage data written by the notify hook.
+def _wait_for_notify_data(state: StateManager) -> "dict | None":
+    """Poll briefly for notify's state writes; return parsed pending_token_usage if any.
 
-    Each StateManager.get() does a fresh read from disk, so a separate writer
-    (the notify hook) lands its update without needing reload semantics here.
+    notify writes pending_token_usage and last_assistant_message together, so
+    the appearance of either signals it ran. Each StateManager.get() does a
+    fresh disk read, so concurrent writes from a separate notify process land
+    without needing explicit reload semantics here.
     """
     waited = 0
     raw = state.get("pending_token_usage")
-    while not raw and waited < _TOKEN_POLL_TIMEOUT_MS:
-        time.sleep(_TOKEN_POLL_INTERVAL_MS / 1000.0)
-        waited += _TOKEN_POLL_INTERVAL_MS
+    while not raw and not state.get("last_assistant_message") and waited < _NOTIFY_POLL_TIMEOUT_MS:
+        time.sleep(_NOTIFY_POLL_INTERVAL_MS / 1000.0)
+        waited += _NOTIFY_POLL_INTERVAL_MS
         raw = state.get("pending_token_usage")
     if not raw:
         return None
@@ -81,17 +86,20 @@ def finalize_turn(state: StateManager, thread_id: str) -> None:
     sandbox_mode = state.get("sandbox_mode")
     turn_start_ms = state.get("turn_start_ms")
     user_prompt = state.get("user_prompt") or ""
-    last_assistant_message = state.get("last_assistant_message") or ""
 
     rows = span_buffer.read_all(thread_id)
     tool_entries = span_buffer.join_by_call_id(rows)
-    existing_tokens = state.get("pending_token_usage")
 
-    if not tool_entries and not user_prompt and not last_assistant_message and not existing_tokens:
+    # Pre-wait read: short-circuit if there's nothing at all to finalize.
+    pre_wait_message = state.get("last_assistant_message") or ""
+    pre_wait_tokens = state.get("pending_token_usage")
+    if not tool_entries and not user_prompt and not pre_wait_message and not pre_wait_tokens:
         log("stop hook: nothing to finalize")
         return
 
-    pending_token_usage = _wait_for_pending_tokens(state)
+    # Wait for notify, then re-read its fields — notify may land during the wait.
+    pending_token_usage = _wait_for_notify_data(state)
+    last_assistant_message = state.get("last_assistant_message") or ""
 
     state.increment("trace_count")
     new_trace_count = state.get("trace_count") or "0"

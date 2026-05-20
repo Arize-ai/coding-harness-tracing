@@ -82,6 +82,14 @@ def _handle_user_prompt_submit(payload: dict) -> None:
     if state.get("turn_start_ms"):
         _finalize_pending_turn(state, thread_id)
 
+    # Clear any leftover notify writes from a previous turn whose Stop already
+    # completed before notify arrived. finalize_pending_turn (when it ran)
+    # already cleared these — safe no-op in that path. Without this clear, a
+    # late notify between Stop and this UserPromptSubmit would bleed into the
+    # next turn's parent span.
+    state.delete("last_assistant_message")
+    state.delete("pending_token_usage")
+
     state.set("turn_start_ms", str(get_timestamp_ms()))
 
     prompt_text = payload.get("prompt") or payload.get("user_prompt") or payload.get("input") or ""
