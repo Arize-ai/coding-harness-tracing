@@ -3,24 +3,21 @@
 
 Self-contained module that handles:
 - Writing ~/.codex/arize-env.sh (env file)
-- Updating ~/.codex/config.toml (TOML config with notify + otel exporter)
-- Starting/stopping the codex buffer service
+- Updating ~/.codex/config.toml (notify + five hook entry points)
 - Managing the shared config.yaml harness entry
 - Symlinking skills
+- Migrating legacy v1 installs via tracing.codex.install_legacy
 """
 
 from __future__ import annotations
 
 import os
 import re
-import shutil
-import stat
 import sys
 from pathlib import Path
 
 from core.config import get_value, load_config
 from core.setup import (
-    BIN_DIR,
     CONFIG_FILE,
     dry_run,
     ensure_harness_installed,
@@ -38,10 +35,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
-from tracing.codex.codex_buffer_ctl import buffer_start, buffer_status, buffer_stop
-from tracing.codex.constants import OTEL_ENDPOINT  # noqa: F401 — re-exported for backwards compat
 from tracing.codex.constants import (
-    BUFFER_PORT,
     CODEX_CONFIG_DIR,
     CODEX_CONFIG_FILE,
     CODEX_ENV_FILE,
@@ -50,7 +44,11 @@ from tracing.codex.constants import (
     HARNESS_HOME,
     HARNESS_NAME,
     NOTIFY_BIN_NAME,
+    SESSION_BIN_NAME,
+    STOP_BIN_NAME,
+    TOOL_BIN_NAME,
 )
+from tracing.codex.install_legacy import cleanup_legacy_install
 
 # Try to import tomllib (3.11+), then tomli, then fall back to None
 _tomllib = None
@@ -61,6 +59,17 @@ except ImportError:
         import tomli as _tomllib  # type: ignore[no-redef]
     except ImportError:
         pass
+
+
+# Hook events written by the installer.
+_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "Stop",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -257,19 +266,33 @@ def _toml_split_key_path(path: str) -> list[str]:
 
 def _toml_write_section(data: dict, prefix: list[str], lines: list[str]) -> None:
     """Recursively write TOML sections."""
-    # Write scalar/array keys first
+    # Pass 1: simple scalars and arrays of scalars.
     for key, val in data.items():
-        if isinstance(val, dict):
+        if isinstance(val, dict) or _is_table_array(val):
             continue
         _toml_write_value(key, val, lines)
 
-    # Then nested sections
+    # Pass 2: arrays-of-tables → emit [[prefix.key]] for each element.
+    for key, val in data.items():
+        if not _is_table_array(val):
+            continue
+        section_path = prefix + [key]
+        header = f"[[{'.'.join(_toml_key(k) for k in section_path)}]]"
+        for table in val:
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(header)
+            _toml_write_table_body(table, lines)
+
+    # Pass 3: nested dict sections.
     for key, val in data.items():
         if not isinstance(val, dict):
             continue
         section_path = prefix + [key]
-        # Check if this section has direct scalar values
-        has_scalars = any(not isinstance(v, dict) for v in val.values())
+        # Emit [section] header only when there are direct scalars to anchor
+        # (or the table is empty). If all children are dicts/table-arrays we
+        # skip the header and let those nested writers emit their own headers.
+        has_scalars = any(not isinstance(v, dict) and not _is_table_array(v) for v in val.values())
         if has_scalars or not val:
             if lines and lines[-1] != "":
                 lines.append("")
@@ -277,8 +300,51 @@ def _toml_write_section(data: dict, prefix: list[str], lines: list[str]) -> None
         _toml_write_section(val, section_path, lines)
 
 
+def _is_table_array(val: object) -> bool:
+    """Return True if val is a list whose elements are all dicts."""
+    return isinstance(val, list) and len(val) > 0 and all(isinstance(v, dict) for v in val)
+
+
+def _toml_write_table_body(table: dict, lines: list[str]) -> None:
+    """Write a dict as the body of a ``[[section]]`` entry.
+
+    Nested dicts render as inline tables; arrays of dicts render as arrays of
+    inline tables. Scalars and arrays of scalars use the standard writer.
+    """
+    for key, val in table.items():
+        if isinstance(val, dict):
+            lines.append(f"{_toml_key(key)} = {_inline_table(val)}")
+        elif _is_table_array(val):
+            elems = ", ".join(_inline_table(d) for d in val)
+            lines.append(f"{_toml_key(key)} = [{elems}]")
+        else:
+            _toml_write_value(key, val, lines)
+
+
+def _inline_table(table: dict) -> str:
+    """Render a dict as a TOML inline table: ``{ k = v, k2 = v2 }``."""
+    parts: list[str] = []
+    for k, v in table.items():
+        kk = _toml_key(k)
+        if isinstance(v, dict):
+            parts.append(f"{kk} = {_inline_table(v)}")
+        elif isinstance(v, bool):
+            parts.append(f"{kk} = {'true' if v else 'false'}")
+        elif isinstance(v, int):
+            parts.append(f"{kk} = {v}")
+        elif isinstance(v, list):
+            if _is_table_array(v):
+                items = ", ".join(_inline_table(d) for d in v)
+            else:
+                items = ", ".join(_toml_string_literal(item) for item in v)
+            parts.append(f"{kk} = [{items}]")
+        else:
+            parts.append(f"{kk} = {_toml_string_literal(v)}")
+    return "{ " + ", ".join(parts) + " }"
+
+
 def _toml_write_value(key: str, val: object, lines: list[str]) -> None:
-    """Write a single TOML key-value pair."""
+    """Write a single TOML key-value pair (scalars and arrays of scalars only)."""
     k = _toml_key(key)
     if isinstance(val, list):
         items = ", ".join(_toml_string_literal(v) for v in val)
@@ -309,15 +375,38 @@ def _toml_string_literal(val: object) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _codex_toml_add(path: Path, notify_cmd: str, otel_endpoint: str) -> None:
-    """Add notify command and otel exporter to codex config.toml. Idempotent."""
+def _hook_entry_for(cmd: str) -> dict:
+    """Build the dict body for one ``[[hooks.<Event>]]`` array element."""
+    return {"hooks": [{"type": "command", "command": cmd, "timeout": 30}]}
+
+
+def _entry_targets_cmd(entry: object, cmd: str) -> bool:
+    """Return True if *entry* is a hook-array element whose inner ``hooks``
+    list contains a command equal to *cmd*.
+    """
+    if not isinstance(entry, dict):
+        return False
+    inner = entry.get("hooks")
+    if not isinstance(inner, list):
+        return False
+    return any(isinstance(h, dict) and h.get("command") == cmd for h in inner)
+
+
+def _codex_toml_apply(
+    path: Path,
+    notify_cmd: str,
+    session_cmd: str,
+    tool_cmd: str,
+    stop_cmd: str,
+) -> None:
+    """Write the v2 hooks-based layout to ~/.codex/config.toml. Idempotent."""
     if dry_run():
-        info(f"would update {path} with notify and otel exporter")
+        info(f"would update {path} with notify + 6 hook entries")
         return
 
     data = _toml_load(path)
 
-    # Set notify — array of commands
+    # Ensure notify list contains our notify_cmd exactly once.
     existing_notify = data.get("notify", [])
     if not isinstance(existing_notify, list):
         existing_notify = [existing_notify] if existing_notify else []
@@ -325,34 +414,52 @@ def _codex_toml_add(path: Path, notify_cmd: str, otel_endpoint: str) -> None:
         existing_notify.append(notify_cmd)
     data["notify"] = existing_notify
 
-    # Set otel exporter
-    if "otel" not in data:
-        data["otel"] = {}
-    otel = data["otel"]
-    if "exporter" not in otel:
-        otel["exporter"] = {}
-    otel["exporter"]["otlp-http"] = {
-        "endpoint": otel_endpoint,
-        "protocol": "json",
-    }
+    # Write [[hooks.<Event>]] entries. Replace any prior entry pointing at our cmd.
+    existing_hooks = data.get("hooks")
+    if not isinstance(existing_hooks, dict):
+        existing_hooks = {}
+    data["hooks"] = existing_hooks
+    hooks = existing_hooks
+    hook_specs = (
+        ("SessionStart", session_cmd),
+        ("UserPromptSubmit", session_cmd),
+        ("PreToolUse", tool_cmd),
+        ("PostToolUse", tool_cmd),
+        ("PermissionRequest", tool_cmd),
+        ("Stop", stop_cmd),
+    )
+    for event_name, cmd in hook_specs:
+        existing = hooks.get(event_name, [])
+        if not isinstance(existing, list):
+            existing = []
+        new_entry = _hook_entry_for(cmd)
+        replaced = False
+        for i, entry in enumerate(existing):
+            if _entry_targets_cmd(entry, cmd):
+                existing[i] = new_entry
+                replaced = True
+                break
+        if not replaced:
+            existing.append(new_entry)
+        hooks[event_name] = existing
 
     path.parent.mkdir(parents=True, exist_ok=True)
     _toml_write(data, path)
 
 
-def _codex_toml_remove(path: Path, notify_cmd: str, otel_endpoint: str) -> None:
-    """Remove our notify command and otel exporter from codex config.toml. Idempotent."""
+def _codex_toml_remove_v2(path: Path, notify_cmd: str, hook_cmds: list[str]) -> None:
+    """Remove v2 notify entry and all hook entries pointing at our commands. Idempotent."""
     if not path.is_file():
         return
 
     if dry_run():
-        info(f"would revert {path}: remove notify={notify_cmd} and otel exporter")
+        info(f"would revert {path}: remove notify={notify_cmd} and hook entries")
         return
 
     data = _toml_load(path)
     changed = False
 
-    # Remove our notify entry only if it matches
+    # Notify
     existing_notify = data.get("notify", [])
     if isinstance(existing_notify, list) and notify_cmd in existing_notify:
         existing_notify.remove(notify_cmd)
@@ -365,17 +472,23 @@ def _codex_toml_remove(path: Path, notify_cmd: str, otel_endpoint: str) -> None:
         del data["notify"]
         changed = True
 
-    # Remove otel exporter only if it points at our endpoint
-    if "otel" in data and "exporter" in data["otel"] and "otlp-http" in data["otel"]["exporter"]:
-        otlp_http = data["otel"]["exporter"]["otlp-http"]
-        if isinstance(otlp_http, dict) and otlp_http.get("endpoint") == otel_endpoint:
-            del data["otel"]["exporter"]["otlp-http"]
+    # Hooks
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        for event in _HOOK_EVENTS:
+            existing = hooks.get(event)
+            if not isinstance(existing, list):
+                continue
+            kept = [entry for entry in existing if not any(_entry_targets_cmd(entry, cmd) for cmd in hook_cmds)]
+            if len(kept) != len(existing):
+                changed = True
+                if kept:
+                    hooks[event] = kept
+                else:
+                    del hooks[event]
+        if not hooks:
+            del data["hooks"]
             changed = True
-            # Clean up empty parents
-            if not data["otel"]["exporter"]:
-                del data["otel"]["exporter"]
-            if not data["otel"]:
-                del data["otel"]
 
     if changed:
         _toml_write(data, path)
@@ -392,10 +505,7 @@ def _write_env_file(path: Path, user_id: str = "") -> None:
         info(f"would write env file {path}")
         return
 
-    lines = [
-        "export ARIZE_TRACE_ENABLED=true",
-        f"export ARIZE_CODEX_BUFFER_PORT={BUFFER_PORT}",
-    ]
+    lines = ["export ARIZE_TRACE_ENABLED=true"]
     if user_id:
         lines.append(f"export ARIZE_USER_ID={user_id}")
 
@@ -422,361 +532,28 @@ def _is_our_env_file(path: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Codex proxy shim helpers
-# ---------------------------------------------------------------------------
-
-
-def _codex_proxy_shim_path() -> Path:
-    """Return the primary path where the Arize-managed ``codex`` shim should live."""
-    if os.name == "nt":
-        return BIN_DIR / "codex.cmd"
-    return BIN_DIR / "codex"
-
-
-def _codex_proxy_shim_paths() -> list[Path]:
-    """Return all Codex shim paths needed for the current platform."""
-    if os.name == "nt":
-        return [BIN_DIR / "codex.cmd", BIN_DIR / "codex"]
-    return [BIN_DIR / "codex"]
-
-
-_PATH_MARKER_BEGIN = "# >>> arize codex tracing PATH >>>"
-_PATH_MARKER_END = "# <<< arize codex tracing PATH <<<"
-
-_POSIX_PATH_BLOCK = f"""{_PATH_MARKER_BEGIN}
-# Required so "codex exec" runs through the Arize tracing proxy.
-case ":$PATH:" in
-  *":$HOME/.arize/harness/bin:"*) ;;
-  *) export PATH="$HOME/.arize/harness/bin:$PATH" ;;
-esac
-{_PATH_MARKER_END}
-"""
-
-_POWERSHELL_PATH_BLOCK = f"""{_PATH_MARKER_BEGIN}
-# Required so "codex exec" runs through the Arize tracing proxy.
-$arizeHarnessBin = Join-Path $HOME ".arize/harness/bin"
-if (($env:PATH -split [System.IO.Path]::PathSeparator) -notcontains $arizeHarnessBin) {{
-    $env:PATH = "$arizeHarnessBin$([System.IO.Path]::PathSeparator)$env:PATH"
-}}
-{_PATH_MARKER_END}
-"""
-
-
-def _posix_shell_profiles() -> list[Path]:
-    """Return sh/bash/zsh profile files that should receive the PATH block."""
-    home = Path.home()
-    profiles = [
-        home / ".profile",
-        home / ".bashrc",
-        home / ".zshrc",
-    ]
-    # These login-shell files can change shell startup precedence, so only
-    # update them when the user already has them.
-    for name in (".bash_profile", ".bash_login", ".zprofile", ".zlogin"):
-        path = home / name
-        if path.exists():
-            profiles.append(path)
-    return profiles
-
-
-def _powershell_profiles() -> list[Path]:
-    """Return PowerShell profile files for the current platform."""
-    home = Path.home()
-    if os.name == "nt":
-        documents = home / "Documents"
-        return [
-            documents / "PowerShell" / "Microsoft.PowerShell_profile.ps1",
-            documents / "WindowsPowerShell" / "Microsoft.PowerShell_profile.ps1",
-        ]
-    return [home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"]
-
-
-def _profile_has_marker(text: str) -> bool:
-    return _PATH_MARKER_BEGIN in text and _PATH_MARKER_END in text
-
-
-def _ensure_profile_block(path: Path, block: str) -> bool:
-    """Append a managed PATH block to *path* if it is not already present."""
-    if dry_run():
-        info(f"would add Arize harness bin to PATH in {path}")
-        return False
-
-    try:
-        text = path.read_text() if path.is_file() else ""
-    except OSError as exc:
-        info(f"Warning: could not read {path}: {exc}")
-        return False
-
-    if _profile_has_marker(text):
-        return False
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not text:
-        new_text = block
-    elif text.endswith("\n"):
-        new_text = f"{text}\n{block}"
-    else:
-        new_text = f"{text}\n\n{block}"
-    try:
-        path.write_text(new_text)
-    except OSError as exc:
-        info(f"Warning: could not update {path}: {exc}")
-        return False
-    return True
-
-
-def _remove_profile_block(path: Path) -> bool:
-    """Remove the managed PATH block from *path* when present."""
-    if not path.is_file():
-        return False
-
-    try:
-        text = path.read_text()
-    except OSError as exc:
-        info(f"Warning: could not read {path}: {exc}")
-        return False
-
-    pattern = re.compile(
-        rf"\n?{re.escape(_PATH_MARKER_BEGIN)}.*?{re.escape(_PATH_MARKER_END)}\n?",
-        re.DOTALL,
-    )
-    new_text, count = pattern.subn("\n", text)
-    if count == 0:
-        return False
-
-    new_text = re.sub(r"\n{3,}", "\n\n", new_text).lstrip("\n")
-    if dry_run():
-        info(f"would remove Arize harness bin PATH block from {path}")
-        return False
-
-    try:
-        path.write_text(new_text)
-    except OSError as exc:
-        info(f"Warning: could not update {path}: {exc}")
-        return False
-    return True
-
-
-def _path_contains(path_value: str, entry: str, separator: str | None = None) -> bool:
-    """Return whether *entry* is already present in a PATH-like string."""
-    separator = separator or os.pathsep
-    windows_style = separator == ";"
-
-    def normalize(value: str) -> str:
-        normalized = os.path.normpath(os.path.expandvars(os.path.expanduser(value)))
-        if windows_style:
-            normalized = normalized.replace("\\", "/").lower()
-        else:
-            normalized = os.path.normcase(normalized)
-        return normalized.rstrip("/")
-
-    expected = normalize(entry)
-    for part in path_value.split(separator):
-        if not part:
-            continue
-        if normalize(part) == expected:
-            return True
-    return False
-
-
-def _prepend_process_path(path: Path) -> None:
-    """Make the proxy visible to child processes spawned by this installer."""
-    path_str = str(path)
-    current = os.environ.get("PATH", "")
-    if _path_contains(current, path_str):
-        return
-    os.environ["PATH"] = path_str + (os.pathsep + current if current else "")
-
-
-def _ensure_windows_user_path(path: Path) -> bool:
-    """Persist the harness bin directory in the Windows user PATH."""
-    path_str = str(path)
-    if dry_run():
-        info(f"would add {path_str} to the Windows user PATH")
-        return False
-
-    try:
-        import winreg
-    except ImportError:
-        info("Warning: could not update Windows user PATH: winreg is unavailable")
-        return False
-
-    try:
-        hkey_current_user = getattr(winreg, "HKEY_CURRENT_USER")
-        key_read = getattr(winreg, "KEY_READ")
-        key_write = getattr(winreg, "KEY_WRITE")
-        reg_expand_sz = getattr(winreg, "REG_EXPAND_SZ")
-        reg_sz = getattr(winreg, "REG_SZ")
-        create_key_ex = getattr(winreg, "CreateKeyEx")
-        query_value_ex = getattr(winreg, "QueryValueEx")
-        set_value_ex = getattr(winreg, "SetValueEx")
-
-        with create_key_ex(hkey_current_user, "Environment", 0, key_read | key_write) as key:
-            try:
-                current, value_type = query_value_ex(key, "Path")
-            except FileNotFoundError:
-                current, value_type = "", reg_expand_sz
-
-            if _path_contains(str(current), path_str, separator=";"):
-                return False
-
-            new_path = path_str + (";" + str(current) if current else "")
-            if value_type not in (reg_expand_sz, reg_sz):
-                value_type = reg_expand_sz
-            set_value_ex(key, "Path", 0, value_type, new_path)
-    except OSError as exc:
-        info(f"Warning: could not update Windows user PATH: {exc}")
-        return False
-
-    try:
-        import ctypes
-
-        windll = getattr(ctypes, "windll", None)
-        if windll is not None:
-            windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 5000, None)
-    except Exception:
-        pass
-
-    return True
-
-
-def _ensure_codex_proxy_on_path(path: Path) -> None:
-    """Persist and activate the harness bin directory for Codex proxy lookup."""
-    changed_profiles: list[Path] = []
-
-    for profile in _posix_shell_profiles():
-        if _ensure_profile_block(profile, _POSIX_PATH_BLOCK):
-            changed_profiles.append(profile)
-
-    for profile in _powershell_profiles():
-        if _ensure_profile_block(profile, _POWERSHELL_PATH_BLOCK):
-            changed_profiles.append(profile)
-
-    if os.name == "nt":
-        _ensure_windows_user_path(path)
-
-    _prepend_process_path(path)
-
-    if changed_profiles:
-        joined = ", ".join(str(p) for p in changed_profiles)
-        info(f"Added Arize harness bin to PATH in: {joined}")
-        info("Open a new shell, or source your profile, for parent shells to pick up the PATH update.")
-    elif not dry_run():
-        info("Arize harness bin is already configured on PATH for supported shell profiles.")
-
-
-def _remove_codex_proxy_path_blocks() -> None:
-    """Remove shell profile PATH blocks written by the Codex installer."""
-    profiles = list(dict.fromkeys(_posix_shell_profiles() + _powershell_profiles()))
-    removed = [profile for profile in profiles if _remove_profile_block(profile)]
-    if removed:
-        joined = ", ".join(str(p) for p in removed)
-        info(f"Removed Arize harness bin PATH block from: {joined}")
-
-
-def _is_our_codex_proxy_shim(path: Path) -> bool:
-    """Return True only if *path* exists and is an Arize-managed codex shim."""
-    if not path.is_file():
-        return False
-    try:
-        text = path.read_text()
-        return "arize-codex-proxy" in text and "Arize Codex proxy shim" in text
-    except OSError:
-        return False
-
-
-def _write_codex_proxy_shim(path: Path, proxy_cmd: Path) -> None:
-    """Create the codex proxy shim at *path* pointing to *proxy_cmd*.
-
-    Honors ``dry_run()`` — logs intent without writing.
-    """
-    if dry_run():
-        info(f"would write codex proxy shim at {path}")
-        return
-
-    # Never overwrite a file that isn't ours
-    if path.is_file() and not _is_our_codex_proxy_shim(path):
-        info(f"Skipping codex proxy shim — {path} exists and is not ours")
-        return
-
-    if path.suffix.lower() == ".cmd":
-        content = "@echo off\r\n" "REM Arize Codex proxy shim\r\n" f'"{proxy_cmd}" %*\r\n'
-    else:
-        shell_proxy_cmd = str(proxy_cmd).replace("\\", "/")
-        content = "#!/bin/sh\n" "# Arize Codex proxy shim\n" f"exec '{shell_proxy_cmd}' \"$@\"\n"
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-
-    if path.suffix.lower() != ".cmd":
-        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _remove_codex_proxy_shim(path: Path) -> None:
-    """Remove the codex proxy shim at *path* only if it is Arize-owned.
-
-    Honors ``dry_run()`` — logs intent without deleting.
-    """
-    if not path.exists():
-        return
-
-    if not _is_our_codex_proxy_shim(path):
-        info(f"Skipping removal of {path} — not an Arize-managed shim")
-        return
-
-    if dry_run():
-        info(f"would remove codex proxy shim at {path}")
-        return
-
-    path.unlink()
-
-
-def _codex_proxy_path_status(shim_path: Path) -> tuple[str, "str | None"]:
-    """Check whether the shim is the ``codex`` that the user's shell will run.
-
-    Returns one of:
-    - ``("active", "<resolved_shim_path>")``
-    - ``("shadowed", "<resolved_other_path>")``
-    - ``("missing", None)``
-    """
-    resolved = shutil.which("codex")
-    if resolved is None:
-        return ("missing", None)
-
-    shim_real = os.path.realpath(str(shim_path))
-    which_real = os.path.realpath(resolved)
-
-    if shim_real == which_real and _is_our_codex_proxy_shim(shim_path):
-        return ("active", which_real)
-    return ("shadowed", which_real)
-
-
-# ---------------------------------------------------------------------------
 # Install / Uninstall
 # ---------------------------------------------------------------------------
 
 
 def install(with_skills: bool = False) -> None:
-    """Install codex tracing harness."""
+    """Install codex tracing harness (hooks-based v2 layout)."""
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
 
-    # 1. Ensure shared runtime directories
-    ensure_shared_runtime()
+    # 1. Migrate any v1 artifacts (idempotent; no-op on fresh installs).
+    cleanup_legacy_install(CODEX_CONFIG_FILE)
 
-    # 2. Prompt for credentials if needed; write harness entry
+    # 2. Shared runtime + harness entry.
+    ensure_shared_runtime()
     config = load_config(str(CONFIG_FILE))
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-
     project_name = prompt_project_name("codex")
-    collector = {"host": "127.0.0.1", "port": 4318}
 
     if existing_entry:
         info(f"Reusing existing backend: {existing_entry.get('target')}")
-        # Preserve existing collector if present, otherwise set default
-        existing_collector = existing_entry.get("collector")
-        merge_harness_entry(HARNESS_NAME, project_name, collector=existing_collector or collector)
+        merge_harness_entry(HARNESS_NAME, project_name)
         user_id = get_value(config, "user_id") or ""
     else:
         existing_harnesses = config.get("harnesses", {}) if config else {}
@@ -789,103 +566,59 @@ def install(with_skills: bool = False) -> None:
                 harness_name=HARNESS_NAME,
                 project_name=project_name,
                 user_id=user_id,
-                collector=collector,
             )
         else:
             info("would write config.yaml with backend credentials")
 
-    # Logging settings are global. Prompt only if no `logging:` block exists yet —
-    # subsequent harness installs reuse what the first wizard wrote.
+    # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:
-        logging_block = prompt_content_logging()
-        write_logging_config(logging_block)
+        write_logging_config(prompt_content_logging())
     else:
         info("Using existing logging settings from config.yaml")
 
-    # 3. Ensure codex config dir exists
+    # 3. Codex config dir + env file.
     if not dry_run():
         CODEX_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     else:
         info(f"would create {CODEX_CONFIG_DIR}")
-
-    # 4. Write env file
     _write_env_file(CODEX_ENV_FILE, user_id=user_id)
 
-    # 5. Update codex config.toml — collector port from new path
-    config = load_config(str(CONFIG_FILE))
-    collector_port = get_value(config, f"harnesses.{HARNESS_NAME}.collector.port") or 4318
-    otel_endpoint = f"http://127.0.0.1:{collector_port}/v1/logs"
+    # 4. Write the hooks-based TOML layout.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    _codex_toml_add(CODEX_CONFIG_FILE, notify_cmd, otel_endpoint)
+    session_cmd = str(venv_bin(SESSION_BIN_NAME))
+    tool_cmd = str(venv_bin(TOOL_BIN_NAME))
+    stop_cmd = str(venv_bin(STOP_BIN_NAME))
+    _codex_toml_apply(CODEX_CONFIG_FILE, notify_cmd, session_cmd, tool_cmd, stop_cmd)
     info(f"Updated TOML config: {CODEX_CONFIG_FILE}")
 
-    # 6. Start buffer service
-    status, _, _ = buffer_status()
-    if status == "running":
-        info("Buffer service already running — skipping start")
-    elif not dry_run():
-        ok = buffer_start()
-        if ok:
-            info("Buffer service started")
-        else:
-            info("Warning: buffer service failed to start (you can start it later)")
-    else:
-        info("would start buffer service")
-
-    # 7. Write codex proxy shim
-    shim_path = _codex_proxy_shim_path()
-    for path in _codex_proxy_shim_paths():
-        _write_codex_proxy_shim(path, venv_bin("arize-codex-proxy"))
-    if dry_run() or any(_is_our_codex_proxy_shim(path) for path in _codex_proxy_shim_paths()):
-        _ensure_codex_proxy_on_path(BIN_DIR)
-    else:
-        info(f"Codex proxy PATH not updated because {shim_path} is not an Arize-managed shim.")
-
-    status, resolved = _codex_proxy_path_status(shim_path)
-    if status == "active":
-        info(f"Codex proxy active for codex exec (resolves to {resolved})")
-    elif status == "shadowed":
-        info(
-            f"Codex proxy shim installed at {shim_path}, but PATH resolves codex"
-            f" to {resolved}. Open a new shell after install so the managed PATH"
-            " update can take effect."
-        )
-    else:
-        info(f"Codex proxy shim installed at {shim_path}; open a new shell to activate codex exec tracing.")
-
-    # 8. Symlink skills
+    # 5. Skills.
     if with_skills:
         symlink_skills(HARNESS_NAME)
         info("Symlinked skills")
 
-    info("Codex tracing installed successfully")
+    # 6. Trust prompt message.
+    info("")
+    info("Codex tracing installed.")
+    info("")
+    info("  One-time setup: open codex, run `/hooks`, and approve the")
+    info("  arize-hook-codex-* entries. Codex requires explicit trust")
+    info("  before non-managed hooks fire.")
 
 
 def uninstall() -> None:
     """Uninstall codex tracing harness."""
-    # 1. Stop buffer service
-    if not dry_run():
-        buffer_stop()
-        info("Stopped buffer service")
-    else:
-        info("would stop buffer service")
+    # 1. Clean up any lingering v1 artifacts first (no-op if absent).
+    cleanup_legacy_install(CODEX_CONFIG_FILE)
 
-    # 2. Revert codex config.toml
-    config = load_config(str(CONFIG_FILE))
-    collector_port = get_value(config, f"harnesses.{HARNESS_NAME}.collector.port") or 4318
-    otel_endpoint = f"http://127.0.0.1:{collector_port}/v1/logs"
+    # 2. Revert TOML — remove our notify entry and hook entries.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    _codex_toml_remove(CODEX_CONFIG_FILE, notify_cmd, otel_endpoint)
+    session_cmd = str(venv_bin(SESSION_BIN_NAME))
+    tool_cmd = str(venv_bin(TOOL_BIN_NAME))
+    stop_cmd = str(venv_bin(STOP_BIN_NAME))
+    _codex_toml_remove_v2(CODEX_CONFIG_FILE, notify_cmd, [session_cmd, tool_cmd, stop_cmd])
     info(f"Reverted TOML config: {CODEX_CONFIG_FILE}")
 
-    # 3. Remove codex proxy shim
-    for path in _codex_proxy_shim_paths():
-        _remove_codex_proxy_shim(path)
-
-    # 4. Remove shell profile PATH blocks
-    _remove_codex_proxy_path_blocks()
-
-    # 5. Remove env file if it's ours
+    # 3. Remove env file if ours.
     if CODEX_ENV_FILE.is_file():
         if _is_our_env_file(CODEX_ENV_FILE):
             if dry_run():
@@ -896,14 +629,11 @@ def uninstall() -> None:
         else:
             info(f"Skipping {CODEX_ENV_FILE} — does not look like our file")
 
-    # 6. Remove harness entry
+    # 4. Remove harness entry + unlink skills.
     remove_harness_entry(HARNESS_NAME)
     info("Removed codex harness entry from config.yaml")
-
-    # 7. Unlink skills
     unlink_skills(HARNESS_NAME)
     info("Unlinked skills")
-
     info("Codex tracing uninstalled")
 
 
