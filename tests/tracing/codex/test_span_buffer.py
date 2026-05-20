@@ -206,13 +206,44 @@ def test_join_last_permission_wins():
     assert result[0]["decision"] == "deny"
 
 
-def test_join_skips_row_without_call_id():
+def test_join_pairs_rows_without_call_id_by_append_order():
     rows = [
         {"kind": "tool_start", "call_id": "A", "tool": "shell", "args": "{}", "ts_ms": 1},
-        {"kind": "tool_end", "output": "orphan", "ts_ms": 2},  # missing call_id
+        {"kind": "tool_start", "tool": "Bash", "args": '{"command":"pwd"}', "ts_ms": 2},
+        {"kind": "tool_end", "output": "synthetic-ok", "ts_ms": 3},
         {"kind": "tool_end", "call_id": "A", "output": "ok", "ts_ms": 3},
     ]
     result = span_buffer.join_by_call_id(rows)
-    assert len(result) == 1
+    assert len(result) == 2
     assert result[0]["call_id"] == "A"
     assert result[0]["output"] == "ok"
+    assert result[1]["call_id"] == ""
+    assert result[1]["tool"] == "Bash"
+    assert result[1]["output"] == "synthetic-ok"
+
+
+def test_join_pairs_multiple_no_id_tools_fifo():
+    rows = [
+        {"kind": "tool_start", "tool": "Bash", "args": "first", "ts_ms": 1},
+        {"kind": "tool_start", "tool": "Bash", "args": "second", "ts_ms": 2},
+        {"kind": "tool_end", "output": "first-out", "ts_ms": 3},
+        {"kind": "tool_end", "output": "second-out", "ts_ms": 4},
+    ]
+    result = span_buffer.join_by_call_id(rows)
+    assert len(result) == 2
+    assert result[0]["args"] == "first"
+    assert result[0]["output"] == "first-out"
+    assert result[1]["args"] == "second"
+    assert result[1]["output"] == "second-out"
+
+
+def test_join_attaches_no_id_permission_to_latest_open_tool():
+    rows = [
+        {"kind": "tool_start", "tool": "Bash", "args": "first", "ts_ms": 1},
+        {"kind": "tool_start", "tool": "Bash", "args": "second", "ts_ms": 2},
+        {"kind": "permission", "decision": "allow", "ts_ms": 3},
+    ]
+    result = span_buffer.join_by_call_id(rows)
+    assert len(result) == 2
+    assert result[0]["decision"] is None
+    assert result[1]["decision"] == "allow"

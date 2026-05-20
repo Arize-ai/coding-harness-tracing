@@ -69,6 +69,38 @@ class TestPreToolUse:
         assert row["args"] == '{"cmd":"ls"}'
         assert "ts_ms" in row
 
+    def test_camel_case_call_id_and_input_aliases(self, state_dir, monkeypatch):
+        _set_stdin(
+            monkeypatch,
+            {
+                "hook_event_name": "PreToolUse",
+                "session_id": "t1",
+                "callId": "c1",
+                "toolName": "Bash",
+                "arguments": {"command": "pwd"},
+            },
+        )
+        tool.main()
+        rows = _read_jsonl(state_dir / "spans_t1.jsonl")
+        assert rows[0]["call_id"] == "c1"
+        assert rows[0]["tool"] == "Bash"
+        assert rows[0]["args"] == '{"command":"pwd"}'
+
+    def test_codex_tool_use_id_alias(self, state_dir, monkeypatch):
+        _set_stdin(
+            monkeypatch,
+            {
+                "hook_event_name": "PreToolUse",
+                "session_id": "t1",
+                "tool_use_id": "toolu_1",
+                "tool_name": "Bash",
+                "tool_input": {"command": "pwd"},
+            },
+        )
+        tool.main()
+        rows = _read_jsonl(state_dir / "spans_t1.jsonl")
+        assert rows[0]["call_id"] == "toolu_1"
+
     def test_string_tool_input_passes_through(self, state_dir, monkeypatch):
         _set_stdin(
             monkeypatch,
@@ -164,6 +196,39 @@ class TestPostToolUse:
         tool.main()
         rows = _read_jsonl(state_dir / "spans_t1.jsonl")
         assert rows[0]["output"] == "fallback"
+
+    def test_codex_tool_response_alias(self, state_dir, monkeypatch):
+        _set_stdin(
+            monkeypatch,
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "t1",
+                "tool_use_id": "toolu_1",
+                "tool_name": "Bash",
+                "tool_response": {"stdout": "hello\n", "exit_code": 0},
+            },
+        )
+        tool.main()
+        rows = _read_jsonl(state_dir / "spans_t1.jsonl")
+        assert rows[0]["call_id"] == "toolu_1"
+        assert rows[0]["output"] == '{"stdout":"hello\\n","exit_code":0}'
+
+    def test_shell_output_aliases_are_serialized(self, state_dir, monkeypatch):
+        _set_stdin(
+            monkeypatch,
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "t1",
+                "callId": "c1",
+                "stdout": "hello\n",
+                "stderr": "warn\n",
+                "exit_code": 0,
+            },
+        )
+        tool.main()
+        rows = _read_jsonl(state_dir / "spans_t1.jsonl")
+        assert rows[0]["call_id"] == "c1"
+        assert rows[0]["output"] == '{"stdout":"hello\\n","stderr":"warn\\n","exit_code":0}'
 
 
 # ---------------------------------------------------------------------------

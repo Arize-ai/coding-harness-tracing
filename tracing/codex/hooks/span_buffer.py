@@ -97,20 +97,20 @@ def join_by_call_id(rows: list[dict]) -> list[dict]:
         decision: str | None         # from permission (most recent if multiple)
         start_ts_ms: int | None      # from tool_start
         end_ts_ms: int | None        # from tool_end
-    """
-    from core.common import log
 
+    Some Codex CLI hook payloads do not include a stable tool call id. In that
+    case, pair rows by append order: a no-id end row attaches to the oldest
+    unmatched no-id start row, and a no-id permission row attaches to the most
+    recent unmatched no-id start row.
+    """
     by_id: dict[str, dict] = {}
     order: list[str] = []
+    pending_no_id: list[str] = []
+    synthetic_count = 0
 
-    for row in rows:
-        call_id = row.get("call_id")
-        if not call_id:
-            log(f"skipping spans row without call_id: {row!r}")
-            continue
-
-        if call_id not in by_id:
-            by_id[call_id] = {
+    def new_entry(key: str, call_id: str = "") -> dict:
+        if key not in by_id:
+            by_id[key] = {
                 "call_id": call_id,
                 "tool": None,
                 "args": None,
@@ -119,10 +119,39 @@ def join_by_call_id(rows: list[dict]) -> list[dict]:
                 "start_ts_ms": None,
                 "end_ts_ms": None,
             }
-            order.append(call_id)
+            order.append(key)
+        return by_id[key]
 
-        entry = by_id[call_id]
+    def next_synthetic_key() -> str:
+        nonlocal synthetic_count
+        synthetic_count += 1
+        return f"__codex_no_call_id_{synthetic_count}"
+
+    def pending_without_end() -> list[str]:
+        return [key for key in pending_no_id if by_id.get(key, {}).get("end_ts_ms") is None]
+
+    for row in rows:
+        raw_call_id = row.get("call_id") or ""
         kind = row.get("kind")
+
+        if raw_call_id:
+            key = raw_call_id
+            entry = new_entry(key, raw_call_id)
+        elif kind == "tool_start":
+            key = next_synthetic_key()
+            entry = new_entry(key)
+            pending_no_id.append(key)
+        elif kind == "tool_end":
+            open_keys = pending_without_end()
+            key = open_keys[0] if open_keys else next_synthetic_key()
+            entry = new_entry(key)
+        elif kind == "permission":
+            open_keys = pending_without_end()
+            key = open_keys[-1] if open_keys else next_synthetic_key()
+            entry = new_entry(key)
+        else:
+            continue
+
         if kind == "tool_start":
             entry["tool"] = row.get("tool")
             entry["args"] = row.get("args")
