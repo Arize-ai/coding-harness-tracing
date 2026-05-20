@@ -29,6 +29,13 @@ def _enable_logging(monkeypatch):
     monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "true")
 
 
+@pytest.fixture(autouse=True)
+def _skip_env_file(monkeypatch):
+    """Prevent ``load_env_file`` from clobbering test env vars with values from
+    the developer's real ``~/.codex/arize-env.sh``."""
+    monkeypatch.setattr(session_mod, "load_env_file", lambda _path: None)
+
+
 @pytest.fixture
 def state_dir(tmp_path, monkeypatch):
     """Redirect adapter.STATE_DIR to a temp directory."""
