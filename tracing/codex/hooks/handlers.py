@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from core.common import (
+    build_multi_span,
     build_span,
     debug_dump,
     env,
@@ -30,6 +31,7 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
+from tracing.codex.hooks import span_buffer
 from tracing.codex.hooks.adapter import (
     SCOPE_NAME,
     SERVICE_NAME,
@@ -268,28 +270,196 @@ def _send_legacy_single_span(
 
 
 # ---------------------------------------------------------------------------
+# Shared finalize: builds and ships the multi-span tree for a turn
+# ---------------------------------------------------------------------------
+
+
+def _parse_int(v) -> "int | None":
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _finalize_turn_and_ship(
+    state,
+    thread_id: str,
+    assistant_output: "str | None" = None,
+    token_usage: "dict | None" = None,
+    turn_id: str = "",
+) -> None:
+    """Build and ship the full multi-span tree for a completed turn.
+
+    Reads ``pending_trace_id`` and ``pending_parent_span_id`` from state — set by
+    ``UserPromptSubmit``. Reads turn-scoped state (``turn_start_ms``,
+    ``user_prompt``, ``model``, etc.) plus the tool-span JSONL. Builds parent
+    LLM span + TOOL children, ships them together, then clears turn-scoped
+    state and deletes the JSONL.
+
+    Called by:
+      - ``_handle_notify`` when ``agent-turn-complete`` fires (with payload data)
+      - ``session._finalize_pending_turn`` for orphaned turns (no payload data)
+
+    Falls back to ``_send_legacy_single_span`` when ``pending_trace_id`` isn't
+    set — this covers first-run users who haven't approved ``/hooks`` yet, so
+    a notify-only signal still emits a single LLM span.
+    """
+    pending_trace_id = state.get("pending_trace_id")
+    pending_parent_span_id = state.get("pending_parent_span_id")
+
+    if not pending_trace_id or not pending_parent_span_id:
+        _send_legacy_single_span(
+            state,
+            thread_id,
+            turn_id,
+            state.get("user_prompt") or "",
+            assistant_output or "(No response)",
+            token_usage,
+        )
+        return
+
+    state.increment("trace_count")
+    new_trace_count = state.get("trace_count") or "0"
+
+    session_id = state.get("session_id") or thread_id
+    project_name = state.get("project_name") or ""
+    user_id = state.get("user_id")
+    model = state.get("model")
+    permission_mode = state.get("permission_mode")
+    sandbox_mode = state.get("sandbox_mode")
+    turn_start_ms = state.get("turn_start_ms")
+    user_prompt = state.get("user_prompt") or ""
+
+    rows = span_buffer.read_all(thread_id)
+    tool_entries = span_buffer.join_by_call_id(rows)
+
+    start_time = _parse_int(turn_start_ms)
+    if start_time is None:
+        start_time = get_timestamp_ms()
+    end_time = get_timestamp_ms()
+
+    final_output = assistant_output or "(No response)"
+
+    attrs: dict = {
+        "session.id": session_id,
+        "trace.number": new_trace_count,
+        "project.name": project_name,
+        "openinference.span.kind": "LLM",
+        "input.value": user_prompt,
+        "output.value": final_output,
+        "codex.thread_id": thread_id,
+    }
+    if turn_id:
+        attrs["codex.turn_id"] = turn_id
+    if user_id:
+        attrs["user.id"] = user_id
+    if model:
+        attrs["llm.model_name"] = model
+    if permission_mode:
+        attrs["codex.approval_mode"] = permission_mode
+    if sandbox_mode:
+        attrs["codex.sandbox_mode"] = sandbox_mode
+    if assistant_output:
+        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
+
+    if token_usage:
+        counts = _extract_token_counts(token_usage)
+        if counts["prompt"] is not None:
+            attrs["llm.token_count.prompt"] = counts["prompt"]
+        if counts["completion"] is not None:
+            attrs["llm.token_count.completion"] = counts["completion"]
+        if counts["total"] is not None:
+            attrs["llm.token_count.total"] = counts["total"]
+        if "llm.model_name" not in attrs and token_usage.get("model"):
+            attrs["llm.model_name"] = token_usage["model"]
+        attrs["codex.token_usage"] = json.dumps(token_usage)
+
+    child_spans: list = []
+    for entry in tool_entries:
+        tool_name = entry.get("tool") or "unknown_tool"
+        tool_attrs: dict = {
+            "openinference.span.kind": "TOOL",
+            "tool.name": tool_name,
+            "input.value": entry.get("args") or "",
+            "output.value": entry.get("output") or "",
+            "session.id": session_id,
+        }
+        if entry.get("decision"):
+            tool_attrs["codex.tool.approval_status"] = entry["decision"]
+        if entry.get("call_id"):
+            tool_attrs["codex.tool.call_id"] = entry["call_id"]
+        child_start = entry.get("start_ts_ms") or start_time
+        child_end = entry.get("end_ts_ms") or entry.get("start_ts_ms") or end_time
+        child = build_span(
+            tool_name,
+            "TOOL",
+            generate_span_id(),
+            pending_trace_id,
+            pending_parent_span_id,
+            child_start,
+            child_end,
+            tool_attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
+        child_spans.append(child)
+
+    parent_span = build_span(
+        f"Turn {new_trace_count}",
+        "LLM",
+        pending_parent_span_id,
+        pending_trace_id,
+        "",
+        start_time,
+        end_time,
+        attrs,
+        SERVICE_NAME,
+        SCOPE_NAME,
+    )
+
+    debug_dump(f"notify_{thread_id}_parent_span", parent_span)
+
+    if child_spans:
+        payload = build_multi_span([parent_span] + child_spans, SERVICE_NAME, SCOPE_NAME)
+        debug_dump(f"notify_{thread_id}_multi_span", payload)
+    else:
+        payload = parent_span
+
+    _send_span(payload)
+    log(f"Turn {new_trace_count} sent (thread={thread_id}, children={len(child_spans)})")
+
+    for key in ("turn_start_ms", "user_prompt", "pending_trace_id", "pending_parent_span_id"):
+        state.delete(key)
+    span_buffer.delete(thread_id)
+
+    try:
+        tc = int(new_trace_count or "0")
+    except (ValueError, TypeError):
+        tc = 0
+    if tc % 10 == 0:
+        gc_stale_state_files()
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
 
 def _handle_notify(input_json: dict) -> None:
-    """Slim notify handler: writes token usage + last assistant message to state.
+    """Notify handler: builds and ships the full span tree for the completed turn.
 
-    When Codex hooks are active (SessionStart/UserPromptSubmit have run), this
-    just records the notify payload into state and lets the Stop hook build
-    the span tree. When hooks are not yet trusted, falls back to a single-span
-    send so first-run users still get traces.
+    With the deferred-parent architecture, notify is the single point that
+    emits parent + tool child spans together. Stop's hook is a no-op now;
+    UserPromptSubmit pre-generates the trace/parent IDs so this handler can
+    reference them.
     """
-    # Phase 1: only handle agent-turn-complete
     if input_json.get("type") != "agent-turn-complete":
         log(f"Ignoring event type: {input_json.get('type')}")
         return
 
-    # Phase 2: parse the payload
     thread_id = _flex_get(input_json, "thread-id", "thread_id", "threadId")
     turn_id = _flex_get(input_json, "turn-id", "turn_id", "turnId")
     cwd = _flex_get(input_json, "cwd", "working-directory", "working_directory")
-    user_input = _flex_get_obj(input_json, "input-messages", "input_messages", "inputMessages")
     assistant_msg = _flex_get_obj(
         input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"
     )
@@ -297,40 +467,20 @@ def _handle_notify(input_json: dict) -> None:
     debug_prefix = f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}"
     debug_dump(f"{debug_prefix}_raw", input_json)
 
-    user_prompt = redact_content(env.log_prompts, _extract_user_prompt(user_input))
     assistant_output = redact_content(env.log_prompts, _as_text(assistant_msg)) or "(No response)"
-
-    debug_dump(f"{debug_prefix}_text", {"input": user_prompt, "assistant": assistant_output})
+    debug_dump(f"{debug_prefix}_text", {"assistant": assistant_output})
 
     state = resolve_session(thread_id)
     ensure_session_initialized(state, thread_id, cwd or os.getcwd())
 
-    # Phase 3: detect whether lifecycle hooks have already populated state.
-    # Hook entry points write `model` (SessionStart) and `turn_start_ms`
-    # (UserPromptSubmit). Either being present means hooks are active and
-    # Stop will build the span — notify just stages data into state.
-    hooks_active = bool(state.get("model")) or bool(state.get("turn_start_ms"))
-
     usage = _find_token_usage(input_json)
-    if usage:
-        counts = _extract_token_counts(usage)
-        pending = {
-            "prompt_tokens": counts["prompt"],
-            "completion_tokens": counts["completion"],
-            "total_tokens": counts["total"],
-            "model": usage.get("model") or "",
-        }
-        # Stored as a JSON string (not a dict): StateManager.set() coerces
-        # values via str(), so passing a dict would land as a Python repr.
-        # The Stop hook must json.loads() this value.
-        state.set("pending_token_usage", json.dumps(pending))
-        debug_dump(f"{debug_prefix}_token_usage", usage)
-    state.set("last_assistant_message", assistant_output)
-
-    # Phase 4: fall through to legacy single-span path when hooks aren't
-    # active yet, so first-run users still get traces before approving /hooks.
-    if not hooks_active:
-        _send_legacy_single_span(state, thread_id, turn_id, user_prompt, assistant_output, usage)
+    _finalize_turn_and_ship(
+        state,
+        thread_id,
+        assistant_output=assistant_output,
+        token_usage=usage,
+        turn_id=turn_id,
+    )
 
 
 # ---------------------------------------------------------------------------

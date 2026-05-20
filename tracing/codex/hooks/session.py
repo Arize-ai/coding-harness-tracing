@@ -18,7 +18,7 @@ import os
 import sys
 from pathlib import Path
 
-from core.common import env, error, get_timestamp_ms, log, redact_content
+from core.common import env, error, generate_span_id, generate_trace_id, get_timestamp_ms, log, redact_content
 from tracing.codex.hooks.adapter import check_requirements, ensure_session_initialized, load_env_file, resolve_session
 
 
@@ -28,18 +28,19 @@ def _extract_thread_id(payload: dict) -> str:
 
 
 def _finalize_pending_turn(state, thread_id: str) -> None:
-    """Finalize a previous turn that never reached Stop.
+    """Finalize a previous turn whose ``agent-turn-complete`` notify never fired.
 
-    Delegates to ``finalize_turn`` so the same payload Stop would produce is
-    sent. Lazy-imports to keep this module usable during partial installs
-    where ``stop.py`` may not yet be present.
+    Delegates to ``_finalize_turn_and_ship`` so the same payload notify would
+    produce is sent — with no assistant_output / token_usage available, the
+    span goes out with ``(No response)`` and no token counts. Lazy-imports to
+    keep this module usable during partial installs.
     """
     try:
-        from tracing.codex.hooks.stop import finalize_turn
+        from tracing.codex.hooks.handlers import _finalize_turn_and_ship
     except ImportError as e:
-        log(f"session hook: stop module unavailable, skipping finalize: {e}")
+        log(f"session hook: handlers module unavailable, skipping finalize: {e}")
         return
-    finalize_turn(state, thread_id)
+    _finalize_turn_and_ship(state, thread_id, assistant_output=None, token_usage=None)
 
 
 def _handle_session_start(payload: dict) -> None:
@@ -82,14 +83,12 @@ def _handle_user_prompt_submit(payload: dict) -> None:
     if state.get("turn_start_ms"):
         _finalize_pending_turn(state, thread_id)
 
-    # Clear any leftover notify writes from a previous turn whose Stop already
-    # completed before notify arrived. finalize_pending_turn (when it ran)
-    # already cleared these — safe no-op in that path. Without this clear, a
-    # late notify between Stop and this UserPromptSubmit would bleed into the
-    # next turn's parent span.
-    state.delete("last_assistant_message")
-    state.delete("pending_token_usage")
-
+    # Pre-generate the trace and parent-span IDs so notify (which fires at
+    # an unbounded delay after the turn ends) can build the parent span
+    # referencing them. Tool child spans, also built by notify, hang off
+    # this same parent_span_id.
+    state.set("pending_trace_id", generate_trace_id())
+    state.set("pending_parent_span_id", generate_span_id())
     state.set("turn_start_ms", str(get_timestamp_ms()))
 
     prompt_text = payload.get("prompt") or payload.get("user_prompt") or payload.get("input") or ""

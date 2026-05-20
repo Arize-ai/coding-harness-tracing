@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for tracing.codex.hooks.handlers — the Codex notify hook handler."""
 
-import json
 import sys
 from unittest import mock
 
@@ -292,11 +291,10 @@ class TestExtractTokenCounts:
 
 class TestSlimNotify:
 
-    def test_hooks_active_stages_state_and_skips_span(self, codex_state_dir, monkeypatch):
-        """When hooks have populated state, notify only stages data — no span sent."""
+    def test_hooks_active_ships_multi_span_using_pending_ids(self, codex_state_dir, monkeypatch):
+        """When UserPromptSubmit pre-seeded the pending IDs, notify ships a multi-span using them."""
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
 
-        # Pre-populate state to mark the session as hooks-active.
         state_file = codex_state_dir / "state_t-hooks.yaml"
         lock_path = codex_state_dir / ".lock_t-hooks"
         sm = StateManager(state_dir=codex_state_dir, state_file=state_file, lock_path=lock_path)
@@ -305,6 +303,10 @@ class TestSlimNotify:
         sm.set("project_name", "codex")
         sm.set("trace_count", "1")
         sm.set("model", "gpt-5")
+        sm.set("pending_trace_id", "my-trace")
+        sm.set("pending_parent_span_id", "my-span")
+        sm.set("turn_start_ms", "1000")
+        sm.set("user_prompt", "hi")
 
         sent = []
         with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend", side_effect=lambda p: sent.append(p)):
@@ -319,16 +321,18 @@ class TestSlimNotify:
                 }
             )
 
-        # Slim path: state has pending_token_usage (JSON-encoded — Stop must
-        # json.loads it) and last_assistant_message, but no span was sent.
-        sm_read = StateManager(state_dir=codex_state_dir, state_file=state_file)
-        pending = json.loads(sm_read.get("pending_token_usage"))
-        assert pending["prompt_tokens"] == 11
-        assert pending["completion_tokens"] == 22
-        assert pending["total_tokens"] == 33
-        assert pending["model"] == "gpt-5"
-        assert "hello back" in sm_read.get("last_assistant_message")
-        assert sent == []
+        assert len(sent) == 1
+        span = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert span["spanId"] == "my-span"
+        assert span["traceId"] == "my-trace"
+        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert attrs["output.value"]["stringValue"] == "hello back"
+        assert attrs["llm.token_count.total"]["intValue"] == 33
+
+        # Pending IDs cleared after the send.
+        sm_after = StateManager(state_dir=codex_state_dir, state_file=state_file)
+        assert not sm_after.get("pending_trace_id")
+        assert not sm_after.get("pending_parent_span_id")
 
     def test_fallback_sends_single_span_when_hooks_inactive(self, codex_state_dir, monkeypatch):
         """When hooks haven't run, notify falls back to a single LLM span."""
@@ -354,73 +358,6 @@ class TestSlimNotify:
         assert attrs["llm.token_count.prompt"]["intValue"] == 11
         assert attrs["llm.token_count.completion"]["intValue"] == 22
         assert attrs["llm.token_count.total"]["intValue"] == 33
-
-    def test_hooks_active_via_turn_start_ms(self, codex_state_dir, monkeypatch):
-        """turn_start_ms alone is also a hooks-active signal (UserPromptSubmit ran)."""
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-
-        state_file = codex_state_dir / "state_t-turn.yaml"
-        lock_path = codex_state_dir / ".lock_t-turn"
-        sm = StateManager(state_dir=codex_state_dir, state_file=state_file, lock_path=lock_path)
-        sm.init_state()
-        sm.set("session_id", "t-turn")
-        sm.set("project_name", "codex")
-        sm.set("trace_count", "0")
-        sm.set("turn_start_ms", "1716203456789")
-        # No `model` set — only the turn_start_ms branch of hooks_active matters.
-
-        sent = []
-        with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend", side_effect=lambda p: sent.append(p)):
-            _handle_notify(
-                {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t-turn",
-                    "input-messages": "hi",
-                    "last-assistant-message": "yo",
-                    "token_usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
-                }
-            )
-
-        assert sent == []  # no span sent, Stop will handle it
-
-    def test_hooks_active_stores_pending_usage_as_json(self, codex_state_dir, monkeypatch):
-        """pending_token_usage is serialized as JSON in state."""
-        import json as _json
-
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-
-        state_file = codex_state_dir / "state_t-json.yaml"
-        lock_path = codex_state_dir / ".lock_t-json"
-        sm = StateManager(state_dir=codex_state_dir, state_file=state_file, lock_path=lock_path)
-        sm.init_state()
-        sm.set("session_id", "t-json")
-        sm.set("project_name", "codex")
-        sm.set("trace_count", "0")
-        sm.set("model", "gpt-5")
-
-        with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend"):
-            _handle_notify(
-                {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t-json",
-                    "input-messages": "hi",
-                    "last-assistant-message": "yo",
-                    "token_usage": {
-                        "prompt_tokens": 11,
-                        "completion_tokens": 22,
-                        "total_tokens": 33,
-                        "model": "gpt-5",
-                    },
-                }
-            )
-
-        sm_read = StateManager(state_dir=codex_state_dir, state_file=state_file)
-        raw = sm_read.get("pending_token_usage")
-        parsed = _json.loads(raw)
-        assert parsed["prompt_tokens"] == 11
-        assert parsed["completion_tokens"] == 22
-        assert parsed["total_tokens"] == 33
-        assert parsed["model"] == "gpt-5"
 
     def test_fallback_with_no_token_usage(self, codex_state_dir, monkeypatch):
         """Fallback still sends a span when there's no token_usage in the payload."""

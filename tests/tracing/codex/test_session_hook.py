@@ -4,7 +4,6 @@
 import io
 import json
 import sys
-import types
 from unittest import mock
 
 import pytest
@@ -45,15 +44,17 @@ def state_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def finalize_mock(monkeypatch):
-    """Inject a fake tracing.codex.hooks.stop module exposing finalize_turn.
+    """Patch ``handlers._finalize_turn_and_ship`` -- the orphan-finalize target.
 
-    Lets session.py's lazy ``from tracing.codex.hooks.stop import finalize_turn``
-    resolve to a MagicMock the tests can assert against.
+    Under the deferred-parent architecture, session.py's orphan-finalize
+    lazy-imports this from ``tracing.codex.hooks.handlers``. We replace the
+    attribute on the real (already-imported) module so the lazy import inside
+    session.py picks up the mock.
     """
-    fake = types.ModuleType("tracing.codex.hooks.stop")
+    import tracing.codex.hooks.handlers as handlers_mod
+
     fn = mock.MagicMock()
-    fake.finalize_turn = fn
-    monkeypatch.setitem(sys.modules, "tracing.codex.hooks.stop", fake)
+    monkeypatch.setattr(handlers_mod, "_finalize_turn_and_ship", fn)
     return fn
 
 
