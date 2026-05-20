@@ -320,10 +320,12 @@ def _handle_notify(input_json: dict) -> None:
             "total_tokens": counts["total"],
             "model": usage.get("model") or "",
         }
+        # Stored as a JSON string (not a dict): StateManager.set() coerces
+        # values via str(), so passing a dict would land as a Python repr.
+        # The Stop hook must json.loads() this value.
         state.set("pending_token_usage", json.dumps(pending))
         debug_dump(f"{debug_prefix}_token_usage", usage)
-    if assistant_output:
-        state.set("last_assistant_message", assistant_output)
+    state.set("last_assistant_message", assistant_output)
 
     # Phase 4: fall through to legacy single-span path when hooks aren't
     # active yet, so first-run users still get traces before approving /hooks.
@@ -353,6 +355,18 @@ def notify():
         _handle_notify(input_json)
     except Exception as e:
         error(f"codex notify hook failed: {e}")
+
+
+def drain_idle():
+    """No-op stub kept for the legacy arize-codex-proxy.
+
+    The proxy used to call this after `codex exec` exited to flush the
+    in-process event buffer. The buffer is being removed in favor of
+    real Codex lifecycle hooks; until the proxy is fully retired, this
+    stub keeps `from tracing.codex.hooks.handlers import drain_idle`
+    from raising and avoids spurious stderr noise on every exec.
+    """
+    return
 
 
 if __name__ == "__main__":

@@ -147,19 +147,6 @@ def claude_stop_input():
 
 
 @pytest.fixture
-def codex_notify_input():
-    """Codex notify hook input."""
-    return {
-        "type": "agent-turn-complete",
-        "thread-id": "thread-1",
-        "turn-id": "turn-1",
-        "cwd": "/home/user/project",
-        "input-messages": [{"role": "user", "content": "hello"}],
-        "last-assistant-message": "I can help with that.",
-    }
-
-
-@pytest.fixture
 def cursor_before_submit_input():
     """Cursor beforeSubmitPrompt hook input."""
     return {
