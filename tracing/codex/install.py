@@ -58,7 +58,7 @@ except ImportError:
         pass
 
 
-# Hook events written by the installer.
+# Hook events from the legacy installer; used only for cleanup
 _HOOK_EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
