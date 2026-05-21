@@ -1,6 +1,6 @@
 [project]
-name = "coding-harness-tracing"
-version = "0.1.0"
+name = "claude-code-tracing"
+version = "1.0.1"
 requires-python = ">=3.9"
 dependencies = ["pyyaml"]
 

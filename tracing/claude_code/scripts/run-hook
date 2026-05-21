@@ -80,7 +80,7 @@ bootstrap() {
         return 1
     fi
 
-    echo "[arize] Installing coding-harness-tracing from $PLUGIN_ROOT..." >&2
+    echo "[arize] Installing claude-code-tracing from $PLUGIN_ROOT..." >&2
     if ! "$PIP" install --quiet "$PLUGIN_ROOT" >&2; then
         echo "[arize] pip install failed" >&2
         rm -f "$MARKER"
