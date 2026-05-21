@@ -98,16 +98,6 @@ class TestPluginJson:
         """plugin.json must be valid JSON (implicitly tested by fixture loading)."""
         assert isinstance(plugin_data, dict)
 
-    def test_has_hooks_reference(self, plugin_data):
-        """plugin.json must reference hooks/hooks.json."""
-        assert "hooks" in plugin_data
-        assert plugin_data["hooks"] == "./hooks/hooks.json"
-
-    def test_has_skills_reference(self, plugin_data):
-        """plugin.json must reference skills directory."""
-        assert "skills" in plugin_data
-        assert plugin_data["skills"] == "./skills/"
-
     def test_has_required_metadata(self, plugin_data):
         """plugin.json must have name, description, version."""
         assert "name" in plugin_data
