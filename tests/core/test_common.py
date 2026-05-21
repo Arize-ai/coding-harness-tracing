@@ -1051,7 +1051,13 @@ class TestDebugDump:
 
 
 class TestResolveBackend:
-    """Tests for resolve_backend() — flat harness config lookup only."""
+    """Tests for resolve_backend() — env vars take precedence over YAML config."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_env(self, monkeypatch):
+        # Clear any inherited backend env vars so each test starts clean.
+        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "PHOENIX_ENDPOINT", "ARIZE_PROJECT_NAME"):
+            monkeypatch.delenv(key, raising=False)
 
     def _make_span(self, service_name=""):
         """Build a minimal span with optional service.name."""
@@ -1067,8 +1073,10 @@ class TestResolveBackend:
             ]
         }
 
-    def test_resolve_backend_phoenix_from_flat_harness_entry(self, monkeypatch):
-        """Config has harnesses.claude-code with phoenix target; resolver returns those fields."""
+    # ── YAML-only paths ────────────────────────────────────────────────────
+
+    def test_phoenix_from_yaml(self, monkeypatch):
+        """YAML harness entry with phoenix target; resolver returns those fields."""
         cfg = {
             "harnesses": {
                 "claude-code": {
@@ -1087,8 +1095,8 @@ class TestResolveBackend:
         assert result["api_key"] == "ph-key"
         assert result["project_name"] == "claude-code"
 
-    def test_resolve_backend_arize_from_flat_harness_entry(self, monkeypatch):
-        """Config has harnesses.claude-code with arize target including space_id."""
+    def test_arize_from_yaml(self, monkeypatch):
+        """YAML harness entry with arize target including space_id."""
         cfg = {
             "harnesses": {
                 "claude-code": {
@@ -1109,23 +1117,59 @@ class TestResolveBackend:
         assert result["space_id"] == "U3Bh"
         assert result["project_name"] == "claude-code"
 
-    def test_resolve_backend_missing_entry_returns_none(self, capsys, monkeypatch):
-        """No harnesses.claude-code entry; returns none and logs error."""
-        cfg = {"harnesses": {}}
-        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+    # ── env-only paths (marketplace-install scenario) ──────────────────────
+
+    def test_arize_from_env_only(self, monkeypatch):
+        """ARIZE_API_KEY + ARIZE_SPACE_ID with no YAML entry resolves to arize."""
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-env")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
 
         result = resolve_backend(self._make_span("claude-code"))
-        assert result == {"target": "none", "project_name": ""}
-        stderr = capsys.readouterr().err
-        assert "No config entry for harness 'claude-code'" in stderr
-        assert "install.sh claude-code" in stderr
+        assert result["target"] == "arize"
+        assert result["api_key"] == "ak-env"
+        assert result["space_id"] == "space-env"
+        assert result["endpoint"] == "otlp.arize.com:443"  # default
+        assert result["project_name"] == "claude-code"  # falls back to service_name
 
-    def test_resolve_backend_missing_target_returns_none(self, capsys, monkeypatch):
-        """Harness entry exists but has no target field."""
+    def test_phoenix_from_env_only(self, monkeypatch):
+        """PHOENIX_ENDPOINT alone resolves to phoenix."""
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "phoenix"
+        assert result["endpoint"] == "http://env:6006"
+        assert result["project_name"] == "claude-code"
+
+    def test_project_name_env_override(self, monkeypatch):
+        """ARIZE_PROJECT_NAME overrides YAML project_name."""
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "from-env")
         cfg = {
             "harnesses": {
                 "claude-code": {
-                    "project_name": "claude-code",
+                    "project_name": "from-yaml",
+                    "target": "arize",
+                    "api_key": "ak",
+                    "space_id": "sp",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["project_name"] == "from-env"
+
+    # ── env-overrides-YAML precedence ──────────────────────────────────────
+
+    def test_env_arize_overrides_yaml_phoenix(self, monkeypatch):
+        """Env-set arize creds win even when YAML configures phoenix."""
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-env")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "phoenix",
                     "endpoint": "http://localhost:6006",
                 },
             },
@@ -1133,21 +1177,59 @@ class TestResolveBackend:
         monkeypatch.setattr("core.config.load_config", lambda: cfg)
 
         result = resolve_backend(self._make_span("claude-code"))
-        assert result["target"] == "none"
-        assert result["project_name"] == "claude-code"
-        stderr = capsys.readouterr().err
-        assert "missing target" in stderr
+        assert result["target"] == "arize"
+        assert result["api_key"] == "ak-env"
 
-    def test_resolve_backend_arize_missing_space_id_returns_none(self, capsys, monkeypatch):
-        """Arize entry without space_id returns none."""
+    def test_env_api_key_overrides_yaml(self, monkeypatch):
+        """ARIZE_API_KEY env overrides YAML api_key while keeping YAML target/endpoint/space_id."""
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         cfg = {
             "harnesses": {
                 "claude-code": {
-                    "project_name": "claude-code",
                     "target": "arize",
                     "endpoint": "otlp.arize.com:443",
-                    "api_key": "ak-xxx",
-                    # no space_id
+                    "api_key": "ak-yaml",
+                    "space_id": "sp-yaml",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["api_key"] == "ak-env"
+        assert result["space_id"] == "sp-yaml"
+
+    # ── error paths ────────────────────────────────────────────────────────
+
+    def test_no_backend_anywhere(self, capsys, monkeypatch):
+        """No env vars and no YAML entry → none with actionable error."""
+        monkeypatch.setattr("core.config.load_config", lambda: {"harnesses": {}})
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result == {"target": "none", "project_name": "claude-code"}
+        stderr = capsys.readouterr().err
+        assert "No backend configured" in stderr
+        assert "ARIZE_API_KEY" in stderr
+
+    def test_arize_env_missing_space_id(self, capsys, monkeypatch):
+        """ARIZE_API_KEY set but not ARIZE_SPACE_ID and no YAML → none."""
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "none"
+        stderr = capsys.readouterr().err
+        # Partial env doesn't switch target to arize; falls through to no-backend.
+        assert "No backend configured" in stderr
+
+    def test_arize_yaml_missing_space_id(self, capsys, monkeypatch):
+        """YAML arize entry without space_id and no env fallback → none."""
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "arize",
+                    "endpoint": "otlp.arize.com:443",
+                    "api_key": "ak-yaml",
                 },
             },
         }
@@ -1155,60 +1237,15 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["target"] == "none"
-        assert result["project_name"] == "claude-code"
         stderr = capsys.readouterr().err
         assert "missing space_id" in stderr
 
-    def test_resolve_backend_arize_missing_api_key_returns_none(self, capsys, monkeypatch):
-        """Arize entry without api_key returns none."""
+    def test_phoenix_yaml_missing_endpoint(self, capsys, monkeypatch):
+        """YAML phoenix entry without endpoint and no PHOENIX_ENDPOINT env → none."""
         cfg = {
             "harnesses": {
                 "claude-code": {
-                    "project_name": "claude-code",
-                    "target": "arize",
-                    "endpoint": "otlp.arize.com:443",
-                    "space_id": "U3Bh",
-                    # no api_key
-                },
-            },
-        }
-        monkeypatch.setattr("core.config.load_config", lambda: cfg)
-
-        result = resolve_backend(self._make_span("claude-code"))
-        assert result["target"] == "none"
-        assert result["project_name"] == "claude-code"
-        stderr = capsys.readouterr().err
-        assert "missing api_key" in stderr
-
-    def test_resolve_backend_arize_missing_endpoint_returns_none(self, capsys, monkeypatch):
-        """Arize entry without endpoint returns none."""
-        cfg = {
-            "harnesses": {
-                "claude-code": {
-                    "project_name": "claude-code",
-                    "target": "arize",
-                    "api_key": "ak-xxx",
-                    "space_id": "U3Bh",
-                    # no endpoint
-                },
-            },
-        }
-        monkeypatch.setattr("core.config.load_config", lambda: cfg)
-
-        result = resolve_backend(self._make_span("claude-code"))
-        assert result["target"] == "none"
-        assert result["project_name"] == "claude-code"
-        stderr = capsys.readouterr().err
-        assert "missing endpoint" in stderr
-
-    def test_resolve_backend_phoenix_missing_endpoint_returns_none(self, capsys, monkeypatch):
-        """Phoenix entry without endpoint returns none."""
-        cfg = {
-            "harnesses": {
-                "claude-code": {
-                    "project_name": "claude-code",
                     "target": "phoenix",
-                    # no endpoint
                 },
             },
         }
@@ -1216,12 +1253,11 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["target"] == "none"
-        assert result["project_name"] == "claude-code"
         stderr = capsys.readouterr().err
         assert "missing endpoint" in stderr
 
-    def test_resolve_backend_ignores_top_level_backend_key(self, monkeypatch):
-        """Even if the old backend: block is present, resolver does not read it."""
+    def test_ignores_top_level_backend_key(self, monkeypatch):
+        """Old top-level backend: block is not consulted."""
         cfg = {
             "backend": {
                 "target": "phoenix",
@@ -1233,35 +1269,19 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["target"] == "none"
-        assert result["project_name"] == ""
 
-    def test_resolve_backend_ignores_env_vars(self, monkeypatch):
-        """With env vars set but no harness entry, resolver still returns none."""
-        monkeypatch.setenv("ARIZE_API_KEY", "env-key")
-        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
-
-        cfg = {"harnesses": {}}
-        monkeypatch.setattr("core.config.load_config", lambda: cfg)
-
-        result = resolve_backend(self._make_span("claude-code"))
-        assert result["target"] == "none"
-        assert result["project_name"] == ""
-
-    def test_resolve_backend_empty_service_name(self, capsys, monkeypatch):
-        """Empty service.name returns none with appropriate error."""
-        cfg = {"harnesses": {"claude-code": {"target": "phoenix", "endpoint": "http://x:6006"}}}
-        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+    def test_empty_service_name(self, capsys, monkeypatch):
+        """Empty service.name attribute → none."""
+        monkeypatch.setattr("core.config.load_config", lambda: {})
 
         result = resolve_backend(self._make_span(""))
-        assert result["target"] == "none"
-        assert result["project_name"] == ""
+        assert result == {"target": "none", "project_name": ""}
         stderr = capsys.readouterr().err
         assert "No service.name attribute found" in stderr
 
-    def test_resolve_backend_no_service_name_attr(self, capsys, monkeypatch):
-        """Span with no service.name attribute at all returns none."""
-        cfg = {"harnesses": {}}
-        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+    def test_no_service_name_attr(self, capsys, monkeypatch):
+        """Span with no service.name attribute at all → none."""
+        monkeypatch.setattr("core.config.load_config", lambda: {})
 
         span = {"resourceSpans": [{"resource": {"attributes": []}, "scopeSpans": []}]}
         result = resolve_backend(span)

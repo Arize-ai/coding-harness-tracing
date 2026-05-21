@@ -292,11 +292,18 @@ def get_target() -> str:
 
 
 def resolve_backend(span_dict: dict) -> dict:
-    """Resolve backend config for a span payload from config.yaml.
+    """Resolve backend config for a span payload.
 
-    Reads harnesses.<service_name>.{target, endpoint, api_key, space_id,
-    project_name}.  No fallback to a global backend block (gone).  No
-    fallback to environment variables.
+    Precedence per field: env var > harnesses.<service_name> in
+    ~/.arize/harness/config.yaml > defaults. Used so marketplace-installed
+    plugins (which skip the interactive wizard) can supply credentials
+    purely via the runtime env block in ~/.claude/settings.json.
+
+    Env vars consulted:
+      - PHOENIX_ENDPOINT     → target=phoenix (overrides YAML target)
+      - ARIZE_API_KEY        → target=arize when paired with ARIZE_SPACE_ID
+      - ARIZE_SPACE_ID       → required for arize when env-only
+      - ARIZE_PROJECT_NAME   → project_name override
 
     service_name is pulled from the span's resource attributes
     (resource.attributes[service.name]).
@@ -305,9 +312,8 @@ def resolve_backend(span_dict: dict) -> dict:
       {"target": "phoenix", "endpoint", "api_key", "project_name"} or
       {"target": "arize",   "endpoint", "api_key", "space_id", "project_name"}
 
-    On any missing required field (no harness entry, no target, no endpoint,
-    no api_key for arize, no space_id for arize), logs a clear error via
-    error() and returns {"target": "none", "project_name": project_name_or_""}.
+    On any missing required field, logs a clear error via error() and
+    returns {"target": "none", "project_name": project_name_or_""}.
     """
     _none = {"target": "none", "project_name": ""}
 
@@ -325,7 +331,7 @@ def resolve_backend(span_dict: dict) -> dict:
         error("No service.name attribute found on span — cannot resolve harness config.")
         return _none
 
-    # Load config
+    # Load YAML config (may be empty or missing the harness entry)
     try:
         from core.config import load_config
 
@@ -333,51 +339,56 @@ def resolve_backend(span_dict: dict) -> dict:
     except Exception:
         cfg = {}
 
-    harness_cfg = cfg.get("harnesses", {}).get(service_name)
-    if harness_cfg is None:
-        error(f"No config entry for harness '{service_name}'.  Run install.sh {service_name} " "to configure it.")
-        return _none
+    harness_cfg = cfg.get("harnesses", {}).get(service_name) or {}
 
-    project_name = harness_cfg.get("project_name", "")
-    target = harness_cfg.get("target", "")
+    # Resolve project_name: env > YAML > service_name
+    project_name = env.project_name or harness_cfg.get("project_name", "") or service_name
+
+    # Resolve target: env-derived backend takes precedence over YAML target
+    if env.phoenix_endpoint:
+        target = "phoenix"
+    elif env.api_key and env.space_id:
+        target = "arize"
+    else:
+        target = harness_cfg.get("target", "")
 
     if not target:
         error(
-            f"Incomplete config for harness '{service_name}': missing target.  Run "
-            f"install.sh {service_name} to reconfigure."
+            f"No backend configured for harness '{service_name}': set "
+            f"ARIZE_API_KEY+ARIZE_SPACE_ID (or PHOENIX_ENDPOINT) in env, "
+            f"or add a 'harnesses.{service_name}' entry to ~/.arize/harness/config.yaml."
         )
         return {"target": "none", "project_name": project_name}
 
     if target == "phoenix":
-        endpoint = harness_cfg.get("endpoint", "")
+        endpoint = env.phoenix_endpoint or harness_cfg.get("endpoint", "")
         if not endpoint:
             error(
-                f"Incomplete config for harness '{service_name}': missing endpoint.  Run "
-                f"install.sh {service_name} to reconfigure."
+                f"Incomplete phoenix config for harness '{service_name}': missing endpoint "
+                f"(set PHOENIX_ENDPOINT in env or add 'endpoint' to config.yaml)."
             )
             return {"target": "none", "project_name": project_name}
         return {
             "target": "phoenix",
             "endpoint": endpoint,
-            "api_key": harness_cfg.get("api_key", ""),
+            "api_key": env.api_key or harness_cfg.get("api_key", ""),
             "project_name": project_name,
         }
-    elif target == "arize":
-        endpoint = harness_cfg.get("endpoint", "")
-        api_key = harness_cfg.get("api_key", "")
-        space_id = harness_cfg.get("space_id", "")
+
+    if target == "arize":
+        endpoint = harness_cfg.get("endpoint", "") or "otlp.arize.com:443"
+        api_key = env.api_key or harness_cfg.get("api_key", "")
+        space_id = env.space_id or harness_cfg.get("space_id", "")
 
         missing = []
-        if not endpoint:
-            missing.append("endpoint")
         if not api_key:
-            missing.append("api_key")
+            missing.append("api_key (set ARIZE_API_KEY)")
         if not space_id:
-            missing.append("space_id")
+            missing.append("space_id (set ARIZE_SPACE_ID)")
         if missing:
             error(
-                f"Incomplete config for harness '{service_name}': missing {', '.join(missing)}.  Run "
-                f"install.sh {service_name} to reconfigure."
+                f"Incomplete arize config for harness '{service_name}': missing "
+                f"{', '.join(missing)} or add to config.yaml."
             )
             return {"target": "none", "project_name": project_name}
         return {
@@ -387,12 +398,9 @@ def resolve_backend(span_dict: dict) -> dict:
             "space_id": space_id,
             "project_name": project_name,
         }
-    else:
-        error(
-            f"Incomplete config for harness '{service_name}': unknown target '{target}'.  Run "
-            f"install.sh {service_name} to reconfigure."
-        )
-        return {"target": "none", "project_name": project_name}
+
+    error(f"Unknown target '{target}' for harness '{service_name}'. " f"Expected 'arize' or 'phoenix'.")
+    return {"target": "none", "project_name": project_name}
 
 
 def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
@@ -425,11 +433,11 @@ def _extract_span_name(span_dict: dict) -> str:
 def send_span(span_dict: dict) -> bool:
     """Send a span payload directly to the configured backend.
 
-    Backend (target/endpoint/api_key/space_id/project_name) is resolved per
-    harness from ``~/.arize/harness/config.yaml`` via ``resolve_backend()``.
-    There is no fallback to a global backend block or to environment variables;
-    if the per-harness entry is missing or incomplete, the span is dropped and
-    an error is logged.
+    Backend is resolved per harness via ``resolve_backend()``, which checks
+    env vars (ARIZE_API_KEY+ARIZE_SPACE_ID, PHOENIX_ENDPOINT,
+    ARIZE_PROJECT_NAME) before falling back to
+    ``~/.arize/harness/config.yaml``. If neither path yields a complete
+    backend, the span is dropped and an error is logged.
 
     Never raises. Returns True on success, False on failure.
     """
