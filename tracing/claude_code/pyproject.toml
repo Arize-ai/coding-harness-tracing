@@ -32,6 +32,5 @@ packages = [
     "tracing.claude_code.hooks",
     "core",
     "core.setup",
-    "core.vscode_bridge",
 ]
 package-dir = {"tracing.claude_code" = ".", "core" = "core"}

@@ -81,11 +81,11 @@ bootstrap() {
     fi
 
     echo "[arize] Installing coding-harness-tracing from $PLUGIN_ROOT..." >&2
-    "$PIP" install --quiet "$PLUGIN_ROOT" 2>&1 | tail -5 >&2 || {
+    if ! "$PIP" install --quiet "$PLUGIN_ROOT" >&2; then
         echo "[arize] pip install failed" >&2
         rm -f "$MARKER"
         return 1
-    }
+    fi
 
     # Save hash marker
     "$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" \
