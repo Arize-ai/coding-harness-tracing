@@ -105,8 +105,6 @@ class TestFunctionsDefined:
             "write_config",
             "collect_backend_credentials",
             "install_skills",
-            "start_codex_buffer",
-            "stop_codex_buffer",
         ]:
             pattern = rf"^{old_func}\s*\(\)"
             assert not re.search(

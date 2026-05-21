@@ -21,7 +21,6 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 HARNESS_DIRS = ["tracing/claude_code", "tracing/codex", "tracing/cursor"]
 
 EXPECTED_ENTRY_POINTS = {
-    "arize-codex-buffer": "tracing.codex.codex_buffer_ctl:main",
     "arize-config": "core.config:main",
     "arize-hook-session-start": "tracing.claude_code.hooks.handlers:session_start",
     "arize-hook-pre-tool-use": "tracing.claude_code.hooks.handlers:pre_tool_use",
@@ -34,7 +33,6 @@ EXPECTED_ENTRY_POINTS = {
     "arize-hook-permission-request": "tracing.claude_code.hooks.handlers:permission_request",
     "arize-hook-session-end": "tracing.claude_code.hooks.handlers:session_end",
     "arize-hook-codex-notify": "tracing.codex.hooks.handlers:notify",
-    "arize-codex-proxy": "tracing.codex.hooks.proxy:main",
     "arize-hook-cursor": "tracing.cursor.hooks.handlers:main",
 }
 
@@ -350,7 +348,6 @@ class TestDocumentationConsistency:
         """Codex SKILL.md should use CLI entry points."""
         skill = (REPO_ROOT / "tracing" / "codex" / "skills" / "manage-codex-tracing" / "SKILL.md").read_text()
         assert "arize-hook-codex-notify" in skill
-        assert "arize-codex-buffer" in skill
         assert "notify.sh" not in skill
 
     def test_claude_skill_references_cli_entry_points(self):
@@ -406,15 +403,6 @@ class TestCursorHookReference:
 
 
 # --- State file extension ---
-
-
-class TestCodexProxyEntryPoint:
-    """Verify pyproject.toml includes the codex proxy entry point."""
-
-    def test_pyproject_includes_codex_proxy_entry_point(self):
-        """pyproject.toml must include the arize-codex-proxy console script."""
-        scripts = _parse_pyproject_scripts()
-        assert "arize-codex-proxy" in scripts, "Missing arize-codex-proxy entry point in pyproject.toml"
 
 
 class TestStateFileExtension:

@@ -14,8 +14,3 @@ CODEX_CONFIG_FILE = CODEX_CONFIG_DIR / "config.toml"
 CODEX_ENV_FILE = CODEX_CONFIG_DIR / "arize-env.sh"
 
 NOTIFY_BIN_NAME = "arize-hook-codex-notify"
-BUFFER_BIN_NAME = "arize-codex-buffer"
-BUFFER_PORT = 4318
-BUFFER_PID_FILE = Path.home() / ".arize" / "harness" / "run" / "codex-buffer.pid"
-BUFFER_LOG_FILE = Path.home() / ".arize" / "harness" / "logs" / "codex-buffer.log"
-OTEL_ENDPOINT = f"http://127.0.0.1:{BUFFER_PORT}/v1/logs"

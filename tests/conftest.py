@@ -30,11 +30,8 @@ def tmp_harness_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(c, "BASE_DIR", base)
     monkeypatch.setattr(c, "CONFIG_FILE", base / "config.yaml")
     monkeypatch.setattr(c, "PID_DIR", base / "run")
-    monkeypatch.setattr(c, "CODEX_BUFFER_PID_FILE", base / "run" / "codex-buffer.pid")
     monkeypatch.setattr(c, "LOG_DIR", base / "logs")
-    monkeypatch.setattr(c, "CODEX_BUFFER_LOG_FILE", base / "logs" / "codex-buffer.log")
     monkeypatch.setattr(c, "BIN_DIR", base / "bin")
-    monkeypatch.setattr(c, "CODEX_BUFFER_BIN", base / "bin" / "arize-codex-buffer")
     monkeypatch.setattr(c, "VENV_DIR", base / "venv")
     monkeypatch.setattr(c, "STATE_BASE_DIR", base / "state")
     return base
@@ -144,19 +141,6 @@ def claude_session_start_input():
 def claude_stop_input():
     """Claude Code stop hook input."""
     return {"session_id": "sess-abc123", "transcript_path": "/tmp/transcript.jsonl"}
-
-
-@pytest.fixture
-def codex_notify_input():
-    """Codex notify hook input."""
-    return {
-        "type": "agent-turn-complete",
-        "thread-id": "thread-1",
-        "turn-id": "turn-1",
-        "cwd": "/home/user/project",
-        "input-messages": [{"role": "user", "content": "hello"}],
-        "last-assistant-message": "I can help with that.",
-    }
 
 
 @pytest.fixture

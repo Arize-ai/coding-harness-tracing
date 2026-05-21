@@ -19,7 +19,6 @@ dev = [
 
 [project.scripts]
 # Core tools
-arize-codex-buffer = "tracing.codex.codex_buffer_ctl:main"
 arize-config = "core.config:main"
 # Claude Code hooks
 arize-hook-session-start = "tracing.claude_code.hooks.handlers:session_start"
@@ -40,9 +39,6 @@ arize-hook-post-compact = "tracing.claude_code.hooks.handlers:post_compact"
 arize-hook-permission-denied = "tracing.claude_code.hooks.handlers:permission_denied"
 # Codex hooks
 arize-hook-codex-notify = "tracing.codex.hooks.handlers:notify"
-arize-hook-codex-drain = "tracing.codex.hooks.handlers:drain_idle"
-# Codex proxy
-arize-codex-proxy = "tracing.codex.hooks.proxy:main"
 # Copilot hooks
 arize-hook-copilot-session-start = "tracing.copilot.hooks.handlers:session_start"
 arize-hook-copilot-user-prompt = "tracing.copilot.hooks.handlers:user_prompt_submitted"
@@ -79,7 +75,6 @@ markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
 [tool.coverage.run]
 source = ["core", "tracing"]
 omit = [
-    "tracing/codex/codex_buffer.py",
     "**/constants.py",
 ]
 

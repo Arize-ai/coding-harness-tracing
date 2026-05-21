@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
-"""Codex hook handler — creates OpenInference LLM spans from agent-turn-complete events.
+"""Codex notify handler -- rollout-JSONL-driven span emission.
 
-Replaces tracing/codex/hooks/notify.sh (445 lines). Registered as the
-``arize-hook-codex-notify`` CLI entry point.
+Codex's `agent-turn-complete` notify callback is the only signal we listen
+for. When it fires, we locate the session's rollout JSONL at
+``~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<session_id>.jsonl`` and extract
+the full turn's data: user prompt, assistant message, token usage, and every
+tool call (shell, apply_patch, web_search, open_page) with structured args,
+output, and timing. We then ship one OTLP payload with the parent LLM span
+plus all TOOL child spans.
 
-Input contract: JSON as sys.argv[1] (NOT stdin -- Codex passes JSON as a CLI arg).
-No stdout output -- Codex doesn't expect a response.
+This replaces an earlier design that relied on Codex's lifecycle hooks
+(SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop). Those hooks
+only cover SOME tool types (shell/apply_patch but not web_search), use a
+brittle hook-payload schema, and require explicit ``/hooks`` trust approval.
+The rollout JSONL covers every tool, has a stable JSON schema, and is the
+single source of truth for the session.
+
+Input contract: JSON as ``sys.argv[1]`` (NOT stdin -- Codex passes notify
+JSON as a CLI argument). No stdout response expected.
 """
+from __future__ import annotations
+
 import json
-import os
 import sys
-import time
-import urllib.request
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from core.common import (
     build_multi_span,
@@ -28,28 +39,19 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
-from tracing.codex.codex_buffer_ctl import buffer_ensure
-from tracing.codex.hooks.adapter import (
-    SCOPE_NAME,
-    SERVICE_NAME,
-    check_requirements,
-    ensure_session_initialized,
-    gc_stale_state_files,
-    load_env_file,
-    resolve_session,
-)
+from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 
-# HTTP timeout for the /flush-idle request to the buffer service.
-_DRAIN_HTTP_TIMEOUT_SECONDS = 5
+# Root of Codex's per-session rollout transcripts.
+_CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Payload helpers (notify payload from Codex)
 # ---------------------------------------------------------------------------
 
 
-def _flex_get(d: dict, *keys, default=""):
-    """Try multiple key names, return first non-None/non-empty value."""
+def _flex_get(d: dict, *keys, default: str = "") -> str:
+    """Return the first non-empty value among `keys`, else `default`."""
     for key in keys:
         val = d.get(key)
         if val is not None and val != "":
@@ -57,428 +59,460 @@ def _flex_get(d: dict, *keys, default=""):
     return default
 
 
-def _flex_get_obj(d: dict, *keys):
-    """Like _flex_get but returns None instead of empty string default."""
-    for key in keys:
-        val = d.get(key)
-        if val is not None and val != "":
-            return val
-    return None
-
-
-def _nested_get(d: dict, *keys):
-    """Walk nested dicts by key sequence. Returns None if any step fails."""
-    current: Any = d
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def _as_text(node) -> str:
-    """Recursively extract text from a nested message structure.
-
-    Handles: str, list (join with newlines), dict (try .text, .content,
-    .message, .data, .value, then json.dumps as fallback), None -> "".
-    Matches the jq as_text function in notify.sh lines 37-44.
-    """
-    if node is None:
-        return ""
-    if isinstance(node, str):
-        return node
-    if isinstance(node, list):
-        return "\n".join(_as_text(item) for item in node)
-    if isinstance(node, dict):
-        for key in ("text", "content", "message", "data", "value"):
-            if key in node:
-                result = _as_text(node[key])
-                if result:
-                    return result
-        return json.dumps(node)
-    return str(node)
-
-
-def _extract_user_prompt(user_input) -> str:
-    """Extract the last user message from input-messages.
-
-    input-messages can be:
-    - list of message objects -> find last with role=="user", extract content
-    - list of strings -> use last non-empty string
-    - plain string -> use directly
-
-    Matches the jq expression at bash lines 63-79.
-    """
-    if isinstance(user_input, list):
-        # Try: last user-role message object
-        for msg in reversed(user_input):
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                text = _as_text(msg.get("content", ""))
-                if text:
-                    return text
-        # Fallback: last non-empty string in the array
-        for msg in reversed(user_input):
-            if isinstance(msg, str) and msg:
-                return msg
-        return ""
-    if isinstance(user_input, str):
-        return user_input
-    return str(user_input) if user_input else ""
-
-
 # ---------------------------------------------------------------------------
-# Token enrichment
+# Rollout location
 # ---------------------------------------------------------------------------
 
 
-def _find_token_usage(input_json: dict):
-    """Search for token usage dict in multiple payload locations.
+def _find_rollout_file(session_id: str, sessions_root: "Path | None" = None) -> "Path | None":
+    """Locate the rollout JSONL file for a given session_id.
 
-    Tries (matching bash lines 127-134):
-    1. input_json itself: .token_usage / .token-usage / .usage
-    2. input_json["last-assistant-message"]: same keys
-    3. input_json["last-assistant-message"]["message"]: same keys
+    File names embed the session_id, so a filename-pattern match is fast even
+    on a deep directory tree.
     """
-    usage_keys = ("token_usage", "token-usage", "usage")
-    search_locations = [
-        input_json,
-        _flex_get_obj(input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"),
-        _nested_get(input_json, "last-assistant-message", "message"),
-    ]
-    for obj in search_locations:
-        if not isinstance(obj, dict):
-            continue
-        for key in usage_keys:
-            val = obj.get(key)
-            if isinstance(val, dict):
-                return val
+    root = sessions_root or _CODEX_SESSIONS_ROOT
+    if not root.is_dir() or not session_id:
+        return None
+    try:
+        for path in root.rglob(f"rollout-*-{session_id}.jsonl"):
+            return path
+    except OSError:
+        return None
     return None
 
 
-def _extract_token_counts(usage: dict) -> dict:
-    """Extract prompt/completion/total counts, trying multiple key variants.
+# ---------------------------------------------------------------------------
+# Rollout extraction
+# ---------------------------------------------------------------------------
 
-    Returns {"prompt": int|None, "completion": int|None, "total": int|None}.
-    Auto-computes total if prompt + completion are present but total isn't.
+
+def _iso_to_ms(ts: str) -> int:
+    """Convert an ISO-8601 timestamp string (e.g. ``2026-05-20T23:42:45.649Z``) to ms.
+
+    Returns 0 on any parse failure -- callers tolerate zero timestamps.
     """
+    if not ts:
+        return 0
+    try:
+        # Python's fromisoformat doesn't accept the trailing Z prior to 3.11;
+        # normalize by swapping Z for +00:00 for compatibility.
+        normalized = ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        return int(dt.timestamp() * 1000)
+    except (ValueError, TypeError):
+        return 0
 
-    def pick_first(*keys):
-        for k in keys:
-            val = usage.get(k)
-            if val is not None:
-                try:
-                    return int(val)
-                except (ValueError, TypeError):
-                    pass
+
+def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None":
+    """Walk the rollout JSONL and extract everything for one turn.
+
+    Returns a dict with: ``trace_count``, ``turn_start_ms``, ``turn_end_ms``,
+    ``duration_ms``, ``user_prompt``, ``assistant_output``, ``model``, ``cwd``,
+    ``permission_mode``, ``sandbox_mode``, ``token_usage`` (or None), and
+    ``tool_calls`` (a list of ``{tool, args, output, call_id, start_ts, end_ts}``).
+
+    Returns None if the turn isn't found.
+    """
+    if not turn_id or not rollout_path.is_file():
         return None
 
-    prompt = pick_first(
-        "prompt_tokens",
+    fields = (
         "input_tokens",
-        "promptTokens",
-        "inputTokens",
-        "prompt",
-        "input",
-        "cache_read_input_tokens",
-        "cache_creation_input_tokens",
-    )
-    completion = pick_first(
-        "completion_tokens",
         "output_tokens",
-        "completionTokens",
-        "outputTokens",
-        "completion",
-        "output",
-    )
-    total = pick_first(
         "total_tokens",
-        "totalTokens",
-        "tokens",
-        "token_count",
-        "overall",
-        "sum",
+        "cached_input_tokens",
+        "non_cached_input_tokens",
+        "reasoning_output_tokens",
     )
-    if total is None and prompt is not None and completion is not None:
-        total = prompt + completion
+    token_sums: dict = {k: 0 for k in fields}
+    saw_tokens = False
 
-    return {"prompt": prompt, "completion": completion, "total": total}
+    in_turn = False
+    trace_count = 0
+    turn_start_ms = 0
+    turn_end_ms = 0
+    duration_ms: "int | None" = None
+    user_prompt = ""
+    assistant_output = ""
+    model = ""
+    cwd = ""
+    permission_mode = ""
+    sandbox_mode = ""
+
+    tool_calls: list = []
+    pending_func: dict = {}  # call_id -> entry being filled
+    pending_search_end: "dict | None" = None  # most recent unmatched web_search_end
+
+    try:
+        with open(rollout_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                outer = obj.get("type")
+                payload = obj.get("payload") or {}
+                ptype = payload.get("type") if isinstance(payload, dict) else None
+                ts_ms = _iso_to_ms(obj.get("timestamp", ""))
+
+                # turn_context records carry per-turn settings (model, cwd, sandbox).
+                # They live at the outer level (no payload.type).
+                if outer == "turn_context" and isinstance(payload, dict):
+                    if payload.get("turn_id") == turn_id:
+                        model = payload.get("model") or model
+                        cwd = payload.get("cwd") or cwd
+                        permission_mode = payload.get("approval_policy") or permission_mode
+                        sandbox_mode = (payload.get("sandbox_policy") or {}).get("type") or sandbox_mode
+                    continue
+
+                if outer != "event_msg" and outer != "response_item":
+                    continue
+
+                # Turn boundaries
+                if outer == "event_msg" and ptype == "task_started":
+                    if in_turn:
+                        # Next turn started after ours -- stop walking.
+                        break
+                    trace_count += 1
+                    if payload.get("turn_id") == turn_id:
+                        in_turn = True
+                        # started_at is unix seconds; convert to ms.
+                        started_at = payload.get("started_at")
+                        if isinstance(started_at, int):
+                            turn_start_ms = started_at * 1000
+                        elif ts_ms:
+                            turn_start_ms = ts_ms
+                    continue
+
+                if not in_turn:
+                    continue
+
+                # task_complete: final assistant message + accurate timing
+                if outer == "event_msg" and ptype == "task_complete":
+                    msg = payload.get("last_agent_message")
+                    if msg:
+                        assistant_output = msg
+                    # completed_at is unix seconds; convert to ms.
+                    completed_at = payload.get("completed_at")
+                    if isinstance(completed_at, int):
+                        turn_end_ms = completed_at * 1000
+                    d = payload.get("duration_ms")
+                    if isinstance(d, int):
+                        duration_ms = d
+                    continue
+
+                # User prompt
+                if outer == "event_msg" and ptype == "user_message":
+                    msg = payload.get("message")
+                    if msg:
+                        user_prompt = msg
+                    continue
+
+                # Intermediate assistant message (overwritten by task_complete if both present)
+                if outer == "event_msg" and ptype == "agent_message":
+                    msg = payload.get("message")
+                    if msg:
+                        assistant_output = msg
+                    continue
+
+                # Token counts -- sum per-call deltas
+                if outer == "event_msg" and ptype == "token_count":
+                    last = (payload.get("info") or {}).get("last_token_usage") or {}
+                    for k in fields:
+                        v = last.get(k)
+                        if isinstance(v, int):
+                            token_sums[k] += v
+                            saw_tokens = True
+                    continue
+
+                # Shell / apply_patch tool call
+                if outer == "response_item" and ptype == "function_call":
+                    call_id = payload.get("call_id") or ""
+                    entry = {
+                        "tool": payload.get("name") or "function_call",
+                        "args": payload.get("arguments") or "",
+                        "output": "",
+                        "call_id": call_id,
+                        "start_ts": ts_ms,
+                        "end_ts": ts_ms,
+                        "decision": None,
+                    }
+                    tool_calls.append(entry)
+                    if call_id:
+                        pending_func[call_id] = entry
+                    continue
+
+                if outer == "response_item" and ptype == "function_call_output":
+                    call_id = payload.get("call_id") or ""
+                    pending = pending_func.get(call_id) if call_id else None
+                    if pending is not None:
+                        pending["output"] = payload.get("output") or ""
+                        pending["end_ts"] = ts_ms or pending["end_ts"]
+                    continue
+
+                # Web search: web_search_end (event_msg, has call_id) is paired with
+                # the next web_search_call (response_item) by emission order.
+                if outer == "event_msg" and ptype == "web_search_end":
+                    pending_search_end = {
+                        "call_id": payload.get("call_id") or "",
+                        "ts_ms": ts_ms,
+                    }
+                    continue
+
+                if outer == "response_item" and ptype == "web_search_call":
+                    action = payload.get("action") or {}
+                    action_type = action.get("type") or "search"
+                    if action_type == "open_page":
+                        tool_name = "open_page"
+                        args = action.get("url") or ""
+                    else:
+                        tool_name = "web_search"
+                        args = action.get("query") or ""
+                    start_ts = ts_ms
+                    call_id = ""
+                    if pending_search_end is not None:
+                        call_id = pending_search_end["call_id"]
+                        start_ts = pending_search_end["ts_ms"] or start_ts
+                        pending_search_end = None
+                    tool_calls.append(
+                        {
+                            "tool": tool_name,
+                            "args": args,
+                            "output": payload.get("status") or "",
+                            "call_id": call_id,
+                            "start_ts": start_ts,
+                            "end_ts": ts_ms,
+                            "decision": None,
+                        }
+                    )
+                    continue
+    except OSError:
+        return None
+
+    if not in_turn:
+        return None
+
+    if not turn_end_ms:
+        candidates = [e["end_ts"] for e in tool_calls if e.get("end_ts")]
+        turn_end_ms = max(candidates) if candidates else turn_start_ms
+
+    token_usage: "dict | None" = None
+    if saw_tokens:
+        token_usage = {
+            "prompt_tokens": token_sums["input_tokens"] or None,
+            "completion_tokens": token_sums["output_tokens"] or None,
+            "total_tokens": token_sums["total_tokens"] or None,
+            "cached_input_tokens": token_sums["cached_input_tokens"],
+            "non_cached_input_tokens": token_sums["non_cached_input_tokens"],
+            "reasoning_output_tokens": token_sums["reasoning_output_tokens"],
+            "model": model or "",
+        }
+
+    return {
+        "trace_count": trace_count,
+        "turn_start_ms": turn_start_ms or get_timestamp_ms(),
+        "turn_end_ms": turn_end_ms or get_timestamp_ms(),
+        "duration_ms": duration_ms,
+        "user_prompt": user_prompt,
+        "assistant_output": assistant_output,
+        "model": model,
+        "cwd": cwd,
+        "permission_mode": permission_mode,
+        "sandbox_mode": sandbox_mode,
+        "token_usage": token_usage,
+        "tool_calls": tool_calls,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Tool call extraction
+# Span assembly
 # ---------------------------------------------------------------------------
 
 
-def _find_tool_calls(input_json: dict):
-    """Search for tool calls list in multiple payload locations.
+def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
+    """Assemble the LLM + TOOL spans from an extracted turn and ship them."""
+    project_name = env.project_name or "codex"
+    user_id = env.user_id or ""
 
-    Tries keys: tool_calls, tool-calls, toolCalls, tool_invocations,
-    toolInvocations, tools, tool_results.
-    Searches: root, last-assistant-message, last-assistant-message.message
-    """
-    tool_keys = (
-        "tool_calls",
-        "tool-calls",
-        "toolCalls",
-        "tool_invocations",
-        "toolInvocations",
-        "tools",
-        "tool_results",
-    )
-    search_locations = [
-        input_json,
-        _flex_get_obj(input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"),
-        _nested_get(input_json, "last-assistant-message", "message"),
-    ]
-    for obj in search_locations:
-        if not isinstance(obj, dict):
-            continue
-        for key in tool_keys:
-            val = obj.get(key)
-            if val is not None:
-                if isinstance(val, list):
-                    return val
-                # Wrap non-list in a list (matches bash: [.] fallback)
-                return [val]
-    return None
+    trace_id = generate_trace_id()
+    parent_span_id = generate_span_id()
 
+    user_prompt = redact_content(env.log_prompts, turn.get("user_prompt") or "")
+    assistant_output = redact_content(env.log_prompts, turn.get("assistant_output") or "")
+    final_output = assistant_output or "(No response)"
 
-# ---------------------------------------------------------------------------
-# Event buffer drain
-# ---------------------------------------------------------------------------
+    attrs: dict = {
+        "session.id": thread_id,
+        "trace.number": str(turn.get("trace_count") or 1),
+        "project.name": project_name,
+        "openinference.span.kind": "LLM",
+        "input.value": user_prompt,
+        "output.value": final_output,
+        "codex.thread_id": thread_id,
+    }
+    if turn_id:
+        attrs["codex.turn_id"] = turn_id
+    if user_id:
+        attrs["user.id"] = user_id
+    if turn.get("model"):
+        attrs["llm.model_name"] = turn["model"]
+    if turn.get("permission_mode"):
+        attrs["codex.approval_mode"] = turn["permission_mode"]
+    if turn.get("sandbox_mode"):
+        attrs["codex.sandbox_mode"] = turn["sandbox_mode"]
+    if turn.get("duration_ms") is not None:
+        attrs["codex.turn.duration_ms"] = turn["duration_ms"]
+    if assistant_output:
+        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
 
+    usage = turn.get("token_usage") or {}
+    for src, dst in (
+        ("prompt_tokens", "llm.token_count.prompt"),
+        ("completion_tokens", "llm.token_count.completion"),
+        ("total_tokens", "llm.token_count.total"),
+    ):
+        v = usage.get(src)
+        if isinstance(v, int):
+            attrs[dst] = v
+    if usage:
+        attrs["codex.token_usage"] = json.dumps(usage)
 
-def _drain_events(thread_id: str, state, collector_port: int) -> list:
-    """Drain buffered events from the collector for this thread.
-
-    HTTP GET http://127.0.0.1:{port}/drain/{thread_id}?since_ns={last}&wait_ms=8000&quiet_ms=1200
-
-    Retry schedule (matches bash drain_attempts array at line 225):
-    - Attempt 1: immediate
-    - Attempt 2: wait 1.2s, then request
-    - Attempt 3: wait 2.0s, then request
-
-    Returns list of event dicts. Returns [] on any failure.
-    """
-    if not thread_id:
-        log("Skipping event buffer drain because thread-id is missing")
-        return []
-
-    last_ns = state.get("last_collector_time_ns") or "0"
-    url = f"http://127.0.0.1:{collector_port}/drain/{thread_id}"
-    query = f"since_ns={last_ns}&wait_ms=8000&quiet_ms=1200"
-    retry_waits = [0, 1.2, 2.0]  # seconds (matches bash: 0, 1200ms, 2000ms)
-
-    for wait in retry_waits:
-        if wait > 0:
-            time.sleep(wait)
-        try:
-            req = urllib.request.Request(f"{url}?{query}")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                events = json.loads(resp.read())
-        except Exception:
-            events = []
-
-        if not isinstance(events, list):
-            events = []
-
-        log(f"Collector drain attempt (thread={thread_id}, wait={wait}s) => {len(events)} events")
-        if events:
-            return events
-
-    return []
-
-
-# ---------------------------------------------------------------------------
-# Span sending
-# ---------------------------------------------------------------------------
-
-
-def _send_span(payload: dict) -> None:
-    """Send the completed span payload directly to the configured backend."""
-    if not send_span_to_backend(payload):
-        error("Failed to send span to backend")
-
-
-# ---------------------------------------------------------------------------
-# Child span building from collector events
-# ---------------------------------------------------------------------------
-
-
-def _build_child_spans(
-    events: list, trace_id: str, parent_span_id: str, session_id: str, start_time: int, attrs: dict
-) -> "tuple[list, int, int]":
-    """Build child spans from collector events and enrich parent attrs in-place.
-
-    Returns (list of child span payloads, earliest event start time, latest event end time).
-    Modifies attrs dict in-place with enrichments from events.
-    """
-    child_spans = []
-
-    # --- Adjust timing from event timestamps (bash lines 259-266) ---
-    timestamps_ns = []
-    for e in events:
-        try:
-            t = int(e.get("time_ns", 0))
-            if t > 0:
-                timestamps_ns.append(t)
-        except (ValueError, TypeError):
-            pass
-
-    event_start_time = start_time
-    event_end_time = start_time
-    if timestamps_ns:
-        event_start_time = min(timestamps_ns) // 1_000_000
-        event_end_time = max(timestamps_ns) // 1_000_000
-        attrs["codex.trace.duration_ms"] = event_end_time - event_start_time
-
-    # --- Model name enrichment (bash lines 270-277) ---
-    for e in events:
-        if e.get("event") in ("codex.conversation_starts", "codex.api_request"):
-            a = e.get("attrs", {})
-            model = a.get("model") or a.get("llm.model_name") or a.get("model_name")
-            if model:
-                attrs["llm.model_name"] = model
-                break
-
-    # --- Token enrichment from SSE events (bash lines 280-315) ---
-    sse_events = [
-        e
-        for e in events
-        if e.get("event") == "codex.sse_event"
-        and (
-            (e.get("attrs", {}).get("type") == "response.completed")
-            or (e.get("attrs", {}).get("sse.type") == "response.completed")
-            or (e.get("attrs", {}).get("event.kind") == "response.completed")
-        )
-    ]
-    if sse_events:
-        ea = sse_events[-1].get("attrs", {})
-        _enrich_tokens_from_event_attrs(ea, attrs)
-
-    # --- Sandbox/approval from conversation_starts (bash lines 317-326) ---
-    for e in events:
-        if e.get("event") == "codex.conversation_starts":
-            a = e.get("attrs", {})
-            sandbox = a.get("sandbox") or a.get("sandbox_mode")
-            approval = a.get("approval_mode") or a.get("approval")
-            if sandbox:
-                attrs["codex.sandbox_mode"] = sandbox
-            if approval:
-                attrs["codex.approval_mode"] = approval
-            break
-
-    # --- TOOL child spans from tool_decision + tool_result pairs ---
-    decisions = [e for e in events if e.get("event") == "codex.tool_decision"]
-    results = [e for e in events if e.get("event") == "codex.tool_result"]
-
-    # Index results by call_id for fast matching
-    results_by_call_id = {}
-    for r in results:
-        cid = r.get("attrs", {}).get("call_id", "")
-        if cid:
-            results_by_call_id[cid] = r
-
-    for i, decision in enumerate(decisions):
-        da = decision.get("attrs", {})
-        tool_name = da.get("tool_name") or da.get("tool.name") or da.get("name") or "unknown_tool"
-        call_id = da.get("call_id", "")
-        decision_ns = _safe_int(decision.get("time_ns", 0))
-        approval_status = (
-            da.get("approved") or da.get("approval") or da.get("decision") or da.get("status") or "unknown"
-        )
-
-        # Match result by call_id first, then by index
-        result = results_by_call_id.get(call_id)
-        if result is None and i < len(results):
-            result = results[i]
-
-        result_ns = _safe_int(result.get("time_ns", 0)) if result else decision_ns
-        tool_input = ""
-        tool_output = ""
-        tool_duration_ms = 0
-        if result:
-            ra = result.get("attrs", {})
-            # arguments contains the tool input as JSON (e.g. {"cmd":"pwd","workdir":"..."})
-            tool_input = str(ra.get("arguments") or ra.get("input") or "")
-            tool_input = redact_content(env.log_tool_details, tool_input)
-            tool_output = str(ra.get("output") or ra.get("result") or ra.get("tool.output") or "")
-            tool_output = redact_content(env.log_tool_content, tool_output)
-            tool_duration_ms = _safe_int(ra.get("duration_ms", 0))
-
-        tool_start_ms = decision_ns // 1_000_000 or event_start_time
-        tool_end_ms = result_ns // 1_000_000 or tool_start_ms
-        if not tool_end_ms or tool_end_ms == tool_start_ms:
-            tool_end_ms = tool_start_ms + tool_duration_ms
-
-        tool_attrs = {
+    child_spans: list = []
+    for entry in turn.get("tool_calls") or []:
+        tool_name = entry.get("tool") or "unknown_tool"
+        args_raw = entry.get("args") or ""
+        output_raw = entry.get("output") or ""
+        tool_attrs: dict = {
             "openinference.span.kind": "TOOL",
             "tool.name": tool_name,
-            "input.value": tool_input,
-            "output.value": tool_output,
-            "codex.tool.approval_status": approval_status,
-            "session.id": session_id,
+            "input.value": redact_content(env.log_tool_details, args_raw),
+            "output.value": redact_content(env.log_tool_content, output_raw),
+            "session.id": thread_id,
         }
-        if call_id:
-            tool_attrs["codex.tool.call_id"] = call_id
-
-        child_span = build_span(
+        if entry.get("call_id"):
+            tool_attrs["codex.tool.call_id"] = entry["call_id"]
+        child_start = entry.get("start_ts") or turn["turn_start_ms"]
+        child_end = entry.get("end_ts") or child_start
+        child = build_span(
             tool_name,
             "TOOL",
             generate_span_id(),
             trace_id,
             parent_span_id,
-            tool_start_ms,
-            tool_end_ms,
+            child_start,
+            child_end,
             tool_attrs,
             SERVICE_NAME,
             SCOPE_NAME,
         )
-        child_spans.append(child_span)
+        child_spans.append(child)
 
-    return child_spans, event_start_time, event_end_time
+    parent_span = build_span(
+        f"Turn {turn.get('trace_count') or 1}",
+        "LLM",
+        parent_span_id,
+        trace_id,
+        "",
+        turn["turn_start_ms"],
+        turn["turn_end_ms"],
+        attrs,
+        SERVICE_NAME,
+        SCOPE_NAME,
+    )
 
+    debug_dump(f"notify_{thread_id}_parent_span", parent_span)
 
-def _enrich_tokens_from_event_attrs(ea: dict, attrs: dict) -> None:
-    """Extract token counts from SSE event attrs and apply to parent attrs.
+    if child_spans:
+        payload = build_multi_span([parent_span] + child_spans, SERVICE_NAME, SCOPE_NAME)
+        debug_dump(f"notify_{thread_id}_multi_span", payload)
+    else:
+        payload = parent_span
 
-    Matches bash lines 286-313 — tries multiple key variants for each count.
-    """
-
-    def _pick(d, *keys):
-        for k in keys:
-            v = d.get(k)
-            if v is not None:
-                try:
-                    return int(v)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-    model_name = _pick(ea, "model", "llm.model_name", "model_name")
-    prompt = _pick(ea, "prompt_tokens", "input_tokens", "input_token_count", "usage.prompt_tokens")
-    completion = _pick(ea, "completion_tokens", "output_tokens", "output_token_count", "usage.completion_tokens")
-    total = _pick(ea, "total_tokens", "usage.total_tokens")
-
-    if total is None and prompt is not None and completion is not None:
-        total = prompt + completion
-
-    if prompt is not None:
-        attrs["llm.token_count.prompt"] = prompt
-    if completion is not None:
-        attrs["llm.token_count.completion"] = completion
-    if total is not None:
-        attrs["llm.token_count.total"] = total
-    if model_name is not None:
-        attrs["llm.model_name"] = model_name
+    if not send_span_to_backend(payload):
+        error("Failed to send span to backend")
+    else:
+        log(f"Turn sent (thread={thread_id}, turn={turn_id}, children={len(child_spans)})")
 
 
-def _safe_int(val) -> int:
-    """Convert to int, returning 0 on failure."""
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return 0
+def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> None:
+    """Fallback when no rollout file is found -- emit a single LLM span from
+    the notify payload alone."""
+    assistant_msg = (
+        input_json.get("last-assistant-message")
+        or input_json.get("last_assistant_message")
+        or input_json.get("lastAssistantMessage")
+    )
+    if isinstance(assistant_msg, dict):
+        # Sometimes wrapped: try common keys
+        for k in ("text", "message", "content"):
+            v = assistant_msg.get(k)
+            if isinstance(v, str) and v:
+                assistant_msg = v
+                break
+
+    user_msgs = input_json.get("input-messages") or input_json.get("input_messages") or ""
+    user_prompt = ""
+    if isinstance(user_msgs, list):
+        for m in reversed(user_msgs):
+            if isinstance(m, dict) and m.get("role") == "user":
+                c = m.get("content")
+                if isinstance(c, str) and c:
+                    user_prompt = c
+                    break
+                if isinstance(c, list):
+                    for piece in c:
+                        if isinstance(piece, dict) and piece.get("text"):
+                            user_prompt = piece["text"]
+                            break
+                    if user_prompt:
+                        break
+    elif isinstance(user_msgs, str):
+        user_prompt = user_msgs
+
+    user_prompt = redact_content(env.log_prompts, user_prompt)
+    assistant_output = redact_content(env.log_prompts, assistant_msg if isinstance(assistant_msg, str) else "")
+    final_output = assistant_output or "(No response)"
+
+    trace_id = generate_trace_id()
+    span_id = generate_span_id()
+    now = get_timestamp_ms()
+
+    attrs = {
+        "session.id": thread_id,
+        "project.name": env.project_name or "codex",
+        "openinference.span.kind": "LLM",
+        "input.value": user_prompt,
+        "output.value": final_output,
+        "codex.thread_id": thread_id,
+        "codex.turn_id": turn_id,
+        "codex.notify_fallback": "true",
+    }
+    if env.user_id:
+        attrs["user.id"] = env.user_id
+    if assistant_output:
+        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
+
+    parent_span = build_span(
+        "Turn",
+        "LLM",
+        span_id,
+        trace_id,
+        "",
+        now,
+        now,
+        attrs,
+        SERVICE_NAME,
+        SCOPE_NAME,
+    )
+    debug_dump(f"notify_fallback_{thread_id}_{turn_id}_span", parent_span)
+    if not send_span_to_backend(parent_span):
+        error("Failed to send fallback span to backend")
+    else:
+        log(f"Turn sent via fallback (thread={thread_id}, turn={turn_id})")
 
 
 # ---------------------------------------------------------------------------
@@ -487,163 +521,30 @@ def _safe_int(val) -> int:
 
 
 def _handle_notify(input_json: dict) -> None:
-    """Main notify handler, broken into phases matching notify.sh."""
-    buffer_ensure()
-
-    # Phase 1: Event filtering (bash lines 22-27)
-    event_type = input_json.get("type", "")
-    if event_type != "agent-turn-complete":
-        log(f"Ignoring event type: {event_type}")
+    """Handle one Codex notify event."""
+    if input_json.get("type") != "agent-turn-complete":
+        log(f"Ignoring event type: {input_json.get('type')}")
         return
 
-    # Phase 2: Parse payload with flexible key names (bash lines 29-90)
     thread_id = _flex_get(input_json, "thread-id", "thread_id", "threadId")
     turn_id = _flex_get(input_json, "turn-id", "turn_id", "turnId")
-    cwd = _flex_get(input_json, "cwd", "working-directory", "working_directory")
-    user_input = _flex_get_obj(input_json, "input-messages", "input_messages", "inputMessages")
-    assistant_msg = _flex_get_obj(
-        input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"
-    )
 
-    debug_prefix = f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}"
-    debug_dump(f"{debug_prefix}_raw", input_json)
+    debug_dump(f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}_raw", input_json)
 
-    assistant_output = _as_text(assistant_msg)
-    user_prompt = _extract_user_prompt(user_input)
+    rollout_path = _find_rollout_file(thread_id)
+    if rollout_path is None:
+        log(f"notify: no rollout file for session {thread_id}, falling back to single span")
+        _send_legacy_single_span(thread_id, turn_id, input_json)
+        return
 
-    if not assistant_output:
-        assistant_output = "(No response)"
+    turn = _extract_turn_from_rollout(rollout_path, turn_id)
+    if turn is None:
+        log(f"notify: turn {turn_id} not found in {rollout_path}; falling back to single span")
+        _send_legacy_single_span(thread_id, turn_id, input_json)
+        return
 
-    # Redact prompt and model response unless opted in via ARIZE_LOG_PROMPTS.
-    user_prompt = redact_content(env.log_prompts, user_prompt)
-    assistant_output = redact_content(env.log_prompts, assistant_output)
-
-    debug_dump(f"{debug_prefix}_text", {"input": user_prompt, "assistant": assistant_output})
-
-    # Phase 3: Resolve session and state (bash lines 48-56)
-    state = resolve_session(thread_id)
-    ensure_session_initialized(state, thread_id, cwd or os.getcwd())
-    session_id = state.get("session_id")
-    state.increment("trace_count")
-    trace_count = state.get("trace_count")
-    project_name = state.get("project_name")
-    user_id = state.get("user_id")
-
-    # Phase 4: Generate IDs and build base attributes (bash lines 92-123)
-    trace_id = generate_trace_id()
-    span_id = generate_span_id()
-    start_time = get_timestamp_ms()
-    end_time = start_time  # Turn already completed, no precise timing from notify
-
-    output_messages = [{"message.role": "assistant", "message.content": assistant_output}]
-
-    attrs = {
-        "session.id": session_id,
-        "trace.number": trace_count,
-        "project.name": project_name,
-        "openinference.span.kind": "LLM",
-        "input.value": user_prompt,
-        "output.value": assistant_output,
-        "codex.turn_id": turn_id,
-        "codex.thread_id": thread_id,
-        "llm.output_messages": json.dumps(output_messages),
-    }
-    if user_id:
-        attrs["user.id"] = user_id
-
-    # Phase 5: Token enrichment from notify payload (bash lines 125-166)
-    usage = _find_token_usage(input_json)
-    if usage:
-        attrs["codex.token_usage"] = json.dumps(usage)
-        debug_dump(f"{debug_prefix}_token_usage", usage)
-        counts = _extract_token_counts(usage)
-        if counts["prompt"] is not None:
-            attrs["llm.token_count.prompt"] = counts["prompt"]
-        if counts["completion"] is not None:
-            attrs["llm.token_count.completion"] = counts["completion"]
-        if counts["total"] is not None:
-            attrs["llm.token_count.total"] = counts["total"]
-
-    # Phase 6: Tool call extraction from notify payload (bash lines 168-211)
-    tool_calls = _find_tool_calls(input_json)
-    if tool_calls:
-        count = len(tool_calls)
-        attrs["llm.tool_call_count"] = count
-        if count > 0:
-            preview = tool_calls[:5]
-            attrs["llm.tool_calls"] = json.dumps(preview)
-            if count > 5:
-                attrs["llm.tool_calls_omitted"] = count - 5
-        debug_dump(f"{debug_prefix}_tool_calls", tool_calls)
-
-    # Phase 7: Drain collector event buffer (bash lines 213-254)
-    collector_port = int(os.environ.get("ARIZE_COLLECTOR_PORT", "4318"))
-    events = _drain_events(thread_id, state, collector_port)
-    debug_dump(f"{debug_prefix}_collector_events", events)
-
-    if events:
-        max_ns = 0
-        for e in events:
-            try:
-                t = int(e.get("time_ns", 0))
-                if t > max_ns:
-                    max_ns = t
-            except (ValueError, TypeError):
-                pass
-        if max_ns > 0:
-            state.set("last_collector_time_ns", str(max_ns))
-
-    # Phase 8: Enrich parent span and build child spans from events
-    child_spans: list = []
-    if events:
-        log(f"Processing {len(events)} collector events")
-        child_spans, event_start, event_end = _build_child_spans(
-            events,
-            trace_id,
-            span_id,
-            session_id or "",
-            start_time,
-            attrs,
-        )
-        # Use event-derived timing if available
-        if event_start != start_time or event_end != start_time:
-            start_time = event_start
-            end_time = event_end
-
-    # Phase 9: Build and send (bash lines 424-440)
-    parent_span = build_span(
-        f"Turn {trace_count}",
-        "LLM",
-        span_id,
-        trace_id,
-        "",
-        start_time,
-        end_time,
-        attrs,
-        SERVICE_NAME,
-        SCOPE_NAME,
-    )
-    debug_dump(f"{debug_prefix}_parent_span", parent_span)
-
-    if child_spans:
-        log(f"Building multi-span payload: 1 parent + {len(child_spans)} children")
-        all_spans = [parent_span] + child_spans
-        multi_payload = build_multi_span(all_spans, SERVICE_NAME, SCOPE_NAME)
-        debug_dump(f"{debug_prefix}_multi_span", multi_payload)
-        _send_span(multi_payload)
-    else:
-        debug_dump(f"{debug_prefix}_span", parent_span)
-        _send_span(parent_span)
-
-    log(f"Turn {trace_count} sent (thread={thread_id}, turn={turn_id}, children={len(child_spans)})")
-
-    # Phase 10: Periodic GC (bash lines 442-445)
-    try:
-        tc = int(trace_count or "0")
-    except (ValueError, TypeError):
-        tc = 0
-    if tc % 10 == 0:
-        gc_stale_state_files()
+    debug_dump(f"notify_{thread_id}_{turn_id}_extracted", turn)
+    _build_and_send_spans(thread_id, turn_id, turn)
 
 
 # ---------------------------------------------------------------------------
@@ -651,129 +552,21 @@ def _handle_notify(input_json: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def notify():
-    """Entry point for arize-hook-codex-notify. Codex hook.
+def notify() -> None:
+    """Entry point for ``arize-hook-codex-notify``.
 
-    Input contract: JSON as sys.argv[1] (NOT stdin -- Codex passes JSON as a CLI arg).
-    No stdout output -- Codex doesn't expect a response.
+    Codex passes the notify-event JSON on ``sys.argv[1]`` (not stdin) and
+    expects no stdout response.
     """
     try:
-        # Load env file before anything else (matches bash line 13)
         load_env_file(Path.home() / ".codex" / "arize-env.sh")
-
         if not check_requirements():
             return
-
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
         input_json = json.loads(raw)
         _handle_notify(input_json)
     except Exception as e:
         error(f"codex notify hook failed: {e}")
-
-
-def drain_idle():
-    """Entry point for arize-hook-codex-drain. Flushes all buffered conversations.
-
-    Called by the proxy after `codex exec` exits. Since codex has already
-    terminated, every buffered conversation is by definition complete —
-    we fetch everything unconditionally and build span trees from the events.
-    """
-    try:
-        load_env_file(Path.home() / ".codex" / "arize-env.sh")
-
-        if not check_requirements():
-            return
-
-        buffer_ensure()
-
-        port = int(os.environ.get("ARIZE_COLLECTOR_PORT", "4318"))
-
-        # Codex has already exited, so all events are at the buffer and no new
-        # events can arrive. Pass timeout_seconds=0 to grab every conversation.
-        url = f"http://127.0.0.1:{port}/flush-idle?timeout_seconds=0"
-        try:
-            with urllib.request.urlopen(url, timeout=_DRAIN_HTTP_TIMEOUT_SECONDS) as resp:
-                conversations = json.loads(resp.read())
-        except Exception as e:
-            error(f"Failed to fetch idle conversations: {e}")
-            return
-
-        if not conversations:
-            return
-
-        log(f"Draining {len(conversations)} idle conversation(s)")
-
-        for conv_id, events in conversations.items():
-            if not events:
-                continue
-
-            log(f"Processing {len(events)} events for conversation {conv_id}")
-
-            # Resolve session for this conversation
-            state = resolve_session(conv_id)
-            ensure_session_initialized(state, conv_id, os.getcwd())
-            session_id = state.get("session_id")
-            state.increment("trace_count")
-            trace_count = state.get("trace_count")
-            project_name = state.get("project_name")
-            user_id = state.get("user_id")
-
-            # Generate IDs
-            trace_id = generate_trace_id()
-            span_id = generate_span_id()
-            start_time = get_timestamp_ms()
-            end_time = start_time
-
-            # Build parent span attrs from events
-            attrs = {
-                "session.id": session_id,
-                "trace.number": trace_count,
-                "project.name": project_name,
-                "openinference.span.kind": "LLM",
-                "codex.thread_id": conv_id,
-                "codex.drain_source": "flush-idle",
-            }
-            if user_id:
-                attrs["user.id"] = user_id
-
-            # Build child spans and enrich parent from events
-            child_spans, event_start, event_end = _build_child_spans(
-                events,
-                trace_id,
-                span_id,
-                session_id,
-                start_time,
-                attrs,
-            )
-            if event_start != start_time or event_end != start_time:
-                start_time = event_start
-                end_time = event_end
-
-            # Build and send
-            parent_span = build_span(
-                f"Turn {trace_count}",
-                "LLM",
-                span_id,
-                trace_id,
-                "",
-                start_time,
-                end_time,
-                attrs,
-                SERVICE_NAME,
-                SCOPE_NAME,
-            )
-
-            if child_spans:
-                all_spans = [parent_span] + child_spans
-                multi_payload = build_multi_span(all_spans, SERVICE_NAME, SCOPE_NAME)
-                _send_span(multi_payload)
-            else:
-                _send_span(parent_span)
-
-            log(f"Drained conversation {conv_id}: turn {trace_count}, {len(child_spans)} children")
-
-    except Exception as e:
-        error(f"codex drain-idle failed: {e}")
 
 
 if __name__ == "__main__":

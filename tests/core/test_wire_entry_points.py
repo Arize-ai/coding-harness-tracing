@@ -45,11 +45,6 @@ EXPECTED_HARNESS_ENTRY_POINTS = {
     "arize-hook-permission-denied": "tracing.claude_code.hooks.handlers:permission_denied",
     # Codex hooks
     "arize-hook-codex-notify": "tracing.codex.hooks.handlers:notify",
-    "arize-hook-codex-drain": "tracing.codex.hooks.handlers:drain_idle",
-    # Codex proxy
-    "arize-codex-proxy": "tracing.codex.hooks.proxy:main",
-    # Codex buffer
-    "arize-codex-buffer": "tracing.codex.codex_buffer_ctl:main",
     # Copilot hooks
     "arize-hook-copilot-session-start": "tracing.copilot.hooks.handlers:session_start",
     "arize-hook-copilot-user-prompt": "tracing.copilot.hooks.handlers:user_prompt_submitted",
@@ -129,10 +124,6 @@ class TestPyprojectEntryPointsUpdated:
         """pyproject.toml must not reference core.hooks anywhere in entry points."""
         assert "core.hooks" not in self.pyproject_text
 
-    def test_no_core_codex_buffer_ctl_in_pyproject(self):
-        """pyproject.toml must not reference core.codex_buffer_ctl."""
-        assert "core.codex_buffer_ctl" not in self.pyproject_text
-
     def test_total_entry_point_count(self):
         """Entry point count should match expected harness + setup + arize-config."""
         expected_count = (
@@ -193,9 +184,7 @@ class TestInstalledScripts:
         "script,expected_import",
         [
             ("arize-hook-session-start", "from tracing.claude_code.hooks.handlers import session_start"),
-            ("arize-codex-buffer", "from tracing.codex.codex_buffer_ctl import main"),
             ("arize-hook-codex-notify", "from tracing.codex.hooks.handlers import notify"),
-            ("arize-codex-proxy", "from tracing.codex.hooks.proxy import main"),
             ("arize-hook-cursor", "from tracing.cursor.hooks.handlers import main"),
             ("arize-hook-copilot-session-start", "from tracing.copilot.hooks.handlers import session_start"),
             ("arize-hook-gemini-session-start", "from tracing.gemini.hooks.handlers import session_start"),
@@ -213,8 +202,6 @@ class TestInstalledScripts:
         [
             "arize-hook-session-start",
             "arize-hook-codex-notify",
-            "arize-codex-proxy",
-            "arize-codex-buffer",
             "arize-hook-cursor",
             "arize-hook-copilot-session-start",
             "arize-hook-gemini-session-start",
@@ -240,7 +227,7 @@ class TestHooksDirsInHarnessPackages:
         "pkg,expected_files",
         [
             ("tracing/claude_code", ["__init__.py", "adapter.py", "handlers.py"]),
-            ("tracing/codex", ["__init__.py", "adapter.py", "handlers.py", "proxy.py"]),
+            ("tracing/codex", ["__init__.py", "adapter.py", "handlers.py"]),
             ("tracing/copilot", ["__init__.py", "adapter.py", "handlers.py"]),
             ("tracing/cursor", ["__init__.py", "adapter.py", "handlers.py"]),
             ("tracing/gemini", ["__init__.py", "adapter.py", "handlers.py"]),
@@ -252,27 +239,3 @@ class TestHooksDirsInHarnessPackages:
         assert hooks_dir.is_dir(), f"{pkg}/hooks/ must exist"
         for fname in expected_files:
             assert (hooks_dir / fname).is_file(), f"{pkg}/hooks/{fname} must exist"
-
-    def test_codex_buffer_files_in_tracing_codex(self):
-        """codex_buffer.py and codex_buffer_ctl.py live in tracing/codex/."""
-        assert (REPO_ROOT / "tracing" / "codex" / "codex_buffer.py").is_file()
-        assert (REPO_ROOT / "tracing" / "codex" / "codex_buffer_ctl.py").is_file()
-
-    def test_codex_buffer_not_in_core(self):
-        """codex_buffer files must NOT exist in core/."""
-        assert not (REPO_ROOT / "core" / "codex_buffer.py").exists()
-        assert not (REPO_ROOT / "core" / "codex_buffer_ctl.py").exists()
-
-
-# ---------------------------------------------------------------------------
-# 8. Coverage omit updated
-# ---------------------------------------------------------------------------
-
-
-class TestCoverageConfig:
-    """pyproject.toml coverage omit uses tracing/codex/ path."""
-
-    def test_coverage_omit_path(self):
-        text = (REPO_ROOT / "pyproject.toml").read_text()
-        assert "tracing/codex/codex_buffer.py" in text
-        assert "core/codex_buffer.py" not in text

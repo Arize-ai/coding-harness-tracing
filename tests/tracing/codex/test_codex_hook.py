@@ -1,902 +1,575 @@
 #!/usr/bin/env python3
-"""Tests for tracing.codex.hooks.handlers — the Codex notify hook handler."""
+"""Tests for tracing.codex.hooks.handlers — rollout-driven notify handler."""
+
+from __future__ import annotations
 
 import json
 import sys
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
 import pytest
 
-from core.common import StateManager
 from tracing.codex.hooks.handlers import (
-    _as_text,
-    _build_child_spans,
-    _drain_events,
-    _extract_token_counts,
-    _extract_user_prompt,
-    _find_token_usage,
-    _find_tool_calls,
-    _flex_get,
+    _build_and_send_spans,
+    _extract_turn_from_rollout,
+    _find_rollout_file,
     _handle_notify,
-    _send_span,
+    _iso_to_ms,
+    _send_legacy_single_span,
     notify,
 )
 
 
 @pytest.fixture(autouse=True)
-def _mock_sleep(monkeypatch):
-    """Mock time.sleep to prevent real delays while tracking calls."""
-    sleep_calls = []
-    monkeypatch.setattr("time.sleep", lambda s: sleep_calls.append(s))
-    return sleep_calls
-
-
-@pytest.fixture(autouse=True)
 def _enable_logging(monkeypatch):
-    """Existing assertions expect raw content; opt in to all logging by default."""
+    """Opt in to raw content so assertions can check redacted text."""
     monkeypatch.setenv("ARIZE_LOG_PROMPTS", "true")
     monkeypatch.setenv("ARIZE_LOG_TOOL_DETAILS", "true")
     monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "true")
+    monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sessions_root(tmp_path, monkeypatch):
+    """Point _CODEX_SESSIONS_ROOT at a temp dir so tests don't read real rollouts."""
+    import tracing.codex.hooks.handlers as h
+
+    monkeypatch.setattr(h, "_CODEX_SESSIONS_ROOT", tmp_path / "sessions")
+    return tmp_path
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Small helpers
 # ---------------------------------------------------------------------------
 
 
-class _DrainHandler(BaseHTTPRequestHandler):
-    """Mock collector that responds to /drain/ requests."""
-
-    def do_GET(self):
-        if self.path.startswith("/drain/"):
-            resp = json.dumps(self.server._drain_response).encode()
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
-        self.server._received.append(json.loads(body))
-        self.send_response(200)
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        pass
+def _write_rollout(tmp_path, session_id, *records, day="20"):
+    """Write a rollout JSONL under the standard YYYY/MM/DD path. Returns the path."""
+    folder = tmp_path / "sessions" / "2026" / "05" / day
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"rollout-2026-05-{day}T00-00-00-{session_id}.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    return path
 
 
-@pytest.fixture
-def drain_server():
-    """Start a mock collector with configurable drain response.
-
-    Yields dict with: port, set_drain_response(data), received (list of POSTed spans).
-    """
-    server = HTTPServer(("127.0.0.1", 0), _DrainHandler)
-    server._drain_response = []
-    server._received = []
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    def set_drain(data):
-        server._drain_response = data
-
-    yield {
-        "port": port,
-        "set_drain": set_drain,
-        "received": server._received,
-    }
-    server.shutdown()
+def _evt(payload):
+    return {"timestamp": "2026-05-20T00:00:00.000Z", "type": "event_msg", "payload": payload}
 
 
-@pytest.fixture
-def codex_state(tmp_harness_dir):
-    """Create a Codex StateManager pointed at the temp harness dir."""
-    import core.constants as c
+def _resp(payload, ts="2026-05-20T00:00:01.000Z"):
+    return {"timestamp": ts, "type": "response_item", "payload": payload}
 
-    state_dir = c.STATE_BASE_DIR / "codex"
-    state_dir.mkdir(parents=True, exist_ok=True)
 
-    # Also patch the adapter's STATE_DIR
-    import tracing.codex.hooks.adapter as adapter
-
-    original_state_dir = adapter.STATE_DIR
-    adapter.STATE_DIR = state_dir
-
-    sm = StateManager(
-        state_dir=state_dir,
-        state_file=state_dir / "state_test-thread.yaml",
-        lock_path=state_dir / ".lock_test-thread",
-    )
-    sm.init_state()
-    yield sm
-
-    adapter.STATE_DIR = original_state_dir
+def _attrs_of_span(span):
+    return {a["key"]: a["value"] for a in span["attributes"]}
 
 
 # ---------------------------------------------------------------------------
-# Event filtering tests
+# _iso_to_ms
 # ---------------------------------------------------------------------------
 
 
-class TestEventFiltering:
+class TestIsoToMs:
 
-    def test_agent_turn_complete_processed(self, tmp_harness_dir, monkeypatch):
-        """type: agent-turn-complete processes normally."""
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", "19999")  # unreachable port
+    def test_valid_iso_with_Z(self):
+        assert _iso_to_ms("2026-05-20T23:42:45.649Z") > 0
 
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
+    def test_valid_iso_with_offset(self):
+        assert _iso_to_ms("2026-05-20T23:42:45.649+00:00") > 0
 
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
+    def test_empty_returns_zero(self):
+        assert _iso_to_ms("") == 0
 
-        # Mock _send_span to capture what was sent
-        sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
-            _handle_notify(
+    def test_bad_format_returns_zero(self):
+        assert _iso_to_ms("not-a-date") == 0
+
+
+# ---------------------------------------------------------------------------
+# _find_rollout_file
+# ---------------------------------------------------------------------------
+
+
+class TestFindRolloutFile:
+
+    def test_returns_none_when_root_missing(self, tmp_path):
+        nonexistent = tmp_path / "no" / "sessions"
+        assert _find_rollout_file("s1", sessions_root=nonexistent) is None
+
+    def test_returns_none_for_empty_session_id(self, tmp_path):
+        (tmp_path / "sessions").mkdir()
+        assert _find_rollout_file("", sessions_root=tmp_path / "sessions") is None
+
+    def test_matches_by_session_id(self, tmp_path):
+        path = _write_rollout(tmp_path, "sess-abc", _evt({"type": "task_started", "turn_id": "t"}))
+        found = _find_rollout_file("sess-abc", sessions_root=tmp_path / "sessions")
+        assert found == path
+
+
+# ---------------------------------------------------------------------------
+# _extract_turn_from_rollout
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTurnFromRollout:
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        from pathlib import Path
+
+        assert _extract_turn_from_rollout(Path(str(tmp_path / "missing.jsonl")), "t1") is None
+
+    def test_returns_none_for_empty_turn_id(self, tmp_path):
+        path = _write_rollout(tmp_path, "s1", _evt({"type": "task_started", "turn_id": "t1"}))
+        assert _extract_turn_from_rollout(path, "") is None
+
+    def test_returns_none_when_turn_not_found(self, tmp_path):
+        path = _write_rollout(tmp_path, "s1", _evt({"type": "task_started", "turn_id": "other"}))
+        assert _extract_turn_from_rollout(path, "missing") is None
+
+    def test_extracts_user_prompt_and_assistant_message(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}),
+            _evt({"type": "user_message", "message": "hello"}),
+            _evt({"type": "agent_message", "message": "world"}),
+            _evt(
                 {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t1",
-                    "turn-id": "turn1",
-                    "input-messages": [{"role": "user", "content": "hello"}],
-                    "last-assistant-message": "world",
+                    "type": "task_complete",
+                    "turn_id": "t1",
+                    "last_agent_message": "world",
+                    "completed_at": 1010,
+                    "duration_ms": 10000,
                 }
-            )
-
-        assert len(sent) == 1
-        # Verify it's an OTLP payload
-        assert "resourceSpans" in sent[0]
-
-    def test_non_agent_turn_ignored(self, monkeypatch, capsys):
-        """type: session-start is ignored."""
-        monkeypatch.setenv("ARIZE_VERBOSE", "true")
-        _handle_notify({"type": "session-start"})
-        # No crash, no span sent
-
-    def test_missing_type_ignored(self, monkeypatch):
-        """Missing type field is ignored."""
-        _handle_notify({})
-        # No crash
-
-
-# ---------------------------------------------------------------------------
-# _flex_get tests
-# ---------------------------------------------------------------------------
-
-
-class TestFlexGet:
-
-    def test_hyphenated_key(self):
-        assert _flex_get({"thread-id": "abc"}, "thread-id", "thread_id", "threadId") == "abc"
-
-    def test_underscored_key(self):
-        assert _flex_get({"thread_id": "abc"}, "thread-id", "thread_id", "threadId") == "abc"
-
-    def test_camel_case_key(self):
-        assert _flex_get({"threadId": "abc"}, "thread-id", "thread_id", "threadId") == "abc"
-
-    def test_none_returns_default(self):
-        assert _flex_get({}, "thread-id", "thread_id", "threadId") == ""
-
-    def test_custom_default(self):
-        assert _flex_get({}, "a", "b", default="fallback") == "fallback"
-
-    def test_first_match_wins(self):
-        d = {"thread-id": "first", "thread_id": "second"}
-        assert _flex_get(d, "thread-id", "thread_id") == "first"
-
-    def test_skips_empty_string(self):
-        d = {"thread-id": "", "thread_id": "found"}
-        assert _flex_get(d, "thread-id", "thread_id") == "found"
-
-    def test_skips_none_value(self):
-        d = {"thread-id": None, "thread_id": "found"}
-        assert _flex_get(d, "thread-id", "thread_id") == "found"
-
-
-# ---------------------------------------------------------------------------
-# _as_text tests
-# ---------------------------------------------------------------------------
-
-
-class TestAsText:
-
-    def test_none(self):
-        assert _as_text(None) == ""
-
-    def test_string(self):
-        assert _as_text("hello") == "hello"
-
-    def test_list(self):
-        assert _as_text(["a", "b"]) == "a\nb"
-
-    def test_dict_text_key(self):
-        assert _as_text({"text": "hello"}) == "hello"
-
-    def test_dict_content_key(self):
-        assert _as_text({"content": "hello"}) == "hello"
-
-    def test_nested_dict(self):
-        assert _as_text({"content": {"text": "nested"}}) == "nested"
-
-    def test_dict_fallback_json(self):
-        result = _as_text({"foo": "bar"})
-        assert "foo" in result
-        assert "bar" in result
-
-    def test_number(self):
-        assert _as_text(42) == "42"
-
-    def test_nested_list_of_dicts(self):
-        data = [{"text": "a"}, {"text": "b"}]
-        assert _as_text(data) == "a\nb"
-
-    def test_deeply_nested(self):
-        data = {"content": {"message": {"text": "deep"}}}
-        assert _as_text(data) == "deep"
-
-    def test_empty_string(self):
-        assert _as_text("") == ""
-
-    def test_empty_list(self):
-        assert _as_text([]) == ""
-
-
-# ---------------------------------------------------------------------------
-# _extract_user_prompt tests
-# ---------------------------------------------------------------------------
-
-
-class TestExtractUserPrompt:
-
-    def test_list_of_messages_last_user(self):
-        messages = [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "response"},
-            {"role": "user", "content": "second"},
-        ]
-        assert _extract_user_prompt(messages) == "second"
-
-    def test_list_of_strings(self):
-        assert _extract_user_prompt(["", "hello", "world"]) == "world"
-
-    def test_plain_string(self):
-        assert _extract_user_prompt("hello") == "hello"
-
-    def test_empty_list(self):
-        assert _extract_user_prompt([]) == ""
-
-    def test_none_input(self):
-        assert _extract_user_prompt(None) == ""
-
-    def test_nested_content(self):
-        messages = [{"role": "user", "content": {"text": "nested"}}]
-        assert _extract_user_prompt(messages) == "nested"
-
-    def test_mixed_types_in_list(self):
-        """If no user-role message, falls back to last string."""
-        messages = [{"role": "assistant", "content": "skip"}, "fallback"]
-        assert _extract_user_prompt(messages) == "fallback"
-
-
-# ---------------------------------------------------------------------------
-# Truncation and empty assistant tests
-# ---------------------------------------------------------------------------
-
-
-class TestTruncationAndDefaults:
-
-    def test_empty_assistant_becomes_no_response(self, tmp_harness_dir, monkeypatch):
-        """Empty assistant output becomes '(No response)'."""
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", "19999")
-
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
-
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-
-        sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
-            _handle_notify(
-                {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t1",
-                    "input-messages": "hello",
-                    "last-assistant-message": "",
-                }
-            )
-
-        span = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-        attrs = {a["key"]: a["value"] for a in span["attributes"]}
-        assert attrs["output.value"]["stringValue"] == "(No response)"
-
-
-# ---------------------------------------------------------------------------
-# Token enrichment tests (from payload)
-# ---------------------------------------------------------------------------
-
-
-class TestFindTokenUsage:
-
-    def test_finds_at_root(self):
-        data = {"token_usage": {"prompt_tokens": 10, "completion_tokens": 20}}
-        assert _find_token_usage(data) == {"prompt_tokens": 10, "completion_tokens": 20}
-
-    def test_finds_in_last_assistant_message(self):
-        data = {"last-assistant-message": {"usage": {"prompt_tokens": 5}}}
-        assert _find_token_usage(data) == {"prompt_tokens": 5}
-
-    def test_returns_none_when_absent(self):
-        assert _find_token_usage({"type": "agent-turn-complete"}) is None
-
-    def test_finds_hyphenated_key(self):
-        data = {"token-usage": {"input_tokens": 42}}
-        assert _find_token_usage(data) == {"input_tokens": 42}
-
-
-class TestExtractTokenCounts:
-
-    def test_standard_keys(self):
-        usage = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
-        counts = _extract_token_counts(usage)
-        assert counts == {"prompt": 10, "completion": 20, "total": 30}
-
-    def test_camel_case_keys(self):
-        usage = {"inputTokens": 15, "outputTokens": 25}
-        counts = _extract_token_counts(usage)
-        assert counts["prompt"] == 15
-        assert counts["completion"] == 25
-
-    def test_auto_compute_total(self):
-        usage = {"prompt_tokens": 10, "completion_tokens": 20}
-        counts = _extract_token_counts(usage)
-        assert counts["total"] == 30
-
-    def test_string_values_converted(self):
-        usage = {"prompt_tokens": "10", "completion_tokens": "20"}
-        counts = _extract_token_counts(usage)
-        assert counts["prompt"] == 10
-        assert counts["completion"] == 20
-        assert counts["total"] == 30
-
-    def test_empty_usage(self):
-        counts = _extract_token_counts({})
-        assert counts == {"prompt": None, "completion": None, "total": None}
-
-
-# ---------------------------------------------------------------------------
-# Tool call extraction tests
-# ---------------------------------------------------------------------------
-
-
-class TestFindToolCalls:
-
-    def test_finds_at_root(self):
-        data = {"tool_calls": [{"name": "edit"}, {"name": "run"}]}
-        result = _find_tool_calls(data)
-        assert len(result) == 2
-
-    def test_finds_in_last_assistant_message(self):
-        data = {"last-assistant-message": {"toolCalls": [{"name": "search"}]}}
-        result = _find_tool_calls(data)
-        assert len(result) == 1
-
-    def test_returns_none_when_absent(self):
-        assert _find_tool_calls({"type": "test"}) is None
-
-    def test_tool_count_and_preview(self, tmp_harness_dir, monkeypatch):
-        """Tool count attr set, preview is first 5, omitted count for > 5."""
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", "19999")
-
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
-
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-
-        tools = [{"name": f"tool{i}"} for i in range(8)]
-        sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
-            _handle_notify(
-                {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t-tools",
-                    "input-messages": "test",
-                    "last-assistant-message": "done",
-                    "tool_calls": tools,
-                }
-            )
-
-        span = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-        attrs = {a["key"]: a["value"] for a in span["attributes"]}
-        assert attrs["llm.tool_call_count"]["intValue"] == 8
-        preview = json.loads(attrs["llm.tool_calls"]["stringValue"])
-        assert len(preview) == 5
-        assert attrs["llm.tool_calls_omitted"]["intValue"] == 3
-
-    def test_no_tool_calls_no_attrs(self, tmp_harness_dir, monkeypatch):
-        """When no tool calls found, no tool attributes on span."""
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", "19999")
-
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
-
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-
-        sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
-            _handle_notify(
-                {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t-no-tools",
-                    "input-messages": "test",
-                    "last-assistant-message": "done",
-                }
-            )
-
-        span = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-        attr_keys = {a["key"] for a in span["attributes"]}
-        assert "llm.tool_call_count" not in attr_keys
-        assert "llm.tool_calls" not in attr_keys
-
-
-# ---------------------------------------------------------------------------
-# Event drain tests
-# ---------------------------------------------------------------------------
-
-
-class TestDrainEvents:
-
-    def test_drain_returns_events(self, drain_server, codex_state):
-        """Drain with events returns parsed list."""
-        events = [
-            {"event": "codex.tool_decision", "time_ns": "1000000000", "attrs": {"tool_name": "edit"}},
-        ]
-        drain_server["set_drain"](events)
-
-        result = _drain_events("test-thread", codex_state, drain_server["port"])
-        assert len(result) == 1
-        assert result[0]["event"] == "codex.tool_decision"
-
-    def test_drain_empty_returns_empty(self, drain_server, codex_state):
-        """Empty drain response returns []."""
-        drain_server["set_drain"]([])
-        result = _drain_events("test-thread", codex_state, drain_server["port"])
-        assert result == []
-
-    def test_drain_missing_thread_id(self, codex_state):
-        """Missing thread_id skips drain entirely."""
-        result = _drain_events("", codex_state, 9999)
-        assert result == []
-
-    def test_drain_retry_second_attempt(self, codex_state, _mock_sleep):
-        """First attempt returns [], second returns events; sleep called with correct delay."""
-        attempt_count = [0]
-        events = [{"event": "codex.api_request", "time_ns": "5000000000", "attrs": {}}]
-
-        class RetryHandler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                attempt_count[0] += 1
-                if attempt_count[0] == 1:
-                    resp = b"[]"
-                else:
-                    resp = json.dumps(events).encode()
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(resp)))
-                self.end_headers()
-                self.wfile.write(resp)
-
-            def log_message(self, format, *args):
-                pass
-
-        server = HTTPServer(("127.0.0.1", 0), RetryHandler)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            result = _drain_events("test-thread", codex_state, port)
-            assert len(result) == 1
-            assert attempt_count[0] == 2
-            # Verify retry sleep was called with the correct delay (1.2s for second attempt)
-            assert _mock_sleep == [1.2]
-        finally:
-            server.shutdown()
-
-    def test_drain_saves_last_collector_time(self, tmp_harness_dir, monkeypatch, drain_server):
-        """last_collector_time_ns saved in state after successful drain."""
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
-
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", str(drain_server["port"]))
-
-        events = [
-            {"event": "codex.tool_decision", "time_ns": "2000000000", "attrs": {}},
-            {"event": "codex.tool_result", "time_ns": "3000000000", "attrs": {}},
-        ]
-        drain_server["set_drain"](events)
-
-        sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
-            _handle_notify(
-                {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t-drain",
-                    "input-messages": "test",
-                    "last-assistant-message": "done",
-                }
-            )
-
-        # Verify state was updated
-        sm = StateManager(
-            state_dir=state_dir,
-            state_file=state_dir / "state_t-drain.yaml",
+            ),
         )
-        assert sm.get("last_collector_time_ns") == "3000000000"
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn is not None
+        assert turn["user_prompt"] == "hello"
+        assert turn["assistant_output"] == "world"
+        assert turn["turn_start_ms"] == 1000 * 1000
+        assert turn["turn_end_ms"] == 1010 * 1000
+        assert turn["duration_ms"] == 10000
 
-
-# ---------------------------------------------------------------------------
-# Child span building tests
-# ---------------------------------------------------------------------------
-
-
-class TestBuildChildSpans:
-
-    def test_tool_decision_with_result(self):
-        """tool_decision + matching tool_result -> TOOL child span."""
-        events = [
-            {
-                "event": "codex.tool_decision",
-                "time_ns": "1000000000",
-                "attrs": {"tool_name": "edit_file", "approved": "true"},
-            },
-            {
-                "event": "codex.tool_result",
-                "time_ns": "2000000000",
-                "attrs": {"tool_name": "edit_file", "output": "File edited"},
-            },
-        ]
-        attrs = {}
-        children, start, end = _build_child_spans(
-            events,
-            "trace123",
-            "parent456",
-            "sess1",
-            1000,
-            attrs,
+    def test_task_complete_overrides_intermediate_agent_message(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt({"type": "agent_message", "message": "interim"}),
+            _evt({"type": "task_complete", "turn_id": "t1", "last_agent_message": "final"}),
         )
-        assert len(children) == 1
-        span = children[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-        assert span["name"] == "edit_file"
-        span_attrs = {a["key"]: a["value"] for a in span["attributes"]}
-        assert span_attrs["openinference.span.kind"]["stringValue"] == "TOOL"
-        assert span_attrs["output.value"]["stringValue"] == "File edited"
-        assert span_attrs["codex.tool.approval_status"]["stringValue"] == "true"
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["assistant_output"] == "final"
 
-    def test_tool_decision_without_matching_result(self):
-        """tool_decision without matching result uses fallback timing."""
-        events = [
+    def test_turn_context_supplies_model_cwd_permission(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
             {
-                "event": "codex.tool_decision",
-                "time_ns": "1000000000",
-                "attrs": {"tool_name": "search"},
-            },
-        ]
-        attrs = {}
-        children, _, _ = _build_child_spans(
-            events,
-            "trace123",
-            "parent456",
-            "sess1",
-            1000,
-            attrs,
-        )
-        assert len(children) == 1
-        span = children[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-        assert span["name"] == "search"
-
-
-# ---------------------------------------------------------------------------
-# Event enrichment tests
-# ---------------------------------------------------------------------------
-
-
-class TestEventEnrichment:
-
-    def test_model_name_from_conversation_starts(self):
-        """codex.conversation_starts enriches llm.model_name on parent."""
-        events = [
-            {"event": "codex.conversation_starts", "time_ns": "1000000000", "attrs": {"model": "o3-mini"}},
-        ]
-        attrs = {}
-        _build_child_spans(events, "t", "p", "s", 1000, attrs)
-        assert attrs["llm.model_name"] == "o3-mini"
-
-    def test_token_enrichment_from_sse(self):
-        """codex.sse_event with response.completed enriches token counts."""
-        events = [
-            {
-                "event": "codex.sse_event",
-                "time_ns": "2000000000",
-                "attrs": {
-                    "type": "response.completed",
-                    "prompt_tokens": 100,
-                    "completion_tokens": 50,
+                "timestamp": "2026-05-20T00:00:00Z",
+                "type": "turn_context",
+                "payload": {
+                    "turn_id": "t1",
+                    "model": "gpt-5.5",
+                    "cwd": "/x",
+                    "approval_policy": "on-request",
+                    "sandbox_policy": {"type": "workspace-write"},
                 },
             },
-        ]
-        attrs = {}
-        _build_child_spans(events, "t", "p", "s", 1000, attrs)
-        assert attrs["llm.token_count.prompt"] == 100
-        assert attrs["llm.token_count.completion"] == 50
-        assert attrs["llm.token_count.total"] == 150
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["model"] == "gpt-5.5"
+        assert turn["cwd"] == "/x"
+        assert turn["permission_mode"] == "on-request"
+        assert turn["sandbox_mode"] == "workspace-write"
 
-    def test_sandbox_approval_from_conversation_starts(self):
-        """codex.conversation_starts enriches sandbox/approval mode."""
-        events = [
-            {
-                "event": "codex.conversation_starts",
-                "time_ns": "1000000000",
-                "attrs": {"sandbox": "docker", "approval_mode": "auto"},
-            },
-        ]
-        attrs = {}
-        _build_child_spans(events, "t", "p", "s", 1000, attrs)
-        assert attrs["codex.sandbox_mode"] == "docker"
-        assert attrs["codex.approval_mode"] == "auto"
+    def test_token_count_summed(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 100,
+                            "output_tokens": 20,
+                            "total_tokens": 120,
+                            "cached_input_tokens": 80,
+                            "reasoning_output_tokens": 5,
+                        }
+                    },
+                }
+            ),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 50,
+                            "output_tokens": 10,
+                            "total_tokens": 60,
+                        }
+                    },
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        usage = turn["token_usage"]
+        assert usage["prompt_tokens"] == 150
+        assert usage["completion_tokens"] == 30
+        assert usage["total_tokens"] == 180
+        assert usage["cached_input_tokens"] == 80
+        assert usage["reasoning_output_tokens"] == 5
 
-    def test_timing_adjusted_from_events(self):
-        """Timing adjusted from event timestamps (min -> start, max -> end)."""
-        events = [
-            {"event": "codex.tool_decision", "time_ns": "2000000000", "attrs": {"tool_name": "x"}},
-            {"event": "codex.tool_result", "time_ns": "5000000000", "attrs": {"tool_name": "x"}},
-        ]
-        attrs = {}
-        children, start, end = _build_child_spans(events, "t", "p", "s", 1000, attrs)
-        assert start == 2000  # 2000000000 / 1_000_000
-        assert end == 5000  # 5000000000 / 1_000_000
-        assert attrs["codex.trace.duration_ms"] == 3000
+    def test_function_call_pairs_with_output_by_call_id(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _resp(
+                {"type": "function_call", "name": "exec_command", "arguments": '{"cmd":"ls"}', "call_id": "c1"},
+                ts="2026-05-20T00:00:01.000Z",
+            ),
+            _resp(
+                {"type": "function_call_output", "call_id": "c1", "output": "file1\nfile2"},
+                ts="2026-05-20T00:00:02.000Z",
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert len(turn["tool_calls"]) == 1
+        tc = turn["tool_calls"][0]
+        assert tc["tool"] == "exec_command"
+        assert tc["call_id"] == "c1"
+        assert tc["args"] == '{"cmd":"ls"}'
+        assert tc["output"] == "file1\nfile2"
+        assert tc["end_ts"] > tc["start_ts"]
+
+    def test_web_search_call_pairs_with_preceding_end(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt({"type": "web_search_end", "call_id": "ws_1", "query": "weather"}),
+            _resp({"type": "web_search_call", "status": "completed", "action": {"type": "search", "query": "weather"}}),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert len(turn["tool_calls"]) == 1
+        tc = turn["tool_calls"][0]
+        assert tc["tool"] == "web_search"
+        assert tc["call_id"] == "ws_1"
+        assert tc["args"] == "weather"
+        assert tc["output"] == "completed"
+
+    def test_web_search_open_page_action(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "web_search_end",
+                    "call_id": "ws_2",
+                    "action": {"type": "open_page", "url": "https://example.com"},
+                }
+            ),
+            _resp(
+                {
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {"type": "open_page", "url": "https://example.com"},
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["tool_calls"][0]["tool"] == "open_page"
+        assert turn["tool_calls"][0]["args"] == "https://example.com"
+
+    def test_stops_at_next_task_started(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _resp({"type": "function_call", "name": "x", "arguments": "", "call_id": "c1"}),
+            _evt({"type": "task_started", "turn_id": "t2"}),
+            _resp({"type": "function_call", "name": "y", "arguments": "", "call_id": "c2"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert len(turn["tool_calls"]) == 1
+        assert turn["tool_calls"][0]["tool"] == "x"
+
+    def test_trace_count_counts_task_started_events(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+            _evt({"type": "task_started", "turn_id": "t2"}),
+            _evt({"type": "task_complete", "turn_id": "t2"}),
+        )
+        # trace_count for t1 is 1; for t2 is 2.
+        assert _extract_turn_from_rollout(path, "t1")["trace_count"] == 1
+        assert _extract_turn_from_rollout(path, "t2")["trace_count"] == 2
+
+    def test_skips_malformed_lines(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(
+            "not json\n"
+            + json.dumps(_evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}))
+            + "\n"
+            + "{also broken\n"
+            + json.dumps(_evt({"type": "user_message", "message": "hi"}))
+            + "\n"
+            + json.dumps(_evt({"type": "task_complete", "turn_id": "t1"}))
+            + "\n"
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "hi"
 
 
 # ---------------------------------------------------------------------------
-# Multi-span assembly tests
+# _build_and_send_spans
 # ---------------------------------------------------------------------------
 
 
-class TestMultiSpanAssembly:
+class TestBuildAndSendSpans:
 
-    def test_with_children_sends_multi_span(self, tmp_harness_dir, monkeypatch, drain_server):
-        """With child spans, multi-span payload sent (parent + children)."""
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
-
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", str(drain_server["port"]))
-
-        drain_server["set_drain"](
-            [
-                {"event": "codex.tool_decision", "time_ns": "1000000000", "attrs": {"tool_name": "edit"}},
-                {"event": "codex.tool_result", "time_ns": "2000000000", "attrs": {"tool_name": "edit", "output": "ok"}},
-            ]
+    def _send_capture(self):
+        sent = []
+        return sent, mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
         )
 
-        sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
-            _handle_notify(
+    def test_multi_span_with_one_tool(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "codex")
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 2000,
+            "duration_ms": 1000,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+            "model": "gpt-5.5",
+            "cwd": "/x",
+            "permission_mode": "on-request",
+            "sandbox_mode": "workspace-write",
+            "token_usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "model": "gpt-5.5",
+            },
+            "tool_calls": [
                 {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t-multi",
-                    "input-messages": "test",
-                    "last-assistant-message": "done",
-                }
-            )
+                    "tool": "exec_command",
+                    "args": '{"cmd":"ls"}',
+                    "output": "ok",
+                    "call_id": "c1",
+                    "start_ts": 1100,
+                    "end_ts": 1200,
+                    "decision": None,
+                },
+            ],
+        }
+
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
 
         assert len(sent) == 1
         spans = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
         assert len(spans) == 2  # parent + 1 child
-        names = [s["name"] for s in spans]
-        assert any("Turn" in n for n in names)
-        assert "edit" in names
 
-    def test_without_children_sends_single_span(self, tmp_harness_dir, monkeypatch):
-        """Without child spans, single parent span sent."""
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
+        parent_attrs = _attrs_of_span(spans[0])
+        assert parent_attrs["input.value"]["stringValue"] == "hi"
+        assert parent_attrs["output.value"]["stringValue"] == "hello"
+        assert parent_attrs["llm.model_name"]["stringValue"] == "gpt-5.5"
+        assert parent_attrs["codex.approval_mode"]["stringValue"] == "on-request"
+        assert parent_attrs["codex.sandbox_mode"]["stringValue"] == "workspace-write"
+        assert parent_attrs["llm.token_count.total"]["intValue"] == 15
 
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", "19999")
+        child_attrs = _attrs_of_span(spans[1])
+        assert child_attrs["tool.name"]["stringValue"] == "exec_command"
+        assert child_attrs["codex.tool.call_id"]["stringValue"] == "c1"
+        assert child_attrs["input.value"]["stringValue"] == '{"cmd":"ls"}'
+        assert child_attrs["output.value"]["stringValue"] == "ok"
 
+    def test_single_span_when_no_tool_calls(self):
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 1500,
+            "duration_ms": 500,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+            "model": "",
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": None,
+            "tool_calls": [],
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+        spans = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert len(spans) == 1
+
+    def test_no_response_when_assistant_output_empty(self):
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 1500,
+            "duration_ms": 0,
+            "user_prompt": "hi",
+            "assistant_output": "",
+            "model": "",
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": None,
+            "tool_calls": [],
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["output.value"]["stringValue"] == "(No response)"
+
+
+# ---------------------------------------------------------------------------
+# _handle_notify end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestHandleNotify:
+
+    def test_ignores_non_agent_turn_complete(self):
+        with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend") as send:
+            _handle_notify({"type": "session-start"})
+        send.assert_not_called()
+
+    def test_falls_back_to_single_span_when_no_rollout(self, _isolate_sessions_root):
         sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
+        ):
             _handle_notify(
                 {
                     "type": "agent-turn-complete",
-                    "thread-id": "t-single",
-                    "input-messages": "test",
-                    "last-assistant-message": "done",
+                    "thread-id": "no-rollout-yet",
+                    "turn-id": "t1",
+                    "input-messages": [{"role": "user", "content": "hi"}],
+                    "last-assistant-message": "hello",
                 }
             )
 
         assert len(sent) == 1
         spans = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
-        assert len(spans) == 1  # parent only
+        assert len(spans) == 1
+        attrs = _attrs_of_span(spans[0])
+        assert attrs["codex.notify_fallback"]["stringValue"] == "true"
+        assert attrs["output.value"]["stringValue"] == "hello"
 
-    def test_debug_dumps_when_enabled(self, tmp_harness_dir, monkeypatch):
-        """Debug dumps written at each stage when trace_debug enabled."""
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
-
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_TRACE_DEBUG", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", "19999")
-
-        with mock.patch("tracing.codex.hooks.handlers._send_span"):
-            _handle_notify(
+    def test_extracts_from_rollout_and_ships_multi_span(self, _isolate_sessions_root):
+        _write_rollout(
+            _isolate_sessions_root,
+            "sess-real",
+            _evt({"type": "task_started", "turn_id": "turn-1", "started_at": 1000}),
+            _evt({"type": "user_message", "message": "do something"}),
+            _resp({"type": "function_call", "name": "exec_command", "arguments": '{"cmd":"ls"}', "call_id": "c1"}),
+            _resp({"type": "function_call_output", "call_id": "c1", "output": "file"}),
+            _evt(
                 {
-                    "type": "agent-turn-complete",
-                    "thread-id": "t-debug",
-                    "input-messages": "test",
-                    "last-assistant-message": "done",
+                    "type": "token_count",
+                    "info": {"last_token_usage": {"input_tokens": 5, "output_tokens": 1, "total_tokens": 6}},
                 }
-            )
-
-        debug_dir = c.STATE_BASE_DIR / "debug"
-        assert debug_dir.is_dir()
-        debug_files = list(debug_dir.glob("notify_t-debug_*.yaml"))
-        assert len(debug_files) >= 2  # at least _raw and _text dumps
-
-
-# ---------------------------------------------------------------------------
-# Integration test with fixture
-# ---------------------------------------------------------------------------
-
-
-class TestIntegration:
-
-    def test_full_handle_notify_with_fixture(self, tmp_harness_dir, monkeypatch, drain_server, codex_notify_input):
-        """Full _handle_notify with codex_notify fixture + mock drain."""
-        import core.constants as c
-        import tracing.codex.hooks.adapter as adapter
-
-        state_dir = c.STATE_BASE_DIR / "codex"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(adapter, "STATE_DIR", state_dir)
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-        monkeypatch.setenv("ARIZE_COLLECTOR_PORT", str(drain_server["port"]))
-
-        fixture = codex_notify_input
-
-        # Set up drain with some events
-        drain_server["set_drain"](
-            [
-                {"event": "codex.conversation_starts", "time_ns": "1000000000", "attrs": {"model": "gpt-4o"}},
-                {"event": "codex.api_request", "time_ns": "1500000000", "attrs": {"model": "gpt-4o", "status": "200"}},
-            ]
+            ),
+            _evt({"type": "task_complete", "turn_id": "turn-1", "last_agent_message": "done", "completed_at": 1010}),
         )
 
         sent = []
-        with mock.patch("tracing.codex.hooks.handlers._send_span", side_effect=lambda p: sent.append(p)):
-            _handle_notify(fixture)
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
+        ):
+            _handle_notify(
+                {
+                    "type": "agent-turn-complete",
+                    "thread-id": "sess-real",
+                    "turn-id": "turn-1",
+                }
+            )
 
         assert len(sent) == 1
-        payload = sent[0]
-        spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
-        assert len(spans) >= 1  # at least parent
-
-        # Verify parent span attributes
-        parent = spans[0]
-        attr_map = {a["key"]: a["value"] for a in parent["attributes"]}
-        assert "session.id" in attr_map
-        assert attr_map["openinference.span.kind"]["stringValue"] == "LLM"
-        assert attr_map["input.value"]["stringValue"] == "hello"
-        assert attr_map["output.value"]["stringValue"] == "I can help with that."
-        assert attr_map["codex.thread_id"]["stringValue"] == "thread-1"
+        spans = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert len(spans) == 2  # parent + 1 tool child
+        parent_attrs = _attrs_of_span(spans[0])
+        assert parent_attrs["input.value"]["stringValue"] == "do something"
+        assert parent_attrs["output.value"]["stringValue"] == "done"
+        assert parent_attrs["llm.token_count.total"]["intValue"] == 6
+        child_attrs = _attrs_of_span(spans[1])
+        assert child_attrs["tool.name"]["stringValue"] == "exec_command"
 
 
 # ---------------------------------------------------------------------------
-# Span sending tests
+# Notify CLI entry-point
 # ---------------------------------------------------------------------------
 
 
-class TestSendSpan:
+class TestNotifyEntryPoint:
 
-    def test_send_span_delegates_to_backend_sender(self):
-        """Codex hook sends completed spans via core.common.send_span()."""
-        payload = {
-            "resourceSpans": [
-                {
-                    "resource": {"attributes": []},
-                    "scopeSpans": [{"scope": {"name": "test"}, "spans": [{"name": "test-span"}]}],
-                }
-            ]
-        }
+    def test_tracing_disabled_returns_early(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "false")
+        with mock.patch.object(sys, "argv", ["hook", "{}"]):
+            with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend") as send:
+                notify()
+        send.assert_not_called()
 
-        with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend", return_value=True) as mock_send:
-            _send_span(payload)
-
-        mock_send.assert_called_once_with(payload)
-
-    def test_send_span_logs_error_when_backend_send_fails(self, capsys):
-        """Backend send failures are surfaced as Codex hook errors."""
-        payload = {
-            "resourceSpans": [
-                {
-                    "resource": {"attributes": []},
-                    "scopeSpans": [{"scope": {"name": "test"}, "spans": [{"name": "test-span"}]}],
-                }
-            ]
-        }
-
-        with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend", return_value=False):
-            _send_span(payload)
-
-        assert "Failed to send span to backend" in capsys.readouterr().err
-
-
-# ---------------------------------------------------------------------------
-# Error handling tests
-# ---------------------------------------------------------------------------
-
-
-class TestErrorHandling:
-
-    def test_exception_in_handle_notify_caught(self, monkeypatch, capsys):
-        """Exception in _handle_notify is caught by notify()."""
+    def test_missing_argv_defaults_to_empty(self, monkeypatch):
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-
-        with (
-            mock.patch("tracing.codex.hooks.handlers._handle_notify", side_effect=RuntimeError("boom")),
-            mock.patch.object(sys, "argv", ["hook", '{"type":"agent-turn-complete"}']),
-        ):
-            # Should not raise
-            notify()
-
-        captured = capsys.readouterr()
-        assert "boom" in captured.err
-
-    def test_invalid_json_handled(self, monkeypatch, capsys):
-        """Invalid JSON in argv is handled gracefully."""
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-
-        with mock.patch.object(sys, "argv", ["hook", "not-json"]):
-            notify()
-
-        captured = capsys.readouterr()
-        assert "codex notify hook failed" in captured.err
-
-    def test_no_argv_uses_empty_json(self, monkeypatch):
-        """No sys.argv[1] defaults to empty JSON."""
-        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
-
         with mock.patch.object(sys, "argv", ["hook"]):
-            # Should not raise — empty JSON means no "agent-turn-complete" type → early return
-            notify()
+            with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend") as send:
+                notify()
+        send.assert_not_called()
+
+    def test_malformed_json_does_not_raise(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch.object(sys, "argv", ["hook", "not json"]):
+            notify()  # caught internally; no raise
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-span fallback
+# ---------------------------------------------------------------------------
+
+
+class TestSendLegacySingleSpan:
+
+    def test_emits_one_span_with_fallback_marker(self):
+        sent = []
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
+        ):
+            _send_legacy_single_span(
+                "sess-x",
+                "turn-x",
+                {"last-assistant-message": "hi", "input-messages": [{"role": "user", "content": "yo"}]},
+            )
+        assert len(sent) == 1
+        spans = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert len(spans) == 1
+        attrs = _attrs_of_span(spans[0])
+        assert attrs["codex.notify_fallback"]["stringValue"] == "true"
+        assert attrs["input.value"]["stringValue"] == "yo"
+        assert attrs["output.value"]["stringValue"] == "hi"
