@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
-"""Codex notify hook handler.
+"""Codex notify handler -- rollout-JSONL-driven span emission.
 
-Registered as the ``arize-hook-codex-notify`` CLI entry point. Codex passes
-the notify event JSON on ``sys.argv[1]`` (NOT stdin); no stdout response is
-expected.
+Codex's `agent-turn-complete` notify callback is the only signal we listen
+for. When it fires, we locate the session's rollout JSONL at
+``~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<session_id>.jsonl`` and extract
+the full turn's data: user prompt, assistant message, token usage, and every
+tool call (shell, apply_patch, web_search, open_page) with structured args,
+output, and timing. We then ship one OTLP payload with the parent LLM span
+plus all TOOL child spans.
 
-Once Codex's lifecycle hooks (``SessionStart``/``UserPromptSubmit``/``Stop``)
-are trusted, this hook only writes ``pending_token_usage`` and
-``last_assistant_message`` into the per-thread state file so the ``Stop``
-hook can attach exact token counts to its parent span. Before hooks are
-trusted (first-run users who haven't approved ``/hooks`` yet), notify falls
-back to building a single LLM span from the notify payload directly.
+This replaces an earlier design that relied on Codex's lifecycle hooks
+(SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop). Those hooks
+only cover SOME tool types (shell/apply_patch but not web_search), use a
+brittle hook-payload schema, and require explicit ``/hooks`` trust approval.
+The rollout JSONL covers every tool, has a stable JSON schema, and is the
+single source of truth for the session.
+
+Input contract: JSON as ``sys.argv[1]`` (NOT stdin -- Codex passes notify
+JSON as a CLI argument). No stdout response expected.
 """
+from __future__ import annotations
+
 import json
-import os
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from core.common import (
     build_multi_span,
@@ -31,30 +39,19 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
-from tracing.codex.hooks import span_buffer
-from tracing.codex.hooks.adapter import (
-    SCOPE_NAME,
-    SERVICE_NAME,
-    check_requirements,
-    ensure_session_initialized,
-    gc_stale_state_files,
-    load_env_file,
-    resolve_session,
-)
+from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 
-# Root of Codex's per-session rollout transcripts. Files live under
-# `<root>/<YYYY>/<MM>/<DD>/rollout-<timestamp>-<session_id>.jsonl` and contain
-# the full event stream for the session, including structured token usage
-# events that aren't carried in the notify payload itself.
+# Root of Codex's per-session rollout transcripts.
 _CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 
+
 # ---------------------------------------------------------------------------
-# Payload helpers
+# Payload helpers (notify payload from Codex)
 # ---------------------------------------------------------------------------
 
 
-def _flex_get(d: dict, *keys, default=""):
-    """Try multiple key names, return first non-None/non-empty value."""
+def _flex_get(d: dict, *keys, default: str = "") -> str:
+    """Return the first non-empty value among `keys`, else `default`."""
     for key in keys:
         val = d.get(key)
         if val is not None and val != "":
@@ -62,130 +59,8 @@ def _flex_get(d: dict, *keys, default=""):
     return default
 
 
-def _flex_get_obj(d: dict, *keys):
-    """Like _flex_get but returns None instead of empty string default."""
-    for key in keys:
-        val = d.get(key)
-        if val is not None and val != "":
-            return val
-    return None
-
-
-def _nested_get(d: dict, *keys):
-    """Walk nested dicts by key sequence. Returns None if any step fails."""
-    current: Any = d
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def _as_text(node) -> str:
-    """Recursively extract text from a nested message structure."""
-    if node is None:
-        return ""
-    if isinstance(node, str):
-        return node
-    if isinstance(node, list):
-        return "\n".join(_as_text(item) for item in node)
-    if isinstance(node, dict):
-        for key in ("text", "content", "message", "data", "value"):
-            if key in node:
-                result = _as_text(node[key])
-                if result:
-                    return result
-        return json.dumps(node)
-    return str(node)
-
-
-def _extract_user_prompt(user_input) -> str:
-    """Extract the last user message from input-messages."""
-    if isinstance(user_input, list):
-        for msg in reversed(user_input):
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                text = _as_text(msg.get("content", ""))
-                if text:
-                    return text
-        for msg in reversed(user_input):
-            if isinstance(msg, str) and msg:
-                return msg
-        return ""
-    if isinstance(user_input, str):
-        return user_input
-    return str(user_input) if user_input else ""
-
-
 # ---------------------------------------------------------------------------
-# Token enrichment
-# ---------------------------------------------------------------------------
-
-
-def _find_token_usage(input_json: dict):
-    """Search for token usage dict in multiple payload locations."""
-    usage_keys = ("token_usage", "token-usage", "usage")
-    search_locations = [
-        input_json,
-        _flex_get_obj(input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"),
-        _nested_get(input_json, "last-assistant-message", "message"),
-    ]
-    for obj in search_locations:
-        if not isinstance(obj, dict):
-            continue
-        for key in usage_keys:
-            val = obj.get(key)
-            if isinstance(val, dict):
-                return val
-    return None
-
-
-def _extract_token_counts(usage: dict) -> dict:
-    """Extract prompt/completion/total counts, trying multiple key variants."""
-
-    def pick_first(*keys):
-        for k in keys:
-            val = usage.get(k)
-            if val is not None:
-                try:
-                    return int(val)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-    prompt = pick_first(
-        "prompt_tokens",
-        "input_tokens",
-        "promptTokens",
-        "inputTokens",
-        "prompt",
-        "input",
-        "cache_read_input_tokens",
-        "cache_creation_input_tokens",
-    )
-    completion = pick_first(
-        "completion_tokens",
-        "output_tokens",
-        "completionTokens",
-        "outputTokens",
-        "completion",
-        "output",
-    )
-    total = pick_first(
-        "total_tokens",
-        "totalTokens",
-        "tokens",
-        "token_count",
-        "overall",
-        "sum",
-    )
-    if total is None and prompt is not None and completion is not None:
-        total = prompt + completion
-
-    return {"prompt": prompt, "completion": completion, "total": total}
-
-
-# ---------------------------------------------------------------------------
-# Codex rollout JSONL parser -- token-usage source
+# Rollout location
 # ---------------------------------------------------------------------------
 
 
@@ -206,26 +81,39 @@ def _find_rollout_file(session_id: str, sessions_root: "Path | None" = None) -> 
     return None
 
 
-def _read_tokens_from_rollout(
-    session_id: str,
-    turn_id: str,
-    rollout_path: "Path | None" = None,
-) -> "dict | None":
-    """Extract a turn's token usage from Codex's session rollout JSONL.
+# ---------------------------------------------------------------------------
+# Rollout extraction
+# ---------------------------------------------------------------------------
 
-    The rollout contains structured `event_msg` records. We locate the
-    `task_started` event for our `turn_id`, then accumulate `last_token_usage`
-    from every `token_count` event up to the next `task_started` (or EOF).
-    This sums all LLM calls that ran during the turn.
 
-    Returns a dict shaped like `notify`'s expected token_usage (with
-    `prompt_tokens`, `completion_tokens`, `total_tokens`, plus the raw Codex
-    keys), or None if no matching turn or no token events are found.
+def _iso_to_ms(ts: str) -> int:
+    """Convert an ISO-8601 timestamp string (e.g. ``2026-05-20T23:42:45.649Z``) to ms.
+
+    Returns 0 on any parse failure -- callers tolerate zero timestamps.
     """
-    if not session_id or not turn_id:
-        return None
-    path = rollout_path if rollout_path is not None else _find_rollout_file(session_id)
-    if path is None or not path.is_file():
+    if not ts:
+        return 0
+    try:
+        # Python's fromisoformat doesn't accept the trailing Z prior to 3.11;
+        # normalize by swapping Z for +00:00 for compatibility.
+        normalized = ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        return int(dt.timestamp() * 1000)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None":
+    """Walk the rollout JSONL and extract everything for one turn.
+
+    Returns a dict with: ``trace_count``, ``turn_start_ms``, ``turn_end_ms``,
+    ``duration_ms``, ``user_prompt``, ``assistant_output``, ``model``, ``cwd``,
+    ``permission_mode``, ``sandbox_mode``, ``token_usage`` (or None), and
+    ``tool_calls`` (a list of ``{tool, args, output, call_id, start_ts, end_ts}``).
+
+    Returns None if the turn isn't found.
+    """
+    if not turn_id or not rollout_path.is_file():
         return None
 
     fields = (
@@ -236,12 +124,27 @@ def _read_tokens_from_rollout(
         "non_cached_input_tokens",
         "reasoning_output_tokens",
     )
-    sums: dict = {k: 0 for k in fields}
-    saw_any = False
+    token_sums: dict = {k: 0 for k in fields}
+    saw_tokens = False
+
     in_turn = False
+    trace_count = 0
+    turn_start_ms = 0
+    turn_end_ms = 0
+    duration_ms: "int | None" = None
+    user_prompt = ""
+    assistant_output = ""
+    model = ""
+    cwd = ""
+    permission_mode = ""
+    sandbox_mode = ""
+
+    tool_calls: list = []
+    pending_func: dict = {}  # call_id -> entry being filled
+    pending_search_end: "dict | None" = None  # most recent unmatched web_search_end
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(rollout_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -250,205 +153,199 @@ def _read_tokens_from_rollout(
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if obj.get("type") != "event_msg":
-                    continue
+
+                outer = obj.get("type")
                 payload = obj.get("payload") or {}
-                ptype = payload.get("type")
-                if ptype == "task_started":
+                ptype = payload.get("type") if isinstance(payload, dict) else None
+                ts_ms = _iso_to_ms(obj.get("timestamp", ""))
+
+                # turn_context records carry per-turn settings (model, cwd, sandbox).
+                # They live at the outer level (no payload.type).
+                if outer == "turn_context" and isinstance(payload, dict):
+                    if payload.get("turn_id") == turn_id:
+                        model = payload.get("model") or model
+                        cwd = payload.get("cwd") or cwd
+                        permission_mode = payload.get("approval_policy") or permission_mode
+                        sandbox_mode = (payload.get("sandbox_policy") or {}).get("type") or sandbox_mode
+                    continue
+
+                if outer != "event_msg" and outer != "response_item":
+                    continue
+
+                # Turn boundaries
+                if outer == "event_msg" and ptype == "task_started":
+                    if in_turn:
+                        # Next turn started after ours -- stop walking.
+                        break
+                    trace_count += 1
                     if payload.get("turn_id") == turn_id:
                         in_turn = True
-                    elif in_turn:
-                        # Reached the next turn; stop accumulating.
-                        break
-                elif ptype == "token_count" and in_turn:
+                        started_at = payload.get("started_at")
+                        if isinstance(started_at, int):
+                            turn_start_ms = started_at * 1000
+                        elif ts_ms:
+                            turn_start_ms = ts_ms
+                    continue
+
+                if not in_turn:
+                    continue
+
+                # task_complete: final assistant message + accurate timing
+                if outer == "event_msg" and ptype == "task_complete":
+                    msg = payload.get("last_agent_message")
+                    if msg:
+                        assistant_output = msg
+                    completed_at = payload.get("completed_at")
+                    if isinstance(completed_at, int):
+                        turn_end_ms = completed_at * 1000
+                    d = payload.get("duration_ms")
+                    if isinstance(d, int):
+                        duration_ms = d
+                    continue
+
+                # User prompt
+                if outer == "event_msg" and ptype == "user_message":
+                    msg = payload.get("message")
+                    if msg:
+                        user_prompt = msg
+                    continue
+
+                # Intermediate assistant message (overwritten by task_complete if both present)
+                if outer == "event_msg" and ptype == "agent_message":
+                    msg = payload.get("message")
+                    if msg:
+                        assistant_output = msg
+                    continue
+
+                # Token counts -- sum per-call deltas
+                if outer == "event_msg" and ptype == "token_count":
                     last = (payload.get("info") or {}).get("last_token_usage") or {}
                     for k in fields:
                         v = last.get(k)
                         if isinstance(v, int):
-                            sums[k] += v
-                            saw_any = True
+                            token_sums[k] += v
+                            saw_tokens = True
+                    continue
+
+                # Shell / apply_patch tool call
+                if outer == "response_item" and ptype == "function_call":
+                    call_id = payload.get("call_id") or ""
+                    entry = {
+                        "tool": payload.get("name") or "function_call",
+                        "args": payload.get("arguments") or "",
+                        "output": "",
+                        "call_id": call_id,
+                        "start_ts": ts_ms,
+                        "end_ts": ts_ms,
+                        "decision": None,
+                    }
+                    tool_calls.append(entry)
+                    if call_id:
+                        pending_func[call_id] = entry
+                    continue
+
+                if outer == "response_item" and ptype == "function_call_output":
+                    call_id = payload.get("call_id") or ""
+                    pending = pending_func.get(call_id) if call_id else None
+                    if pending is not None:
+                        pending["output"] = payload.get("output") or ""
+                        pending["end_ts"] = ts_ms or pending["end_ts"]
+                    continue
+
+                # Web search: web_search_end (event_msg, has call_id) is paired with
+                # the next web_search_call (response_item) by emission order.
+                if outer == "event_msg" and ptype == "web_search_end":
+                    pending_search_end = {
+                        "call_id": payload.get("call_id") or "",
+                        "ts_ms": ts_ms,
+                    }
+                    continue
+
+                if outer == "response_item" and ptype == "web_search_call":
+                    action = payload.get("action") or {}
+                    action_type = action.get("type") or "search"
+                    if action_type == "open_page":
+                        tool_name = "open_page"
+                        args = action.get("url") or ""
+                    else:
+                        tool_name = "web_search"
+                        args = action.get("query") or ""
+                    start_ts = ts_ms
+                    call_id = ""
+                    if pending_search_end is not None:
+                        call_id = pending_search_end["call_id"]
+                        start_ts = pending_search_end["ts_ms"] or start_ts
+                        pending_search_end = None
+                    tool_calls.append(
+                        {
+                            "tool": tool_name,
+                            "args": args,
+                            "output": payload.get("status") or "",
+                            "call_id": call_id,
+                            "start_ts": start_ts,
+                            "end_ts": ts_ms,
+                            "decision": None,
+                        }
+                    )
+                    continue
     except OSError:
         return None
 
-    if not saw_any:
+    if not in_turn:
         return None
+
+    if not turn_end_ms:
+        candidates = [e["end_ts"] for e in tool_calls if e.get("end_ts")]
+        turn_end_ms = max(candidates) if candidates else turn_start_ms
+
+    token_usage: "dict | None" = None
+    if saw_tokens:
+        token_usage = {
+            "prompt_tokens": token_sums["input_tokens"] or None,
+            "completion_tokens": token_sums["output_tokens"] or None,
+            "total_tokens": token_sums["total_tokens"] or None,
+            "cached_input_tokens": token_sums["cached_input_tokens"],
+            "non_cached_input_tokens": token_sums["non_cached_input_tokens"],
+            "reasoning_output_tokens": token_sums["reasoning_output_tokens"],
+            "model": model or "",
+        }
 
     return {
-        "prompt_tokens": sums["input_tokens"] or None,
-        "completion_tokens": sums["output_tokens"] or None,
-        "total_tokens": sums["total_tokens"] or None,
-        "cached_input_tokens": sums["cached_input_tokens"],
-        "non_cached_input_tokens": sums["non_cached_input_tokens"],
-        "reasoning_output_tokens": sums["reasoning_output_tokens"],
-        "model": "",
+        "trace_count": trace_count,
+        "turn_start_ms": turn_start_ms or get_timestamp_ms(),
+        "turn_end_ms": turn_end_ms or get_timestamp_ms(),
+        "duration_ms": duration_ms,
+        "user_prompt": user_prompt,
+        "assistant_output": assistant_output,
+        "model": model,
+        "cwd": cwd,
+        "permission_mode": permission_mode,
+        "sandbox_mode": sandbox_mode,
+        "token_usage": token_usage,
+        "tool_calls": tool_calls,
     }
 
 
 # ---------------------------------------------------------------------------
-# Span sending
+# Span assembly
 # ---------------------------------------------------------------------------
 
 
-def _send_span(payload: dict) -> None:
-    """Send the completed span payload directly to the configured backend."""
-    if not send_span_to_backend(payload):
-        error("Failed to send span to backend")
-
-
-# ---------------------------------------------------------------------------
-# Fallback: legacy single-span path
-# ---------------------------------------------------------------------------
-
-
-def _send_legacy_single_span(
-    state,
-    thread_id: str,
-    turn_id: str,
-    user_prompt: str,
-    assistant_output: str,
-    usage,
-) -> None:
-    """Build a single LLM span from the notify payload alone.
-
-    Used when Codex lifecycle hooks haven't been trusted yet (`/hooks` not
-    approved). Once Stop is wired up, this path is unused for that session.
-    """
-    state.increment("trace_count")
-    trace_count = state.get("trace_count")
-    session_id = state.get("session_id")
-    project_name = state.get("project_name")
-    user_id = state.get("user_id")
+def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
+    """Assemble the LLM + TOOL spans from an extracted turn and ship them."""
+    project_name = env.project_name or "codex"
+    user_id = env.user_id or ""
 
     trace_id = generate_trace_id()
-    span_id = generate_span_id()
-    start_time = get_timestamp_ms()
-    end_time = start_time
+    parent_span_id = generate_span_id()
 
-    output_messages = [{"message.role": "assistant", "message.content": assistant_output}]
-
-    attrs = {
-        "session.id": session_id,
-        "trace.number": trace_count,
-        "project.name": project_name,
-        "openinference.span.kind": "LLM",
-        "input.value": user_prompt,
-        "output.value": assistant_output,
-        "codex.turn_id": turn_id,
-        "codex.thread_id": thread_id,
-        "llm.output_messages": json.dumps(output_messages),
-    }
-    if user_id:
-        attrs["user.id"] = user_id
-
-    if usage:
-        attrs["codex.token_usage"] = json.dumps(usage)
-        counts = _extract_token_counts(usage)
-        if counts["prompt"] is not None:
-            attrs["llm.token_count.prompt"] = counts["prompt"]
-        if counts["completion"] is not None:
-            attrs["llm.token_count.completion"] = counts["completion"]
-        if counts["total"] is not None:
-            attrs["llm.token_count.total"] = counts["total"]
-
-    parent_span = build_span(
-        f"Turn {trace_count}",
-        "LLM",
-        span_id,
-        trace_id,
-        "",
-        start_time,
-        end_time,
-        attrs,
-        SERVICE_NAME,
-        SCOPE_NAME,
-    )
-    debug_dump(f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}_span", parent_span)
-    _send_span(parent_span)
-
-    log(f"Turn {trace_count} sent via legacy notify path (thread={thread_id}, turn={turn_id})")
-
-    try:
-        tc = int(trace_count or "0")
-    except (ValueError, TypeError):
-        tc = 0
-    if tc % 10 == 0:
-        gc_stale_state_files()
-
-
-# ---------------------------------------------------------------------------
-# Shared finalize: builds and ships the multi-span tree for a turn
-# ---------------------------------------------------------------------------
-
-
-def _parse_int(v) -> "int | None":
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _finalize_turn_and_ship(
-    state,
-    thread_id: str,
-    assistant_output: "str | None" = None,
-    token_usage: "dict | None" = None,
-    turn_id: str = "",
-) -> None:
-    """Build and ship the full multi-span tree for a completed turn.
-
-    Reads ``pending_trace_id`` and ``pending_parent_span_id`` from state — set by
-    ``UserPromptSubmit``. Reads turn-scoped state (``turn_start_ms``,
-    ``user_prompt``, ``model``, etc.) plus the tool-span JSONL. Builds parent
-    LLM span + TOOL children, ships them together, then clears turn-scoped
-    state and deletes the JSONL.
-
-    Called by:
-      - ``_handle_notify`` when ``agent-turn-complete`` fires (with payload data)
-      - ``session._finalize_pending_turn`` for orphaned turns (no payload data)
-
-    Falls back to ``_send_legacy_single_span`` when ``pending_trace_id`` isn't
-    set — this covers first-run users who haven't approved ``/hooks`` yet, so
-    a notify-only signal still emits a single LLM span.
-    """
-    pending_trace_id = state.get("pending_trace_id")
-    pending_parent_span_id = state.get("pending_parent_span_id")
-
-    if not pending_trace_id or not pending_parent_span_id:
-        _send_legacy_single_span(
-            state,
-            thread_id,
-            turn_id,
-            state.get("user_prompt") or "",
-            assistant_output or "(No response)",
-            token_usage,
-        )
-        return
-
-    state.increment("trace_count")
-    new_trace_count = state.get("trace_count") or "0"
-
-    session_id = state.get("session_id") or thread_id
-    project_name = state.get("project_name") or ""
-    user_id = state.get("user_id")
-    model = state.get("model")
-    permission_mode = state.get("permission_mode")
-    sandbox_mode = state.get("sandbox_mode")
-    turn_start_ms = state.get("turn_start_ms")
-    user_prompt = state.get("user_prompt") or ""
-
-    rows = span_buffer.read_all(thread_id)
-    tool_entries = span_buffer.join_by_call_id(rows)
-
-    start_time = _parse_int(turn_start_ms)
-    if start_time is None:
-        start_time = get_timestamp_ms()
-    end_time = get_timestamp_ms()
-
+    user_prompt = redact_content(env.log_prompts, turn.get("user_prompt") or "")
+    assistant_output = redact_content(env.log_prompts, turn.get("assistant_output") or "")
     final_output = assistant_output or "(No response)"
 
     attrs: dict = {
-        "session.id": session_id,
-        "trace.number": new_trace_count,
+        "session.id": thread_id,
+        "trace.number": str(turn.get("trace_count") or 1),
         "project.name": project_name,
         "openinference.span.kind": "LLM",
         "input.value": user_prompt,
@@ -459,49 +356,51 @@ def _finalize_turn_and_ship(
         attrs["codex.turn_id"] = turn_id
     if user_id:
         attrs["user.id"] = user_id
-    if model:
-        attrs["llm.model_name"] = model
-    if permission_mode:
-        attrs["codex.approval_mode"] = permission_mode
-    if sandbox_mode:
-        attrs["codex.sandbox_mode"] = sandbox_mode
+    if turn.get("model"):
+        attrs["llm.model_name"] = turn["model"]
+    if turn.get("permission_mode"):
+        attrs["codex.approval_mode"] = turn["permission_mode"]
+    if turn.get("sandbox_mode"):
+        attrs["codex.sandbox_mode"] = turn["sandbox_mode"]
+    if turn.get("duration_ms") is not None:
+        attrs["codex.turn.duration_ms"] = turn["duration_ms"]
     if assistant_output:
         attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
 
-    if token_usage:
-        counts = _extract_token_counts(token_usage)
-        if counts["prompt"] is not None:
-            attrs["llm.token_count.prompt"] = counts["prompt"]
-        if counts["completion"] is not None:
-            attrs["llm.token_count.completion"] = counts["completion"]
-        if counts["total"] is not None:
-            attrs["llm.token_count.total"] = counts["total"]
-        if "llm.model_name" not in attrs and token_usage.get("model"):
-            attrs["llm.model_name"] = token_usage["model"]
-        attrs["codex.token_usage"] = json.dumps(token_usage)
+    usage = turn.get("token_usage") or {}
+    for src, dst in (
+        ("prompt_tokens", "llm.token_count.prompt"),
+        ("completion_tokens", "llm.token_count.completion"),
+        ("total_tokens", "llm.token_count.total"),
+    ):
+        v = usage.get(src)
+        if isinstance(v, int):
+            attrs[dst] = v
+    if usage:
+        attrs["codex.token_usage"] = json.dumps(usage)
 
     child_spans: list = []
-    for entry in tool_entries:
+    for entry in turn.get("tool_calls") or []:
         tool_name = entry.get("tool") or "unknown_tool"
+        args_raw = entry.get("args") or ""
+        output_raw = entry.get("output") or ""
         tool_attrs: dict = {
             "openinference.span.kind": "TOOL",
             "tool.name": tool_name,
-            "input.value": entry.get("args") or "",
-            "output.value": entry.get("output") or "",
-            "session.id": session_id,
+            "input.value": redact_content(env.log_tool_details, args_raw),
+            "output.value": redact_content(env.log_tool_content, output_raw),
+            "session.id": thread_id,
         }
-        if entry.get("decision"):
-            tool_attrs["codex.tool.approval_status"] = entry["decision"]
         if entry.get("call_id"):
             tool_attrs["codex.tool.call_id"] = entry["call_id"]
-        child_start = entry.get("start_ts_ms") or start_time
-        child_end = entry.get("end_ts_ms") or entry.get("start_ts_ms") or end_time
+        child_start = entry.get("start_ts") or turn["turn_start_ms"]
+        child_end = entry.get("end_ts") or child_start
         child = build_span(
             tool_name,
             "TOOL",
             generate_span_id(),
-            pending_trace_id,
-            pending_parent_span_id,
+            trace_id,
+            parent_span_id,
             child_start,
             child_end,
             tool_attrs,
@@ -511,13 +410,13 @@ def _finalize_turn_and_ship(
         child_spans.append(child)
 
     parent_span = build_span(
-        f"Turn {new_trace_count}",
+        f"Turn {turn.get('trace_count') or 1}",
         "LLM",
-        pending_parent_span_id,
-        pending_trace_id,
+        parent_span_id,
+        trace_id,
         "",
-        start_time,
-        end_time,
+        turn["turn_start_ms"],
+        turn["turn_end_ms"],
         attrs,
         SERVICE_NAME,
         SCOPE_NAME,
@@ -531,19 +430,87 @@ def _finalize_turn_and_ship(
     else:
         payload = parent_span
 
-    _send_span(payload)
-    log(f"Turn {new_trace_count} sent (thread={thread_id}, children={len(child_spans)})")
+    if not send_span_to_backend(payload):
+        error("Failed to send span to backend")
+    else:
+        log(f"Turn sent (thread={thread_id}, turn={turn_id}, children={len(child_spans)})")
 
-    for key in ("turn_start_ms", "user_prompt", "pending_trace_id", "pending_parent_span_id"):
-        state.delete(key)
-    span_buffer.delete(thread_id)
 
-    try:
-        tc = int(new_trace_count or "0")
-    except (ValueError, TypeError):
-        tc = 0
-    if tc % 10 == 0:
-        gc_stale_state_files()
+def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> None:
+    """Fallback when no rollout file is found -- emit a single LLM span from
+    the notify payload alone."""
+    assistant_msg = (
+        input_json.get("last-assistant-message")
+        or input_json.get("last_assistant_message")
+        or input_json.get("lastAssistantMessage")
+    )
+    if isinstance(assistant_msg, dict):
+        # Sometimes wrapped: try common keys
+        for k in ("text", "message", "content"):
+            v = assistant_msg.get(k)
+            if isinstance(v, str) and v:
+                assistant_msg = v
+                break
+
+    user_msgs = input_json.get("input-messages") or input_json.get("input_messages") or ""
+    user_prompt = ""
+    if isinstance(user_msgs, list):
+        for m in reversed(user_msgs):
+            if isinstance(m, dict) and m.get("role") == "user":
+                c = m.get("content")
+                if isinstance(c, str) and c:
+                    user_prompt = c
+                    break
+                if isinstance(c, list):
+                    for piece in c:
+                        if isinstance(piece, dict) and piece.get("text"):
+                            user_prompt = piece["text"]
+                            break
+                    if user_prompt:
+                        break
+    elif isinstance(user_msgs, str):
+        user_prompt = user_msgs
+
+    user_prompt = redact_content(env.log_prompts, user_prompt)
+    assistant_output = redact_content(env.log_prompts, assistant_msg if isinstance(assistant_msg, str) else "")
+    final_output = assistant_output or "(No response)"
+
+    trace_id = generate_trace_id()
+    span_id = generate_span_id()
+    now = get_timestamp_ms()
+
+    attrs = {
+        "session.id": thread_id,
+        "project.name": env.project_name or "codex",
+        "openinference.span.kind": "LLM",
+        "input.value": user_prompt,
+        "output.value": final_output,
+        "codex.thread_id": thread_id,
+        "codex.turn_id": turn_id,
+        "codex.notify_fallback": "true",
+    }
+    if env.user_id:
+        attrs["user.id"] = env.user_id
+    if assistant_output:
+        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
+
+    parent_span = build_span(
+        "Turn",
+        "LLM",
+        span_id,
+        trace_id,
+        "",
+        now,
+        now,
+        attrs,
+        SERVICE_NAME,
+        SCOPE_NAME,
+    )
+    debug_dump(f"notify_fallback_{thread_id}_{turn_id}_span", parent_span)
+    if not send_span_to_backend(parent_span):
+        error("Failed to send fallback span to backend")
+    else:
+        log(f"Turn sent via fallback (thread={thread_id}, turn={turn_id})")
 
 
 # ---------------------------------------------------------------------------
@@ -552,49 +519,30 @@ def _finalize_turn_and_ship(
 
 
 def _handle_notify(input_json: dict) -> None:
-    """Notify handler: builds and ships the full span tree for the completed turn.
-
-    With the deferred-parent architecture, notify is the single point that
-    emits parent + tool child spans together. Stop's hook is a no-op now;
-    UserPromptSubmit pre-generates the trace/parent IDs so this handler can
-    reference them.
-    """
+    """Handle one Codex notify event."""
     if input_json.get("type") != "agent-turn-complete":
         log(f"Ignoring event type: {input_json.get('type')}")
         return
 
     thread_id = _flex_get(input_json, "thread-id", "thread_id", "threadId")
     turn_id = _flex_get(input_json, "turn-id", "turn_id", "turnId")
-    cwd = _flex_get(input_json, "cwd", "working-directory", "working_directory")
-    assistant_msg = _flex_get_obj(
-        input_json, "last-assistant-message", "last_assistant_message", "lastAssistantMessage"
-    )
 
-    debug_prefix = f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}"
-    debug_dump(f"{debug_prefix}_raw", input_json)
+    debug_dump(f"notify_{thread_id or 'unknown'}_{turn_id or 'unknown'}_raw", input_json)
 
-    assistant_output = redact_content(env.log_prompts, _as_text(assistant_msg)) or "(No response)"
-    debug_dump(f"{debug_prefix}_text", {"assistant": assistant_output})
+    rollout_path = _find_rollout_file(thread_id)
+    if rollout_path is None:
+        log(f"notify: no rollout file for session {thread_id}, falling back to single span")
+        _send_legacy_single_span(thread_id, turn_id, input_json)
+        return
 
-    state = resolve_session(thread_id)
-    ensure_session_initialized(state, thread_id, cwd or os.getcwd())
+    turn = _extract_turn_from_rollout(rollout_path, turn_id)
+    if turn is None:
+        log(f"notify: turn {turn_id} not found in {rollout_path}; falling back to single span")
+        _send_legacy_single_span(thread_id, turn_id, input_json)
+        return
 
-    usage = _find_token_usage(input_json)
-    if not usage:
-        # Codex's notify payload doesn't carry token counts; recover them from
-        # the session rollout JSONL by summing the turn's `last_token_usage`
-        # events.
-        usage = _read_tokens_from_rollout(thread_id, turn_id)
-        if usage:
-            debug_dump(f"{debug_prefix}_tokens_from_rollout", usage)
-
-    _finalize_turn_and_ship(
-        state,
-        thread_id,
-        assistant_output=assistant_output,
-        token_usage=usage,
-        turn_id=turn_id,
-    )
+    debug_dump(f"notify_{thread_id}_{turn_id}_extracted", turn)
+    _build_and_send_spans(thread_id, turn_id, turn)
 
 
 # ---------------------------------------------------------------------------
@@ -602,18 +550,16 @@ def _handle_notify(input_json: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def notify():
-    """Entry point for arize-hook-codex-notify.
+def notify() -> None:
+    """Entry point for ``arize-hook-codex-notify``.
 
-    Input contract: JSON as sys.argv[1] (NOT stdin -- Codex passes notify
-    JSON as a CLI arg). No stdout output -- Codex doesn't expect a response.
+    Codex passes the notify-event JSON on ``sys.argv[1]`` (not stdin) and
+    expects no stdout response.
     """
     try:
         load_env_file(Path.home() / ".codex" / "arize-env.sh")
-
         if not check_requirements():
             return
-
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
         input_json = json.loads(raw)
         _handle_notify(input_json)

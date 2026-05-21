@@ -39,9 +39,6 @@ arize-hook-post-compact = "tracing.claude_code.hooks.handlers:post_compact"
 arize-hook-permission-denied = "tracing.claude_code.hooks.handlers:permission_denied"
 # Codex hooks
 arize-hook-codex-notify = "tracing.codex.hooks.handlers:notify"
-arize-hook-codex-session = "tracing.codex.hooks.session:main"
-arize-hook-codex-tool = "tracing.codex.hooks.tool:main"
-arize-hook-codex-stop = "tracing.codex.hooks.stop:main"
 # Copilot hooks
 arize-hook-copilot-session-start = "tracing.copilot.hooks.handlers:session_start"
 arize-hook-copilot-user-prompt = "tracing.copilot.hooks.handlers:user_prompt_submitted"

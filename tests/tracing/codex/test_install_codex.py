@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 import tracing.codex.install as codex_install
-from tracing.codex.constants import NOTIFY_BIN_NAME, SESSION_BIN_NAME, STOP_BIN_NAME, TOOL_BIN_NAME
+from tracing.codex.constants import NOTIFY_BIN_NAME
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -90,15 +90,9 @@ def _mock_prompts_arize(monkeypatch):
     )
 
 
-def _expected_hook_cmds(fake_home: Path) -> dict[str, str]:
-    """Compute the venv-bin paths the installer should write for each hook."""
-    venv_bin = fake_home / ".arize" / "harness" / "venv" / "bin"
-    return {
-        "notify": str(venv_bin / NOTIFY_BIN_NAME),
-        "session": str(venv_bin / SESSION_BIN_NAME),
-        "tool": str(venv_bin / TOOL_BIN_NAME),
-        "stop": str(venv_bin / STOP_BIN_NAME),
-    }
+def _expected_notify_cmd(fake_home: Path) -> str:
+    """Compute the venv-bin path the installer should write for notify."""
+    return str(fake_home / ".arize" / "harness" / "venv" / "bin" / NOTIFY_BIN_NAME)
 
 
 def _hook_commands(toml_data: dict, event: str) -> list[str]:
@@ -199,36 +193,34 @@ class TestInstall:
         assert entry["space_id"] == "U3Bh"
         assert entry["project_name"] == "codex"
 
-    def test_install_writes_v2_toml_layout(self, fake_home, mock_prompts):
-        """Fresh install writes notify + six [[hooks.<Event>]] arrays, no otel block."""
+    def test_install_writes_notify_only_layout(self, fake_home, mock_prompts):
+        """Fresh install writes one `notify = [...]` entry; no lifecycle hooks, no otel."""
         codex_install.install()
 
         toml_path = fake_home / ".codex" / "config.toml"
         assert toml_path.is_file()
         data = codex_install._toml_load(toml_path)
-        cmds = _expected_hook_cmds(fake_home)
+        notify_cmd = _expected_notify_cmd(fake_home)
 
         # Exactly one notify entry pointing at our hook.
         assert isinstance(data["notify"], list)
-        assert data["notify"] == [cmds["notify"]]
+        assert data["notify"] == [notify_cmd]
 
-        # No otel block.
+        # No otel block (we ship spans directly from notify, not via OTLP exporter).
         assert "otel" not in data
 
-        # Six hook event arrays, each pointing at the right entry point.
-        expected = {
-            "SessionStart": cmds["session"],
-            "UserPromptSubmit": cmds["session"],
-            "PreToolUse": cmds["tool"],
-            "PostToolUse": cmds["tool"],
-            "PermissionRequest": cmds["tool"],
-            "Stop": cmds["stop"],
-        }
-        hooks = data.get("hooks", {})
-        for event, expected_cmd in expected.items():
-            assert event in hooks, f"missing [[hooks.{event}]] block"
-            commands = _hook_commands(data, event)
-            assert commands == [expected_cmd], f"{event}: got {commands!r}"
+        # No lifecycle hooks -- the rollout-driven notify path is the only signal.
+        assert "hooks" not in data or all(
+            not data["hooks"].get(e)
+            for e in (
+                "SessionStart",
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "PermissionRequest",
+                "Stop",
+            )
+        )
 
     def test_install_writes_env_file(self, fake_home, mock_prompts):
         codex_install.install()
@@ -323,18 +315,10 @@ class TestInstall:
         second = toml_path.read_text()
         assert first == second
 
-        # Spot-check structure: notify still has one entry; each event has one cmd.
+        # Notify entry stays single; the notify-only layout writes no hooks.
         data = codex_install._toml_load(toml_path)
         assert len(data["notify"]) == 1
-        for event in (
-            "SessionStart",
-            "UserPromptSubmit",
-            "PreToolUse",
-            "PostToolUse",
-            "PermissionRequest",
-            "Stop",
-        ):
-            assert len(_hook_commands(data, event)) == 1
+        assert "hooks" not in data
 
     def test_install_with_user_id(self, fake_home, monkeypatch):
         monkeypatch.setattr(codex_install, "prompt_project_name", lambda default: default)
@@ -355,12 +339,11 @@ class TestInstall:
             codex_install.install(with_skills=True)
             m_symlink.assert_called_once_with("codex")
 
-    def test_install_prints_trust_prompt(self, fake_home, mock_prompts, capsys):
-        """Install prints the /hooks trust-prompt instruction."""
+    def test_install_prints_completion_message(self, fake_home, mock_prompts, capsys):
+        """Install prints a brief success confirmation."""
         codex_install.install()
         out = capsys.readouterr().out
-        assert "/hooks" in out
-        assert "arize-hook-codex-" in out
+        assert "Codex tracing installed" in out
 
     def test_install_preserves_unrelated_toml_sections(self, fake_home, mock_prompts):
         """A pre-existing [model] block survives install."""
@@ -371,7 +354,7 @@ class TestInstall:
         codex_install.install()
         data = codex_install._toml_load(toml_path)
         assert data.get("model", {}).get("name") == "gpt-4"
-        assert "hooks" in data
+        assert "notify" in data
 
 
 # ---------------------------------------------------------------------------
@@ -425,10 +408,11 @@ class TestUninstall:
         """A non-arize hook entry under [[hooks.PreToolUse]] survives uninstall."""
         codex_install.install()
 
+        # Manually add a foreign hook entry (current install layout has no hooks).
         toml_path = fake_home / ".codex" / "config.toml"
         data = codex_install._toml_load(toml_path)
-        data["hooks"]["PreToolUse"].append(
-            {"hooks": [{"type": "command", "command": "/usr/local/bin/their-hook", "timeout": 30}]}
+        data.setdefault("hooks", {}).setdefault("PreToolUse", []).append(
+            {"hooks": [{"type": "command", "command": "/usr/local/bin/their-hook"}]}
         )
         codex_install._toml_write(data, toml_path)
 
@@ -521,30 +505,22 @@ class TestEnvFileHeuristic:
 
 
 # ---------------------------------------------------------------------------
-# _codex_toml_apply / _codex_toml_remove_v2 unit tests
+# _codex_toml_apply / _codex_toml_remove unit tests
 # ---------------------------------------------------------------------------
 
 
 class TestTomlApplyRemove:
-    """Unit tests for the v2 TOML mutators."""
+    """Unit tests for the notify-only TOML mutators."""
 
     def _apply(self, p: Path) -> None:
-        codex_install._codex_toml_apply(p, "/venv/bin/notify", "/venv/bin/session", "/venv/bin/tool", "/venv/bin/stop")
+        codex_install._codex_toml_apply(p, "/venv/bin/notify")
 
     def test_apply_to_empty_file(self, tmp_path):
         p = tmp_path / "config.toml"
         self._apply(p)
         data = codex_install._toml_load(p)
         assert data["notify"] == ["/venv/bin/notify"]
-        for event in (
-            "SessionStart",
-            "UserPromptSubmit",
-            "PreToolUse",
-            "PostToolUse",
-            "PermissionRequest",
-            "Stop",
-        ):
-            assert event in data["hooks"]
+        assert "hooks" not in data
 
     def test_apply_idempotent(self, tmp_path):
         p = tmp_path / "config.toml"
@@ -552,15 +528,6 @@ class TestTomlApplyRemove:
         self._apply(p)
         data = codex_install._toml_load(p)
         assert data["notify"] == ["/venv/bin/notify"]
-        for event in (
-            "SessionStart",
-            "UserPromptSubmit",
-            "PreToolUse",
-            "PostToolUse",
-            "PermissionRequest",
-            "Stop",
-        ):
-            assert len(data["hooks"][event]) == 1
 
     def test_apply_preserves_existing_notify(self, tmp_path):
         p = tmp_path / "config.toml"
@@ -577,7 +544,18 @@ class TestTomlApplyRemove:
         data = codex_install._toml_load(p)
         assert data["model"]["name"] == "gpt-4"
         assert "notify" in data
-        assert "hooks" in data
+
+    def test_apply_leaves_existing_hook_entries_alone(self, tmp_path):
+        """apply does not touch pre-existing [[hooks.<Event>]] entries."""
+        p = tmp_path / "config.toml"
+        p.write_text(
+            "[[hooks.PreToolUse]]\n" "hooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-tool' }]\n"
+        )
+        self._apply(p)
+        data = codex_install._toml_load(p)
+        assert data["notify"] == ["/venv/bin/notify"]
+        cmds = _hook_commands(data, "PreToolUse")
+        assert "/venv/bin/arize-hook-codex-tool" in cmds
 
     def test_apply_dry_run_no_write(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ARIZE_DRY_RUN", "true")
@@ -585,33 +563,43 @@ class TestTomlApplyRemove:
         self._apply(p)
         assert not p.exists()
 
-    def test_remove_v2_only_our_notify(self, tmp_path):
+    def test_remove_only_our_notify(self, tmp_path):
         p = tmp_path / "config.toml"
         self._apply(p)
         data = codex_install._toml_load(p)
         data["notify"].append("/usr/bin/other")
         codex_install._toml_write(data, p)
 
-        codex_install._codex_toml_remove_v2(
-            p, "/venv/bin/notify", ["/venv/bin/session", "/venv/bin/tool", "/venv/bin/stop"]
-        )
+        codex_install._codex_toml_remove(p, "/venv/bin/notify")
         remaining = codex_install._toml_load(p)
         assert remaining["notify"] == ["/usr/bin/other"]
+
+    def test_remove_strips_legacy_hook_entries(self, tmp_path):
+        """remove strips both our notify entry and any leftover arize-managed hooks."""
+        p = tmp_path / "config.toml"
+        p.write_text(
+            'notify = ["/venv/bin/notify"]\n'
+            "[[hooks.PreToolUse]]\n"
+            "hooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-tool' }]\n"
+            "[[hooks.SessionStart]]\n"
+            "hooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-session' }]\n"
+        )
+        codex_install._codex_toml_remove(p, "/venv/bin/notify")
+        remaining = codex_install._toml_load(p)
+        assert "notify" not in remaining
         assert "hooks" not in remaining
 
-    def test_remove_v2_nonexistent_file_is_noop(self, tmp_path):
+    def test_remove_nonexistent_file_is_noop(self, tmp_path):
         p = tmp_path / "nonexistent.toml"
-        codex_install._codex_toml_remove_v2(p, "/venv/bin/notify", [])
+        codex_install._codex_toml_remove(p, "/venv/bin/notify")
         assert not p.exists()
 
-    def test_remove_v2_dry_run_no_write(self, tmp_path, monkeypatch):
+    def test_remove_dry_run_no_write(self, tmp_path, monkeypatch):
         p = tmp_path / "config.toml"
         self._apply(p)
         original = p.read_text()
         monkeypatch.setenv("ARIZE_DRY_RUN", "true")
-        codex_install._codex_toml_remove_v2(
-            p, "/venv/bin/notify", ["/venv/bin/session", "/venv/bin/tool", "/venv/bin/stop"]
-        )
+        codex_install._codex_toml_remove(p, "/venv/bin/notify")
         assert p.read_text() == original
 
 

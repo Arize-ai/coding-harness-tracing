@@ -33,9 +33,6 @@ EXPECTED_ENTRY_POINTS = {
     "arize-hook-permission-request": "tracing.claude_code.hooks.handlers:permission_request",
     "arize-hook-session-end": "tracing.claude_code.hooks.handlers:session_end",
     "arize-hook-codex-notify": "tracing.codex.hooks.handlers:notify",
-    "arize-hook-codex-session": "tracing.codex.hooks.session:main",
-    "arize-hook-codex-tool": "tracing.codex.hooks.tool:main",
-    "arize-hook-codex-stop": "tracing.codex.hooks.stop:main",
     "arize-hook-cursor": "tracing.cursor.hooks.handlers:main",
 }
 

@@ -44,9 +44,6 @@ from tracing.codex.constants import (
     HARNESS_HOME,
     HARNESS_NAME,
     NOTIFY_BIN_NAME,
-    SESSION_BIN_NAME,
-    STOP_BIN_NAME,
-    TOOL_BIN_NAME,
 )
 from tracing.codex.install_legacy import cleanup_legacy_install
 
@@ -375,38 +372,64 @@ def _toml_string_literal(val: object) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _hook_entry_for(cmd: str) -> dict:
-    """Build the dict body for one ``[[hooks.<Event>]]`` array element."""
-    return {"hooks": [{"type": "command", "command": cmd, "timeout": 30}]}
-
-
-def _entry_targets_cmd(entry: object, cmd: str) -> bool:
-    """Return True if *entry* is a hook-array element whose inner ``hooks``
-    list contains a command equal to *cmd*.
-    """
+def _entry_is_arize_managed(entry: object) -> bool:
+    """Return True if *entry* is a hook-array element whose ``command`` path
+    looks like one of our managed entry points (``arize-hook-codex-*``)."""
     if not isinstance(entry, dict):
         return False
     inner = entry.get("hooks")
     if not isinstance(inner, list):
         return False
-    return any(isinstance(h, dict) and h.get("command") == cmd for h in inner)
+    for h in inner:
+        if not isinstance(h, dict):
+            continue
+        cmd = h.get("command") or ""
+        if isinstance(cmd, str) and "arize-hook-codex-" in cmd:
+            return True
+    return False
 
 
-def _codex_toml_apply(
-    path: Path,
-    notify_cmd: str,
-    session_cmd: str,
-    tool_cmd: str,
-    stop_cmd: str,
-) -> None:
-    """Write the v2 hooks-based layout to ~/.codex/config.toml. Idempotent."""
+def _strip_arize_hooks(data: dict) -> bool:
+    """Remove any ``[[hooks.<Event>]]`` entries we previously wrote.
+
+    Walks every known event and drops entries whose command path matches an
+    ``arize-hook-codex-*`` pattern (covers session/tool/stop from older
+    installer versions). Returns True if anything was removed.
+    """
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    changed = False
+    for event in _HOOK_EVENTS:
+        existing = hooks.get(event)
+        if not isinstance(existing, list):
+            continue
+        kept = [e for e in existing if not _entry_is_arize_managed(e)]
+        if len(kept) != len(existing):
+            changed = True
+            if kept:
+                hooks[event] = kept
+            else:
+                del hooks[event]
+    if not hooks:
+        data.pop("hooks", None)
+        changed = True
+    return changed
+
+
+def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
+    """Write the notify-only layout to ~/.codex/config.toml. Idempotent.
+
+    Ensures our ``notify_cmd`` is present exactly once in ``notify = [...]``.
+    Does not touch any existing ``[[hooks.<Event>]]`` entries -- if a prior
+    install left some behind, manage them out-of-band or run ``uninstall``.
+    """
     if dry_run():
-        info(f"would update {path} with notify + 6 hook entries")
+        info(f"would add notify entry to {path}")
         return
 
     data = _toml_load(path)
 
-    # Ensure notify list contains our notify_cmd exactly once.
     existing_notify = data.get("notify", [])
     if not isinstance(existing_notify, list):
         existing_notify = [existing_notify] if existing_notify else []
@@ -414,52 +437,22 @@ def _codex_toml_apply(
         existing_notify.append(notify_cmd)
     data["notify"] = existing_notify
 
-    # Write [[hooks.<Event>]] entries. Replace any prior entry pointing at our cmd.
-    existing_hooks = data.get("hooks")
-    if not isinstance(existing_hooks, dict):
-        existing_hooks = {}
-    data["hooks"] = existing_hooks
-    hooks = existing_hooks
-    hook_specs = (
-        ("SessionStart", session_cmd),
-        ("UserPromptSubmit", session_cmd),
-        ("PreToolUse", tool_cmd),
-        ("PostToolUse", tool_cmd),
-        ("PermissionRequest", tool_cmd),
-        ("Stop", stop_cmd),
-    )
-    for event_name, cmd in hook_specs:
-        existing = hooks.get(event_name, [])
-        if not isinstance(existing, list):
-            existing = []
-        new_entry = _hook_entry_for(cmd)
-        replaced = False
-        for i, entry in enumerate(existing):
-            if _entry_targets_cmd(entry, cmd):
-                existing[i] = new_entry
-                replaced = True
-                break
-        if not replaced:
-            existing.append(new_entry)
-        hooks[event_name] = existing
-
     path.parent.mkdir(parents=True, exist_ok=True)
     _toml_write(data, path)
 
 
-def _codex_toml_remove_v2(path: Path, notify_cmd: str, hook_cmds: list[str]) -> None:
-    """Remove v2 notify entry and all hook entries pointing at our commands. Idempotent."""
+def _codex_toml_remove(path: Path, notify_cmd: str) -> None:
+    """Remove our notify entry and any legacy hook entries. Idempotent."""
     if not path.is_file():
         return
 
     if dry_run():
-        info(f"would revert {path}: remove notify={notify_cmd} and hook entries")
+        info(f"would revert {path}: remove notify={notify_cmd} and any legacy hook entries")
         return
 
     data = _toml_load(path)
     changed = False
 
-    # Notify
     existing_notify = data.get("notify", [])
     if isinstance(existing_notify, list) and notify_cmd in existing_notify:
         existing_notify.remove(notify_cmd)
@@ -472,23 +465,8 @@ def _codex_toml_remove_v2(path: Path, notify_cmd: str, hook_cmds: list[str]) -> 
         del data["notify"]
         changed = True
 
-    # Hooks
-    hooks = data.get("hooks")
-    if isinstance(hooks, dict):
-        for event in _HOOK_EVENTS:
-            existing = hooks.get(event)
-            if not isinstance(existing, list):
-                continue
-            kept = [entry for entry in existing if not any(_entry_targets_cmd(entry, cmd) for cmd in hook_cmds)]
-            if len(kept) != len(existing):
-                changed = True
-                if kept:
-                    hooks[event] = kept
-                else:
-                    del hooks[event]
-        if not hooks:
-            del data["hooks"]
-            changed = True
+    if _strip_arize_hooks(data):
+        changed = True
 
     if changed:
         _toml_write(data, path)
@@ -583,12 +561,9 @@ def install(with_skills: bool = False) -> None:
         info(f"would create {CODEX_CONFIG_DIR}")
     _write_env_file(CODEX_ENV_FILE, user_id=user_id)
 
-    # 4. Write the hooks-based TOML layout.
+    # 4. Write the notify-only TOML layout.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    session_cmd = str(venv_bin(SESSION_BIN_NAME))
-    tool_cmd = str(venv_bin(TOOL_BIN_NAME))
-    stop_cmd = str(venv_bin(STOP_BIN_NAME))
-    _codex_toml_apply(CODEX_CONFIG_FILE, notify_cmd, session_cmd, tool_cmd, stop_cmd)
+    _codex_toml_apply(CODEX_CONFIG_FILE, notify_cmd)
     info(f"Updated TOML config: {CODEX_CONFIG_FILE}")
 
     # 5. Skills.
@@ -596,13 +571,8 @@ def install(with_skills: bool = False) -> None:
         symlink_skills(HARNESS_NAME)
         info("Symlinked skills")
 
-    # 6. Trust prompt message.
     info("")
     info("Codex tracing installed.")
-    info("")
-    info("  One-time setup: open codex, run `/hooks`, and approve the")
-    info("  arize-hook-codex-* entries. Codex requires explicit trust")
-    info("  before non-managed hooks fire.")
 
 
 def uninstall() -> None:
@@ -610,12 +580,9 @@ def uninstall() -> None:
     # 1. Clean up any lingering v1 artifacts first (no-op if absent).
     cleanup_legacy_install(CODEX_CONFIG_FILE)
 
-    # 2. Revert TOML — remove our notify entry and hook entries.
+    # 2. Revert TOML — remove our notify entry and any legacy hook entries.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    session_cmd = str(venv_bin(SESSION_BIN_NAME))
-    tool_cmd = str(venv_bin(TOOL_BIN_NAME))
-    stop_cmd = str(venv_bin(STOP_BIN_NAME))
-    _codex_toml_remove_v2(CODEX_CONFIG_FILE, notify_cmd, [session_cmd, tool_cmd, stop_cmd])
+    _codex_toml_remove(CODEX_CONFIG_FILE, notify_cmd)
     info(f"Reverted TOML config: {CODEX_CONFIG_FILE}")
 
     # 3. Remove env file if ours.
