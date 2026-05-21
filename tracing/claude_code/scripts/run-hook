@@ -80,23 +80,8 @@ bootstrap() {
         return 1
     fi
 
-    # Resolve the install target. The plugin dir's pyproject.toml is a
-    # symlink to the repo-root pyproject (../../pyproject.toml); installing
-    # from the plugin dir alone misses sibling packages like tracing/ that
-    # aren't reachable from inside tracing/claude_code/. When the symlink
-    # is present, install from the resolved repo root so all packages
-    # listed under [tool.setuptools.packages.find] are picked up.
-    INSTALL_TARGET="$PLUGIN_ROOT"
-    if [ -L "$PLUGIN_ROOT/pyproject.toml" ]; then
-        RESOLVED=$("$PYTHON_CMD" -c "import os, sys; print(os.path.realpath(sys.argv[1]))" \
-            "$PLUGIN_ROOT/pyproject.toml" 2>/dev/null)
-        if [ -n "$RESOLVED" ] && [ -f "$RESOLVED" ]; then
-            INSTALL_TARGET=$(dirname "$RESOLVED")
-        fi
-    fi
-
-    echo "[arize] Installing arize-agent-kit from $INSTALL_TARGET..." >&2
-    "$PIP" install --quiet "$INSTALL_TARGET" 2>&1 | tail -5 >&2 || {
+    echo "[arize] Installing coding-harness-tracing from $PLUGIN_ROOT..." >&2
+    "$PIP" install --quiet "$PLUGIN_ROOT" 2>&1 | tail -5 >&2 || {
         echo "[arize] pip install failed" >&2
         rm -f "$MARKER"
         return 1

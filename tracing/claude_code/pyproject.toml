@@ -1,1 +1,37 @@
-../../pyproject.toml
+[project]
+name = "coding-harness-tracing"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["pyyaml"]
+
+[project.scripts]
+arize-hook-session-start = "tracing.claude_code.hooks.handlers:session_start"
+arize-hook-pre-tool-use = "tracing.claude_code.hooks.handlers:pre_tool_use"
+arize-hook-post-tool-use = "tracing.claude_code.hooks.handlers:post_tool_use"
+arize-hook-user-prompt-submit = "tracing.claude_code.hooks.handlers:user_prompt_submit"
+arize-hook-stop = "tracing.claude_code.hooks.handlers:stop"
+arize-hook-subagent-stop = "tracing.claude_code.hooks.handlers:subagent_stop"
+arize-hook-stop-failure = "tracing.claude_code.hooks.handlers:stop_failure"
+arize-hook-notification = "tracing.claude_code.hooks.handlers:notification"
+arize-hook-permission-request = "tracing.claude_code.hooks.handlers:permission_request"
+arize-hook-session-end = "tracing.claude_code.hooks.handlers:session_end"
+arize-hook-post-tool-use-failure = "tracing.claude_code.hooks.handlers:post_tool_use_failure"
+arize-hook-subagent-start = "tracing.claude_code.hooks.handlers:subagent_start"
+arize-hook-user-prompt-expansion = "tracing.claude_code.hooks.handlers:user_prompt_expansion"
+arize-hook-pre-compact = "tracing.claude_code.hooks.handlers:pre_compact"
+arize-hook-post-compact = "tracing.claude_code.hooks.handlers:post_compact"
+arize-hook-permission-denied = "tracing.claude_code.hooks.handlers:permission_denied"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "tracing.claude_code",
+    "tracing.claude_code.hooks",
+    "core",
+    "core.setup",
+    "core.vscode_bridge",
+]
+package-dir = {"tracing.claude_code" = ".", "core" = "core"}
