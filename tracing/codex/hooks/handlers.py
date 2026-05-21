@@ -180,6 +180,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                     trace_count += 1
                     if payload.get("turn_id") == turn_id:
                         in_turn = True
+                        # started_at is unix seconds; convert to ms.
                         started_at = payload.get("started_at")
                         if isinstance(started_at, int):
                             turn_start_ms = started_at * 1000
@@ -195,6 +196,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                     msg = payload.get("last_agent_message")
                     if msg:
                         assistant_output = msg
+                    # completed_at is unix seconds; convert to ms.
                     completed_at = payload.get("completed_at")
                     if isinstance(completed_at, int):
                         turn_end_ms = completed_at * 1000

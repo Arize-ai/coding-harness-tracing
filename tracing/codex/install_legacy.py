@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from core.setup import BIN_DIR, dry_run, info
+from tracing.codex._toml import _toml_load, _toml_write
 from tracing.codex.constants import CODEX_CONFIG_FILE
 
 _PATH_MARKER_BEGIN = "# >>> arize codex tracing PATH >>>"
@@ -215,10 +216,6 @@ def _strip_v1_otel_block(path: Path) -> None:
     """
     if not path.is_file():
         return
-
-    # Lazy-import the TOML helpers from install.py to avoid a module-load
-    # cycle (install.py imports from this module).
-    from tracing.codex.install import _toml_load, _toml_write
 
     data = _toml_load(path)
     otel = data.get("otel")
