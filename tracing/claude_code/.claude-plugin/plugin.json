@@ -17,7 +17,5 @@
     "phoenix",
     "claude-code",
     "observability"
-  ],
-  "skills": "./skills/",
-  "hooks": "./hooks/hooks.json"
+  ]
 }
