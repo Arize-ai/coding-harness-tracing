@@ -7,6 +7,22 @@ The installer prompts for your backend (Phoenix or Arize AX) and project name, w
 
 Pass `--with-skills` to also symlink the `manage-claude-code-tracing` skill into the current directory's `.agents/skills/` so Claude can help you manage the configuration interactively.
 
+### Quick install
+
+**Recommended:** `ax-trace claude` (after installing ax-trace — see the [top-level README](../../README.md)).
+**Alternative:** `./install.sh claude` (from the repo root).
+
+Non-interactive install with ax-trace:
+
+```bash
+export ARIZE_API_KEY=...   # required; secrets never become CLI flags
+ax-trace claude \
+    --backend arize \
+    --space-id SPACE_ID \
+    --project-name my-project \
+    --non-interactive
+```
+
 ### Claude Code marketplace
 
 The marketplace flow registers the hooks but skips the interactive wizard, so backend credentials and content-logging preferences must be set directly in `~/.claude/settings.json` under `env`:
