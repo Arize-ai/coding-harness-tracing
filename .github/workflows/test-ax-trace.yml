@@ -4,11 +4,14 @@ on:
   pull_request:
     paths:
       - 'cmd/ax-trace/**'
+      - '.goreleaser.yml'
       - '.github/workflows/test-ax-trace.yml'
   push:
     branches: [main]
     paths:
       - 'cmd/ax-trace/**'
+      - '.goreleaser.yml'
+      - '.github/workflows/test-ax-trace.yml'
 
 jobs:
   test:
@@ -23,6 +26,8 @@ jobs:
         with:
           go-version: '1.22'
           cache-dependency-path: cmd/ax-trace/go.sum
+      - name: Check formatting
+        run: cd cmd/ax-trace && test -z "$(gofmt -l .)"
       - name: Go vet
         run: cd cmd/ax-trace && go vet ./...
       - name: Go test
@@ -44,9 +49,23 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: cmd/ax-trace/go.sum
       - name: Cross-compile
         env:
           GOOS: ${{ matrix.target.goos }}
           GOARCH: ${{ matrix.target.goarch }}
           CGO_ENABLED: '0'
         run: cd cmd/ax-trace && go build -o /tmp/ax-trace ./...
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: cmd/ax-trace/go.sum
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: check

@@ -2,12 +2,17 @@ version: 2
 
 project_name: ax-trace
 
+monorepo:
+  tag_prefix: ax-trace-
+
 before:
   hooks:
-    - go mod tidy
+    - cmd: go mod download
+      dir: cmd/ax-trace
 
 builds:
   - id: ax-trace
+    dir: cmd/ax-trace
     main: .
     binary: ax-trace
     env:
@@ -36,10 +41,8 @@ archives:
         format: zip
     format: tar.gz
     files:
-      - src: ../../LICENSE
-        dst: LICENSE
-      - src: ../../README.md
-        dst: README.md
+      - LICENSE
+      - README.md
 
 checksum:
   name_template: "checksums.txt"
