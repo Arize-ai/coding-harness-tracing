@@ -1,0 +1,111 @@
+{
+  "harnesses": {
+    "claude_code": {
+      "arize_env_keys": [
+        "ARIZE_TRACE_ENABLED",
+        "ARIZE_PROJECT_NAME",
+        "ARIZE_USER_ID",
+        "ARIZE_API_KEY",
+        "ARIZE_SPACE_ID",
+        "ARIZE_OTLP_ENDPOINT",
+        "PHOENIX_ENDPOINT",
+        "PHOENIX_API_KEY",
+        "ARIZE_DRY_RUN",
+        "ARIZE_VERBOSE",
+        "ARIZE_LOG_FILE"
+      ],
+      "display_name": "Claude Code",
+      "harness_bin": "claude",
+      "hook_events": {
+        "Notification": "arize-hook-notification",
+        "PermissionDenied": "arize-hook-permission-denied",
+        "PermissionRequest": "arize-hook-permission-request",
+        "PostCompact": "arize-hook-post-compact",
+        "PostToolUse": "arize-hook-post-tool-use",
+        "PostToolUseFailure": "arize-hook-post-tool-use-failure",
+        "PreCompact": "arize-hook-pre-compact",
+        "PreToolUse": "arize-hook-pre-tool-use",
+        "SessionEnd": "arize-hook-session-end",
+        "SessionStart": "arize-hook-session-start",
+        "Stop": "arize-hook-stop",
+        "StopFailure": "arize-hook-stop-failure",
+        "SubagentStart": "arize-hook-subagent-start",
+        "SubagentStop": "arize-hook-subagent-stop",
+        "UserPromptExpansion": "arize-hook-user-prompt-expansion",
+        "UserPromptSubmit": "arize-hook-user-prompt-submit"
+      },
+      "settings_file": "~/.claude/settings.json"
+    },
+    "codex": {
+      "arize_env_keys": [],
+      "display_name": "Codex CLI",
+      "harness_bin": "codex",
+      "hook_events": [],
+      "settings_file": null
+    },
+    "copilot": {
+      "arize_env_keys": [],
+      "display_name": null,
+      "harness_bin": null,
+      "hook_events": {
+        "PostToolUse": "arize-hook-copilot-post-tool",
+        "PreToolUse": "arize-hook-copilot-pre-tool",
+        "SessionStart": "arize-hook-copilot-session-start",
+        "Stop": "arize-hook-copilot-stop",
+        "SubagentStop": "arize-hook-copilot-subagent-stop",
+        "UserPromptSubmit": "arize-hook-copilot-user-prompt"
+      },
+      "settings_file": null
+    },
+    "cursor": {
+      "arize_env_keys": [],
+      "display_name": "Cursor",
+      "harness_bin": "cursor",
+      "hook_events": [
+        "beforeSubmitPrompt",
+        "afterAgentResponse",
+        "afterAgentThought",
+        "beforeShellExecution",
+        "afterShellExecution",
+        "beforeMCPExecution",
+        "afterMCPExecution",
+        "beforeReadFile",
+        "afterFileEdit",
+        "stop",
+        "beforeTabFileRead",
+        "afterTabFileEdit",
+        "sessionStart",
+        "sessionEnd",
+        "postToolUse"
+      ],
+      "settings_file": null
+    },
+    "gemini": {
+      "arize_env_keys": [],
+      "display_name": null,
+      "harness_bin": null,
+      "hook_events": [],
+      "settings_file": "~/.gemini/settings.json"
+    },
+    "kiro": {
+      "arize_env_keys": [],
+      "display_name": "Kiro",
+      "harness_bin": "kiro-cli",
+      "hook_events": [
+        "agentSpawn",
+        "userPromptSubmit",
+        "preToolUse",
+        "postToolUse",
+        "stop"
+      ],
+      "settings_file": null
+    }
+  },
+  "schema_version": 1,
+  "shared": {
+    "config_file": "~/.arize/harness/config.yaml",
+    "install_dir": "~/.arize/harness",
+    "otlp_endpoint_default": "otlp.arize.com:443",
+    "venv_dir": "~/.arize/harness/venv"
+  }
+}
