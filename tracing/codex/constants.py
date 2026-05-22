@@ -13,4 +13,7 @@ CODEX_CONFIG_DIR = Path.home() / ".codex"
 CODEX_CONFIG_FILE = CODEX_CONFIG_DIR / "config.toml"
 CODEX_ENV_FILE = CODEX_CONFIG_DIR / "arize-env.sh"
 
+# Canonical settings-file path for manifest consumers (e.g. ax-trace doctor).
+SETTINGS_FILE = CODEX_CONFIG_FILE
+
 NOTIFY_BIN_NAME = "arize-hook-codex-notify"

@@ -66,6 +66,7 @@ def _stub_logging_prompts(monkeypatch):
         lambda: {"prompts": True, "tool_details": True, "tool_content": True},
     )
     monkeypatch.setattr(codex_install, "write_logging_config", lambda block, config_path=None: None)
+    monkeypatch.setattr(codex_install, "prompt_verbose", lambda: False)
 
 
 @pytest.fixture()

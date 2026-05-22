@@ -130,11 +130,15 @@ func CheckHarnessSettings(name string, entry manifest.HarnessEntry, opts Options
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			remediate := "Run `ax-trace install` to write the settings file."
+			if entry.DisplayName != "" {
+				remediate = fmt.Sprintf("Run `ax-trace install` to write %s settings, or launch %s once to create defaults.", entry.DisplayName, entry.DisplayName)
+			}
 			return Verdict{
 				Name:      checkName,
 				Pass:      false,
 				Detail:    fmt.Sprintf("settings file missing at %s", path),
-				Remediate: fmt.Sprintf("Run `ax-trace install` to write %s settings, or launch %s once to create defaults.", entry.DisplayName, entry.DisplayName),
+				Remediate: remediate,
 			}
 		}
 		return Verdict{

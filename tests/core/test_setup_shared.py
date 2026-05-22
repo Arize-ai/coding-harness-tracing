@@ -14,6 +14,18 @@ import yaml
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _scrub_credentials(monkeypatch):
+    """Scrub credential and ARIZE_INSTALL_* env vars so prompt_backend (which
+    now consults env vars before prompting) doesn't pick up the developer's
+    real shell credentials and produce non-deterministic test results."""
+    for key in ("ARIZE_API_KEY", "PHOENIX_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    for key in list(os.environ):
+        if key.startswith("ARIZE_INSTALL_"):
+            monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture
 def fake_install(tmp_path, monkeypatch):
     """Redirect all core.setup path constants to a temp directory.

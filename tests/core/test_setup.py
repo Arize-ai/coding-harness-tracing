@@ -14,8 +14,18 @@ import yaml
 @pytest.fixture(autouse=True)
 def _isolate_cwd(tmp_path, monkeypatch):
     """Run every test under tmp_path so cwd-relative writes (e.g. .github/hooks
-    from copilot install) don't leak into the project directory."""
+    from copilot install) don't leak into the project directory.
+
+    Also scrub credential and ARIZE_INSTALL_* env vars so prompt_backend (which
+    now consults env vars before prompting) doesn't pick up the developer's
+    real shell credentials and produce non-deterministic test results.
+    """
     monkeypatch.chdir(tmp_path)
+    for key in ("ARIZE_API_KEY", "PHOENIX_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    for key in list(os.environ):
+        if key.startswith("ARIZE_INSTALL_"):
+            monkeypatch.delenv(key, raising=False)
 
 
 def _patched_path_class(tmp_path):
@@ -505,8 +515,8 @@ class TestClaudeSetup:
         config_path, settings_file = self._setup_install_env(tmp_path, monkeypatch)
 
         # Inputs: backend=1 (Phoenix), endpoint=default, project_name=default, user_id="",
-        # then three content-logging prompts (defaults: Y, N, N).
-        inputs = iter(["1", "", "", "", "", "", ""])
+        # verbose="" (default no), then three content-logging prompts (defaults).
+        inputs = iter(["1", "", "", "", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
         monkeypatch.setattr("core.setup.getpass", lambda prompt="": "")
 
@@ -529,9 +539,9 @@ class TestClaudeSetup:
         config_path, settings_file = self._setup_install_env(tmp_path, monkeypatch)
 
         # Inputs: backend=2, space_id, otlp_endpoint=default, project_name=default,
-        # user_id="alice", then three content-logging prompts (defaults).
+        # user_id="alice", verbose="" (default no), then three content-logging prompts.
         # api_key goes through getpass.
-        inputs = iter(["2", "my-space", "", "", "alice", "", "", ""])
+        inputs = iter(["2", "my-space", "", "", "alice", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
         monkeypatch.setattr("core.setup.getpass", lambda prompt="": "my-key")
 
@@ -938,8 +948,8 @@ class TestCursorSetup:
         config_path = self._patch_cursor_install(tmp_path, monkeypatch)
 
         # Inputs: backend=1, endpoint=default, project_name=default, user_id="",
-        # then three content-logging prompts (defaults).
-        inputs = iter(["1", "", "", "", "", "", ""])
+        # verbose="" (default no), then three content-logging prompts (defaults).
+        inputs = iter(["1", "", "", "", "", "", "", ""])
         monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
         monkeypatch.setattr("core.setup.getpass", lambda prompt="": "")
 

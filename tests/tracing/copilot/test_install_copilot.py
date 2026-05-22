@@ -54,6 +54,7 @@ def _mock_prompts(monkeypatch, backend=None):
     )
     monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
     monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
+    monkeypatch.setattr(_install, "prompt_verbose", lambda: False)
     monkeypatch.setattr(
         _install,
         "prompt_content_logging",
@@ -196,6 +197,7 @@ class TestInstallSecondHarnessOffersCopyFrom:
         monkeypatch.setattr(_install, "prompt_backend", fake_prompt_backend)
         monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
         monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
+        monkeypatch.setattr(_install, "prompt_verbose", lambda: False)
         monkeypatch.setattr(
             _install,
             "prompt_content_logging",

@@ -29,14 +29,14 @@ func runDoctor(ctx context.Context) error {
 
 	anyFail := false
 	for _, v := range verdicts {
-		mark := "[OK]"
+		mark := "✓"
 		if !v.Pass {
-			mark = "[FAIL]"
+			mark = "✗"
 			anyFail = true
 		}
 		fmt.Printf("  %s %s — %s\n", mark, v.Name, v.Detail)
 		if !v.Pass && v.Remediate != "" {
-			fmt.Printf("    -> %s\n", v.Remediate)
+			fmt.Printf("    → %s\n", v.Remediate)
 		}
 	}
 

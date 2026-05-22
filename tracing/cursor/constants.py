@@ -10,6 +10,9 @@ HARNESS_BIN = "cursor"  # binary name for shutil.which() fallback
 HOOKS_FILE = Path.home() / ".cursor" / "hooks.json"
 HOOK_BIN_NAME = "arize-hook-cursor"
 
+# Canonical settings-file path for manifest consumers (e.g. ax-trace doctor).
+SETTINGS_FILE = HOOKS_FILE
+
 # 15 events, all routed to a single CLI entry point (the handler dispatches
 # based on hook_event_name / hookEventName in the JSON payload).
 # Includes IDE events plus CLI-specific events (sessionStart, sessionEnd, postToolUse).

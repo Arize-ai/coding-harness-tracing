@@ -89,6 +89,7 @@ def _mock_prompts(monkeypatch, backend=None):
     )
     monkeypatch.setattr(claude_install, "prompt_project_name", lambda default: default)
     monkeypatch.setattr(claude_install, "prompt_user_id", lambda: "")
+    monkeypatch.setattr(claude_install, "prompt_verbose", lambda: False)
     monkeypatch.setattr(
         claude_install, "prompt_content_logging", lambda: {"prompts": True, "tool_details": True, "tool_content": True}
     )
@@ -255,6 +256,7 @@ class TestCopyFrom:
         )
         monkeypatch.setattr(claude_install, "prompt_project_name", lambda default: default)
         monkeypatch.setattr(claude_install, "prompt_user_id", lambda: "")
+        monkeypatch.setattr(claude_install, "prompt_verbose", lambda: False)
         monkeypatch.setattr(
             claude_install,
             "prompt_content_logging",
