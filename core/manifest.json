@@ -41,12 +41,12 @@
       "display_name": "Codex CLI",
       "harness_bin": "codex",
       "hook_events": [],
-      "settings_file": "~/.codex/config.toml"
+      "settings_file": null
     },
     "copilot": {
       "arize_env_keys": [],
-      "display_name": "GitHub Copilot",
-      "harness_bin": "copilot",
+      "display_name": null,
+      "harness_bin": null,
       "hook_events": {
         "PostToolUse": "arize-hook-copilot-post-tool",
         "PreToolUse": "arize-hook-copilot-pre-tool",
@@ -55,7 +55,7 @@
         "SubagentStop": "arize-hook-copilot-subagent-stop",
         "UserPromptSubmit": "arize-hook-copilot-user-prompt"
       },
-      "settings_file": ".github/hooks/hooks.json"
+      "settings_file": null
     },
     "cursor": {
       "arize_env_keys": [],
@@ -78,12 +78,12 @@
         "sessionEnd",
         "postToolUse"
       ],
-      "settings_file": "~/.cursor/hooks.json"
+      "settings_file": null
     },
     "gemini": {
       "arize_env_keys": [],
-      "display_name": "Gemini CLI",
-      "harness_bin": "gemini",
+      "display_name": null,
+      "harness_bin": null,
       "hook_events": [],
       "settings_file": "~/.gemini/settings.json"
     },
@@ -98,7 +98,7 @@
         "postToolUse",
         "stop"
       ],
-      "settings_file": "~/.kiro/agents"
+      "settings_file": null
     }
   },
   "schema_version": 1,

@@ -15,8 +15,6 @@ HARNESS_BIN = "kiro-cli"
 # (`<workspace>/.kiro/agents/`) is out of scope for v1.
 KIRO_AGENTS_DIR = Path.home() / ".kiro" / "agents"
 
-SETTINGS_FILE = KIRO_AGENTS_DIR
-
 # Where Kiro writes the per-session sidecar files used to enrich LLM spans
 # with model, token counts, and metering usage. Mined by the stop handler.
 KIRO_SESSIONS_DIR = Path.home() / ".kiro" / "sessions" / "cli"

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Generate core/manifest.json from per-harness constants modules.
 
-Reads each tracing/<harness>/constants.py and extracts:
-  - DISPLAY_NAME, HARNESS_BIN, SETTINGS_FILE (required)
-  - HOOK_EVENTS, ARIZE_ENV_KEYS (optional; default to empty list)
+Reads each tracing/<harness>/constants.py and extracts the fields listed in
+EXTRACTED_FIELDS. Every field is optional: if a constants module does not
+define a field, the manifest emits the per-field default (None for scalars,
+empty list for collection fields) and a warning to stderr. The plan that
+created this generator forbids adding fields to constants.py to fill gaps —
+downstream consumers (the Go binary in cmd/ax-trace) must tolerate null
+values until the constants modules themselves grow the missing fields.
 
 Writes a stable, sorted JSON file at core/manifest.json. Designed to produce
 identical output on every run so a CI diff check is reliable.
 
-Schema notes for downstream consumers (the Go binary in cmd/ax-trace):
+Schema notes for downstream consumers:
   - `harnesses.<name>.hook_events` is heterogeneous across harnesses:
     * dict {event_name: handler_basename} for harnesses that bind each event
       to a distinct entry point (claude_code, copilot).
@@ -16,10 +20,9 @@ Schema notes for downstream consumers (the Go binary in cmd/ax-trace):
       handles every event (cursor, kiro).
     * empty list for harnesses that don't expose hooks (codex, gemini).
     Consumers must handle all three shapes (or treat the field as opaque).
-  - `harnesses.kiro.settings_file` resolves to a directory (~/.kiro/agents/),
-    not a single file. Kiro stores one JSON file per agent in that directory;
-    the installer/uninstaller iterates contents. Consumers reading this field
-    should not assume it is regular-file-shaped.
+  - `display_name`, `harness_bin`, `settings_file` may be `null` for any
+    harness whose constants module hasn't defined them yet. Consumers must
+    check for null before dereferencing.
 
 Usage: python scripts/gen_manifest.py [--check]
   --check: exit 1 if the generated content differs from the existing file.
@@ -36,9 +39,13 @@ from pathlib import Path
 
 HARNESSES = ["claude_code", "codex", "copilot", "cursor", "gemini", "kiro"]
 
-REQUIRED_FIELDS = ["DISPLAY_NAME", "HARNESS_BIN", "SETTINGS_FILE"]
-# Use tuple defaults so the shared instance can't be mutated by accident.
-OPTIONAL_FIELDS: dict[str, tuple] = {
+# All extracted fields are optional. Missing fields get the per-field default
+# (None for scalar fields, empty tuple for collection fields). Use immutable
+# tuple defaults so the shared instance can't be mutated by accident.
+EXTRACTED_FIELDS: dict[str, object] = {
+    "DISPLAY_NAME": None,
+    "HARNESS_BIN": None,
+    "SETTINGS_FILE": None,
     "HOOK_EVENTS": (),
     "ARIZE_ENV_KEYS": (),
 }
@@ -106,16 +113,15 @@ def build_manifest() -> dict:
                 continue
 
             entry: dict[str, object] = {}
-            for field in REQUIRED_FIELDS:
-                if not hasattr(mod, field):
+            for field, default in EXTRACTED_FIELDS.items():
+                if hasattr(mod, field):
+                    entry[field.lower()] = _coerce(getattr(mod, field))
+                else:
                     print(
-                        f"error: {module_path} missing required field {field}",
+                        f"warning: {module_path} does not define {field}; " f"emitting default ({default!r})",
                         file=sys.stderr,
                     )
-                    sys.exit(1)
-                entry[field.lower()] = _coerce(getattr(mod, field))
-            for field, default in OPTIONAL_FIELDS.items():
-                entry[field.lower()] = _coerce(getattr(mod, field, default))
+                    entry[field.lower()] = _coerce(default)
             harnesses[name] = entry
 
         return {

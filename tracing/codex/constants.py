@@ -13,6 +13,4 @@ CODEX_CONFIG_DIR = Path.home() / ".codex"
 CODEX_CONFIG_FILE = CODEX_CONFIG_DIR / "config.toml"
 CODEX_ENV_FILE = CODEX_CONFIG_DIR / "arize-env.sh"
 
-SETTINGS_FILE = CODEX_CONFIG_FILE
-
 NOTIFY_BIN_NAME = "arize-hook-codex-notify"

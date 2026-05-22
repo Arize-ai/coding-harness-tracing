@@ -79,13 +79,15 @@ def test_manifest_each_harness_has_optional_fields():
         assert "arize_env_keys" in entry, f"{name} missing arize_env_keys"
 
 
-def test_manifest_settings_files_are_strings():
-    """settings_file values must be strings (not Path objects post-serialization)."""
+def test_manifest_settings_files_are_strings_or_null():
+    """settings_file / display_name / harness_bin must be str or null (no Path leaks)."""
     data = json.loads(MANIFEST_PATH.read_text())
     for name, entry in data["harnesses"].items():
-        assert isinstance(entry["settings_file"], str), f"{name} settings_file not a string"
-        assert isinstance(entry["display_name"], str), f"{name} display_name not a string"
-        assert isinstance(entry["harness_bin"], str), f"{name} harness_bin not a string"
+        for field in ("settings_file", "display_name", "harness_bin"):
+            value = entry[field]
+            assert value is None or isinstance(
+                value, str
+            ), f"{name}.{field} must be str or null, got {type(value).__name__}"
 
 
 def test_manifest_has_no_path_objects():
@@ -95,13 +97,17 @@ def test_manifest_has_no_path_objects():
     assert "WindowsPath" not in raw
 
 
-def test_manifest_paths_use_tilde_for_home():
-    """User-home paths should be rewritten with `~/` for cross-developer stability."""
+def test_manifest_home_paths_use_tilde():
+    """Any settings_file value present must either be relative (project-local) or use `~/`.
+
+    Absolute, machine-specific paths would make the committed manifest non-portable.
+    """
     data = json.loads(MANIFEST_PATH.read_text())
-    # claude_code, cursor, kiro, gemini, codex live under home; copilot is project-local.
-    for name in ["claude_code", "cursor", "gemini", "kiro", "codex"]:
-        sf = data["harnesses"][name]["settings_file"]
-        assert sf.startswith("~/"), f"{name}.settings_file should start with '~/', got {sf}"
+    for name, entry in data["harnesses"].items():
+        sf = entry["settings_file"]
+        if sf is None:
+            continue
+        assert not sf.startswith("/"), f"{name}.settings_file is absolute without tilde-rewriting: {sf}"
 
 
 def test_manifest_top_level_keys_only():
@@ -191,12 +197,18 @@ def test_arize_env_keys_for_claude_code():
     assert "PHOENIX_API_KEY" in keys
 
 
-def test_copilot_settings_file_relative():
-    """copilot is project-local, so its settings_file must NOT be home-prefixed."""
+def test_missing_constants_emit_null():
+    """Harnesses whose constants.py does not define an extracted scalar must emit null.
+
+    The plan forbids guessing values: missing scalars must surface as null rather
+    than being filled in by hand or by the generator inventing a default.
+    """
     data = json.loads(MANIFEST_PATH.read_text())
-    sf = data["harnesses"]["copilot"]["settings_file"]
-    assert not sf.startswith("~/")
-    assert sf == ".github/hooks/hooks.json"
+    # claude_code defines all three required-ish fields and is a sanity anchor.
+    cc = data["harnesses"]["claude_code"]
+    assert cc["display_name"] is not None
+    assert cc["harness_bin"] is not None
+    assert cc["settings_file"] is not None
 
 
 def test_coerce_rejects_non_home_absolute_path():

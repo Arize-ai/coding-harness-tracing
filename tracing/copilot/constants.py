@@ -5,13 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 HARNESS_NAME = "copilot"
-DISPLAY_NAME = "GitHub Copilot"
-HARNESS_BIN = "copilot"
-
 HOOKS_DIR = Path(".github/hooks")  # project-local (relative)
 HOOKS_FILE = HOOKS_DIR / "hooks.json"
-
-SETTINGS_FILE = HOOKS_FILE
 
 # VS Code Copilot Chat reads any *.json under .github/hooks/ and expects:
 #   {"hooks": {"<EventName>": [{"type": "command", "command": "<cmd>"}]}}
