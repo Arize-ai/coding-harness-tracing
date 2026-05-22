@@ -224,6 +224,9 @@ install_harness() {
         run_with_tty "$vp" "$install_py" install
     fi
     info "Setup complete!"
+    if [[ -z "${AX_TRACE_QUIET:-}" ]]; then
+        info "Tip: ax-trace is the recommended installer for new users — see https://github.com/Arize-ai/coding-harness-tracing#ax-trace"
+    fi
 }
 
 usage() {

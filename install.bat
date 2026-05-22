@@ -60,7 +60,11 @@ set "_PY=%INSTALL_DIR%\%HARNESS_DIR%\install.py"
 if not exist "%_PY%" ( echo [arize] install.py not found at %_PY% >&2 & exit /b 1 )
 echo [arize] Running %COMMAND% install...
 "%VENV_PYTHON%" "%_PY%" install %WITH_SKILLS%
-exit /b %ERRORLEVEL%
+set "_INSTALL_RC=%ERRORLEVEL%"
+if "%_INSTALL_RC%"=="0" if not defined AX_TRACE_QUIET (
+    echo [arize] Tip: ax-trace is the recommended installer for new users -- see https://github.com/Arize-ai/coding-harness-tracing#ax-trace
+)
+exit /b %_INSTALL_RC%
 
 REM --- cmd_update ---
 :cmd_update
