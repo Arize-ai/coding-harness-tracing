@@ -50,7 +50,7 @@ class _Env:
 
     @property
     def verbose(self) -> bool:
-        return os.environ.get("ARIZE_VERBOSE", "").lower() == "true"
+        return _is_verbose()
 
     @property
     def dry_run(self) -> bool:
@@ -167,7 +167,24 @@ def get_timestamp_ms() -> int:
 
 
 def _is_verbose() -> bool:
-    return os.environ.get("ARIZE_VERBOSE", "").lower() == "true"
+    """Return True if verbose logging is enabled.
+
+    Env var ARIZE_VERBOSE takes precedence: truthy ("true", "1", "yes") forces
+    on, falsy ("false", "0", "no") forces off. When unset, falls back to the
+    top-level ``verbose: true`` key in config.yaml.
+    """
+    env_val = os.environ.get("ARIZE_VERBOSE", "").lower()
+    if env_val in ("true", "1", "yes"):
+        return True
+    if env_val in ("false", "0", "no"):
+        return False
+    try:
+        from core.config import load_config
+
+        cfg = load_config()
+        return bool(cfg.get("verbose", False))
+    except Exception:
+        return False
 
 
 def log(msg: str) -> None:

@@ -28,12 +28,14 @@ from core.setup import (
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
+    prompt_verbose,
     remove_harness_entry,
     symlink_skills,
     unlink_skills,
     venv_bin,
     write_config,
     write_logging_config,
+    write_verbose_config,
 )
 from tracing.codex._toml import _toml_load, _toml_write
 from tracing.codex.constants import (
@@ -229,6 +231,7 @@ def install(with_skills: bool = False) -> None:
         existing_harnesses = config.get("harnesses", {}) if config else {}
         target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
         user_id = prompt_user_id()
+        verbose = prompt_verbose()
         if not dry_run():
             write_config(
                 target=target,
@@ -237,6 +240,8 @@ def install(with_skills: bool = False) -> None:
                 project_name=project_name,
                 user_id=user_id,
             )
+            if verbose:
+                write_verbose_config(True)
         else:
             info("would write config.yaml with backend credentials")
 

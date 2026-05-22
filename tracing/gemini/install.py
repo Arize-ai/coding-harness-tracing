@@ -25,11 +25,13 @@ from core.setup import (
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
+    prompt_verbose,
     remove_harness_entry,
     unlink_skills,
     venv_bin,
     write_config,
     write_logging_config,
+    write_verbose_config,
 )
 from tracing.gemini.constants import EVENTS, HARNESS_NAME, HOOK_NAME, HOOK_TIMEOUT_MS
 
@@ -177,8 +179,11 @@ def install() -> None:
         target, credentials = prompt_backend(existing_harnesses)
         project_name = prompt_project_name(HARNESS_NAME)
         user_id = prompt_user_id()
+        verbose = prompt_verbose()
         if not dry_run():
             write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
+            if verbose:
+                write_verbose_config(True)
         else:
             info("would write config.yaml with backend credentials")
     else:

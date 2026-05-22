@@ -5,6 +5,13 @@ Config helper for Arize Coding Harness Tracing.
 Reads and writes ~/.arize/harness/config.yaml.
 Used by shell scripts (via CLI subcommands) and Python modules (via import).
 
+Top-level keys:
+  harnesses: dict of per-harness entries (target/endpoint/api_key/project_name/...)
+  logging:   dict of content-logging toggles (prompts, tool_details, tool_content)
+  user_id:   optional string identifying the user across harnesses
+  verbose:   bool — when true, hook handlers print trace summaries to stderr.
+             ARIZE_VERBOSE env var takes precedence over this key.
+
 CLI usage:
     python3 core/config.py get <dotted.key>
     python3 core/config.py set <dotted.key> <value>

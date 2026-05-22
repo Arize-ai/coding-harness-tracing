@@ -485,6 +485,22 @@ def prompt_verbose() -> bool:
     return ans in ("y", "yes")
 
 
+def write_verbose_config(value: bool, config_path: str | None = None) -> None:
+    """Set the top-level ``verbose`` key in config.yaml.
+
+    Mirrors the logging-block writer: read existing config, set the key,
+    write back. Honors dry_run().
+    """
+    config = load_config(config_path)
+    if not config:
+        config = {}
+    set_value(config, "verbose", value)
+    if dry_run():
+        info(f"would set verbose={value} in config.yaml")
+        return
+    save_config(config, config_path)
+
+
 def write_config(
     target: str,
     credentials: dict,

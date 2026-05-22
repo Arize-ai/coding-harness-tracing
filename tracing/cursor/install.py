@@ -17,11 +17,13 @@ from core.setup import (
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
+    prompt_verbose,
     remove_harness_entry,
     symlink_skills,
     unlink_skills,
     venv_bin,
     write_logging_config,
+    write_verbose_config,
 )
 from tracing.cursor.constants import (
     DISPLAY_NAME,
@@ -57,10 +59,13 @@ def install(with_skills: bool = False) -> None:
         target, credentials = prompt_backend(existing_harnesses)
         project_name = prompt_project_name(HARNESS_NAME)
         user_id = prompt_user_id()
+        verbose = prompt_verbose()
         if not dry_run():
             from core.setup import write_config
 
             write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
+            if verbose:
+                write_verbose_config(True)
         else:
             info("would write config.yaml with backend credentials")
     else:
