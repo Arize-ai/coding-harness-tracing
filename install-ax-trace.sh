@@ -31,39 +31,62 @@ detect_platform() {
     echo "${os}_${arch}"
 }
 
+# -- pick a sha256 verification command -------------------------------------
+# macOS ships `shasum -a 256` by default; Linux ships `sha256sum`. Pick whichever
+# is available, fail closed if neither is present (verification is mandatory).
+sha256_check() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -c -
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 -c -
+    else
+        echo "error: no sha256 verification tool found (need sha256sum or shasum)" >&2
+        return 1
+    fi
+}
+
 # -- resolve version (latest if unset) --------------------------------------
+# Walk paginated releases until we find one tagged ax-trace-v*. The repo also
+# ships non-ax-trace releases, so the first page is not guaranteed to contain
+# our tag.
 resolve_version() {
     if [[ -n "$VERSION" ]]; then echo "$VERSION"; return; fi
-    # Find the latest tag matching ax-trace-v*
     local api="https://api.github.com/repos/$REPO/releases"
-    local tag
-    tag="$(curl -sSL "$api" | grep -oE '"tag_name": "ax-trace-v[^"]+"' | head -1 | sed 's/.*"ax-trace-v\(.*\)"/v\1/')"
-    if [[ -z "$tag" ]]; then
-        echo "error: could not resolve latest ax-trace version" >&2
-        exit 1
-    fi
-    echo "$tag"
+    local page=1 tag=""
+    while [[ $page -le 5 ]]; do
+        local body
+        body="$(curl -sSL --retry 3 --retry-delay 2 "$api?per_page=100&page=$page")"
+        tag="$(echo "$body" | grep -oE '"tag_name": *"ax-trace-v[^"]+"' | head -1 | sed 's/.*"ax-trace-\(v[^"]*\)"/\1/')"
+        if [[ -n "$tag" ]]; then echo "$tag"; return; fi
+        # If page returned fewer than 100 entries, we've hit the end.
+        local count
+        count="$(echo "$body" | grep -c '"tag_name":' || true)"
+        if [[ "$count" -lt 100 ]]; then break; fi
+        page=$((page + 1))
+    done
+    echo "error: could not resolve latest ax-trace version" >&2
+    exit 1
 }
 
 # -- download + verify ------------------------------------------------------
 download_release() {
     local version="$1" platform="$2"
-    local tmpdir; tmpdir="$(mktemp -d)"
     local base="https://github.com/$REPO/releases/download/ax-trace-${version}"
     local archive="ax-trace_${version#v}_${platform}.tar.gz"
     local checksums="checksums.txt"
 
-    curl -sSLf "$base/$archive" -o "$tmpdir/$archive"
-    curl -sSLf "$base/$checksums" -o "$tmpdir/$checksums"
+    curl -sSLf --retry 3 --retry-delay 2 "$base/$archive" -o "$TMPDIR_INSTALL/$archive"
+    curl -sSLf --retry 3 --retry-delay 2 "$base/$checksums" -o "$TMPDIR_INSTALL/$checksums"
 
-    # Verify SHA256
-    (cd "$tmpdir" && grep "$archive" "$checksums" | sha256sum -c -) || {
+    # Verify SHA256. GoReleaser checksum format is "<hash>  <file>"; match the
+    # exact filename at end-of-line so we don't accept substring matches.
+    (cd "$TMPDIR_INSTALL" && grep -F -- "  $archive" "$checksums" | sha256_check) || {
         echo "error: SHA256 verification failed for $archive" >&2
         exit 1
     }
 
-    tar -xzf "$tmpdir/$archive" -C "$tmpdir"
-    echo "$tmpdir/ax-trace"
+    tar -xzf "$TMPDIR_INSTALL/$archive" -C "$TMPDIR_INSTALL"
+    echo "$TMPDIR_INSTALL/ax-trace"
 }
 
 # -- install + PATH check ---------------------------------------------------
@@ -86,6 +109,9 @@ install_binary() {
 }
 
 main() {
+    TMPDIR_INSTALL="$(mktemp -d)"
+    trap 'rm -rf "$TMPDIR_INSTALL"' EXIT
+
     local platform version binary
     platform="$(detect_platform)"
     version="$(resolve_version)"
