@@ -56,3 +56,12 @@ repos:
         name: mypy (tracing/kiro)
         files: ^tracing/kiro/
         additional_dependencies: [types-PyYAML]
+
+  - repo: local
+    hooks:
+      - id: gen-manifest
+        name: Regenerate core/manifest.json
+        entry: python scripts/gen_manifest.py
+        language: system
+        files: ^(tracing/[^/]+/constants\.py|scripts/gen_manifest\.py)$
+        pass_filenames: false
