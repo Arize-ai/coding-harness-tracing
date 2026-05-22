@@ -271,7 +271,7 @@ func TestEnsureUv_InstallerHTTPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("EnsureUv expected error from HTTP 500, got nil")
 	}
-	if len(runner.callsByName("sh")) != 0 && len(runner.callsByName("powershell")) != 0 {
+	if len(runner.callsByName("sh")) != 0 || len(runner.callsByName("powershell")) != 0 {
 		t.Errorf("installer shell should not be invoked after HTTP failure")
 	}
 }
@@ -376,7 +376,7 @@ func TestEnsureRepo_ShallowFetchFallsBackToFull(t *testing.T) {
 					return true
 				}
 			}
-			return true
+			return false
 		},
 	}}
 
@@ -516,6 +516,45 @@ func TestExtractTarGz_RejectsTraversal(t *testing.T) {
 	err := extractTarGz(bytes.NewReader(buf.Bytes()), tmp)
 	if err == nil {
 		t.Fatal("expected error for path traversal entry")
+	}
+}
+
+func TestExtractTarGz_RejectsUnsafeSymlinkTarget(t *testing.T) {
+	cases := []struct {
+		name    string
+		linkTo  string
+		wantErr bool
+	}{
+		{"absolute target", "/etc/passwd", true},
+		{"traversal target", "../../../etc/passwd", true},
+		{"safe relative target", "sibling.txt", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			var buf bytes.Buffer
+			gz := gzip.NewWriter(&buf)
+			tw := tar.NewWriter(gz)
+			if err := tw.WriteHeader(&tar.Header{
+				Name:     "top/link",
+				Linkname: tc.linkTo,
+				Typeflag: tar.TypeSymlink,
+				Mode:     0o644,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_ = tw.Close()
+			_ = gz.Close()
+
+			err := extractTarGz(bytes.NewReader(buf.Bytes()), tmp)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error for unsafe symlink target")
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error for safe target %q: %v", tc.linkTo, err)
+			}
+		})
 	}
 }
 

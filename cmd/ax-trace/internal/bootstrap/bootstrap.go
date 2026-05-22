@@ -99,6 +99,10 @@ func Bootstrap(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("ensuring venv: %w", err)
 	}
 
+	// The SSL fix is applied once at venv creation. A reused venv already has
+	// sitecustomize.py from its first bootstrap; re-applying on every run would
+	// reinstall certifi for no benefit. Users on a venv that predates the fix
+	// can `ax-trace uninstall` (or delete the venv dir) and reinstall.
 	if runtime.GOOS == "darwin" && !reused {
 		if err := EnsureMacOSSSLFix(ctx, opts, venvPython); err != nil {
 			fmt.Fprintf(opts.Stderr, "warning: macOS SSL fix failed: %v\n", err)

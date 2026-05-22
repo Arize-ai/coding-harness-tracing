@@ -30,7 +30,6 @@ func EnsureUv(ctx context.Context, opts Options) (string, error) {
 	opts = withDefaults(opts)
 
 	if path, ok := lookupCachedUv(); ok {
-		cacheUvPath(path)
 		return path, nil
 	}
 

@@ -144,6 +144,9 @@ func extractTarGz(r io.Reader, destDir string) error {
 				return fmt.Errorf("closing %s: %w", target, err)
 			}
 		case tar.TypeSymlink:
+			if !isSafeSymlinkTarget(hdr.Linkname) {
+				return fmt.Errorf("refusing tar symlink with unsafe target: %s -> %s", hdr.Name, hdr.Linkname)
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return fmt.Errorf("creating parent dir for %s: %w", target, err)
 			}
@@ -181,6 +184,25 @@ func isSafeRelPath(rel string) bool {
 		return false
 	}
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// isSafeSymlinkTarget rejects symlink targets that could resolve outside
+// destDir — absolute paths or any path containing a parent-dir traversal.
+// A subsequent file write that resolves through such a link could escape
+// the install directory.
+func isSafeSymlinkTarget(target string) bool {
+	if target == "" {
+		return false
+	}
+	if filepath.IsAbs(target) {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(target), "/") {
 		if part == ".." {
 			return false
 		}
