@@ -1,12 +1,11 @@
 // Package doctor runs health checks against the user's install.
 //
 // Checks per harness:
-//   - settings file exists at the path from manifest
-//   - settings file's hook entries point at binaries that exist on disk
+//   - settings file exists at the path from manifest and (for JSON files) is parseable
 //   - relevant env vars are set OR the value is in ~/.arize/harness/config.yaml
 //
 // Plus shared checks:
-//   - venv exists and has a python that responds to --version
+//   - venv python interpreter exists on disk
 //   - OTLP endpoint returns HTTP < 500 within 5 seconds
 package doctor
 

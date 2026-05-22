@@ -57,9 +57,10 @@ func configFile(home string) string {
 	return filepath.Join(home, ".arize", "harness", "config.yaml")
 }
 
-// CheckVenv verifies <home>/.arize/harness/venv/bin/python exists.
-// It reports a passing verdict when the file is present and executable
-// (executable bit is not checked on Windows).
+// CheckVenv verifies the venv python interpreter exists at the platform-specific
+// path under <home>/.arize/harness/venv. The interpreter is not executed — only
+// its presence on disk is checked, so this check remains useful even when the
+// venv is otherwise broken.
 func CheckVenv(opts Options) Verdict {
 	home, err := homeDir(opts)
 	if err != nil {
@@ -229,12 +230,13 @@ func CheckHarnessEnv(name string, entry manifest.HarnessEntry, opts Options) Ver
 }
 
 // configKeysPresent reads cfgPath as YAML and returns the subset of env keys
-// that appear (case-sensitive) anywhere in the file content. A missing file
-// is not an error — it just returns an empty result.
+// that appear as YAML mapping keys (case-sensitive). A missing file is not
+// an error — it returns an empty result.
 //
-// To avoid a yaml dependency, we look for the env key as a substring on any
-// line. This is a heuristic but is sufficient for the doctor check: if a key
-// name appears in config.yaml at all, it counts as "set somewhere".
+// To avoid a yaml dependency, we scan line by line for a key that, after
+// trimming leading whitespace, is followed by ":". This avoids substring
+// false positives like "MY_ARIZE_API_KEY" matching a search for
+// "ARIZE_API_KEY", while still tolerating arbitrary nesting depth.
 func configKeysPresent(cfgPath string, keys []string) ([]string, error) {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -243,11 +245,16 @@ func configKeysPresent(cfgPath string, keys []string) ([]string, error) {
 		}
 		return nil, err
 	}
-	text := string(data)
+	lines := strings.Split(string(data), "\n")
 	hits := []string{}
 	for _, key := range keys {
-		if strings.Contains(text, key) {
-			hits = append(hits, key)
+		prefix := key + ":"
+		for _, line := range lines {
+			trimmed := strings.TrimLeft(line, " \t")
+			if strings.HasPrefix(trimmed, prefix) {
+				hits = append(hits, key)
+				break
+			}
 		}
 	}
 	return hits, nil

@@ -39,6 +39,11 @@ func writeFile(t *testing.T, path, content string) {
 
 // unsetenv removes key from the environment for the duration of the test,
 // restoring whatever value (or unset state) was present before.
+//
+// The t.Setenv-then-os.Unsetenv sequence is intentional: t.Setenv registers
+// a cleanup that restores the original value at test end, but it also sets
+// the key right now. We then immediately Unsetenv to clear it for the
+// duration of the test body, while keeping the cleanup registered.
 func unsetenv(t *testing.T, key string) {
 	t.Helper()
 	if original, ok := os.LookupEnv(key); ok {
@@ -158,6 +163,7 @@ func TestCheckHarnessSettings_TOMLExistenceOnly(t *testing.T) {
 func TestCheckHarnessEnv_EnvSet(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("ARIZE_API_KEY", "placeholder")
+	unsetenv(t, "PHOENIX_API_KEY")
 	entry := manifest.HarnessEntry{
 		ArizeEnvKeys: []string{"ARIZE_API_KEY", "PHOENIX_API_KEY"},
 	}
@@ -308,14 +314,66 @@ func TestRun_AllHarnesses(t *testing.T) {
 		t.Errorf("expected several verdicts, got %d", len(verdicts))
 	}
 	names := map[string]bool{}
+	sawSettings, sawEnv := false, false
 	for _, v := range verdicts {
 		names[v.Name] = true
+		if strings.HasPrefix(v.Name, "settings:") {
+			sawSettings = true
+		}
+		if strings.HasPrefix(v.Name, "env:") {
+			sawEnv = true
+		}
 	}
 	if !names["venv"] {
 		t.Error("missing venv check in verdicts")
 	}
 	if !names["otlp_endpoint"] {
 		t.Error("missing otlp_endpoint check in verdicts")
+	}
+	if !sawSettings {
+		t.Error("expected at least one settings:<harness> verdict from harness loop")
+	}
+	if !sawEnv {
+		t.Error("expected at least one env:<harness> verdict from harness loop")
+	}
+}
+
+func TestCheckOTLPEndpoint_EmptyEndpoint(t *testing.T) {
+	v := CheckOTLPEndpoint(context.Background(), "", Options{})
+	if v.Pass {
+		t.Fatal("expected fail for empty endpoint")
+	}
+	if !strings.Contains(v.Detail, "no OTLP endpoint configured") {
+		t.Errorf("detail = %q, want mention of missing endpoint", v.Detail)
+	}
+	if v.Remediate == "" {
+		t.Error("expected non-empty remediation")
+	}
+}
+
+func TestConfigKeysPresent_RejectsSubstringFalsePositive(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := configFile(tmp)
+	writeFile(t, cfgPath, "harnesses:\n  claude_code:\n    MY_ARIZE_API_KEY: placeholder\n")
+	hits, err := configKeysPresent(cfgPath, []string{"ARIZE_API_KEY"})
+	if err != nil {
+		t.Fatalf("configKeysPresent: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("expected no hits for substring-only match, got %v", hits)
+	}
+}
+
+func TestConfigKeysPresent_AcceptsNestedYAMLKey(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := configFile(tmp)
+	writeFile(t, cfgPath, "harnesses:\n  claude_code:\n    ARIZE_API_KEY: placeholder\n")
+	hits, err := configKeysPresent(cfgPath, []string{"ARIZE_API_KEY"})
+	if err != nil {
+		t.Fatalf("configKeysPresent: %v", err)
+	}
+	if len(hits) != 1 || hits[0] != "ARIZE_API_KEY" {
+		t.Errorf("expected single ARIZE_API_KEY hit, got %v", hits)
 	}
 }
 
