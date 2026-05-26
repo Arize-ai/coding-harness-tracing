@@ -144,7 +144,7 @@ func extractTarGz(r io.Reader, destDir string) error {
 				return fmt.Errorf("closing %s: %w", target, err)
 			}
 		case tar.TypeSymlink:
-			if !isSafeSymlinkTarget(hdr.Linkname) {
+			if !isSafeSymlinkTarget(target, hdr.Linkname, destDir) {
 				return fmt.Errorf("refusing tar symlink with unsafe target: %s -> %s", hdr.Name, hdr.Linkname)
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -191,21 +191,26 @@ func isSafeRelPath(rel string) bool {
 	return true
 }
 
-// isSafeSymlinkTarget rejects symlink targets that could resolve outside
-// destDir — absolute paths or any path containing a parent-dir traversal.
-// A subsequent file write that resolves through such a link could escape
-// the install directory.
-func isSafeSymlinkTarget(target string) bool {
-	if target == "" {
+// isSafeSymlinkTarget returns true when following the symlink at linkPath
+// pointing to linkname would resolve to a path inside destDir. Rejects
+// absolute targets outright, but allows relative targets that traverse up
+// and back down as long as the resolved path stays under destDir
+// (e.g. tracing/claude_code/core -> ../../core resolves to <destDir>/core).
+// Both linkPath and destDir should be absolute cleaned paths.
+func isSafeSymlinkTarget(linkPath, linkname, destDir string) bool {
+	if linkname == "" {
 		return false
 	}
-	if filepath.IsAbs(target) {
+	if filepath.IsAbs(linkname) {
 		return false
 	}
-	for _, part := range strings.Split(filepath.ToSlash(target), "/") {
-		if part == ".." {
-			return false
-		}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkname))
+	rel, err := filepath.Rel(destDir, resolved)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
 	}
 	return true
 }

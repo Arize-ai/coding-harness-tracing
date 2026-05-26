@@ -521,13 +521,21 @@ func TestExtractTarGz_RejectsTraversal(t *testing.T) {
 
 func TestExtractTarGz_RejectsUnsafeSymlinkTarget(t *testing.T) {
 	cases := []struct {
-		name    string
-		linkTo  string
-		wantErr bool
+		name     string
+		linkName string // tar entry path (before strip)
+		linkTo   string
+		wantErr  bool
 	}{
-		{"absolute target", "/etc/passwd", true},
-		{"traversal target", "../../../etc/passwd", true},
-		{"safe relative target", "sibling.txt", false},
+		{"absolute target", "top/link", "/etc/passwd", true},
+		{"traversal escapes destdir", "top/link", "../../../etc/passwd", true},
+		{"safe sibling target", "top/link", "sibling.txt", false},
+		// tracing/claude_code/core -> ../../core resolves to <destDir>/core,
+		// which is still inside destDir. This pattern is used by the
+		// coding-harness-tracing repo so it must be permitted.
+		{"safe traversal that stays in destdir", "top/tracing/claude_code/core", "../../core", false},
+		// Traversal that goes up but doesn't escape (e.g. parent sibling)
+		// is also safe.
+		{"safe up-then-into-sibling", "top/a/b/file", "../sibling.txt", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -536,7 +544,7 @@ func TestExtractTarGz_RejectsUnsafeSymlinkTarget(t *testing.T) {
 			gz := gzip.NewWriter(&buf)
 			tw := tar.NewWriter(gz)
 			if err := tw.WriteHeader(&tar.Header{
-				Name:     "top/link",
+				Name:     tc.linkName,
 				Linkname: tc.linkTo,
 				Typeflag: tar.TypeSymlink,
 				Mode:     0o644,
