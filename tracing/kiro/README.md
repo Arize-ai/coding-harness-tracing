@@ -22,7 +22,7 @@ curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main
 ax-trace add kiro
 
 # Uninstall
-ax-trace uninstall kiro
+ax-trace uninstall --kiro
 ```
 
 Windows (PowerShell):
@@ -35,7 +35,7 @@ irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/insta
 ax-trace add kiro
 
 # Uninstall
-ax-trace uninstall kiro
+ax-trace uninstall --kiro
 ```
 
 #### Non-interactive install

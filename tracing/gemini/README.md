@@ -21,7 +21,7 @@ curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main
 ax-trace add gemini
 
 # Uninstall Gemini tracing
-ax-trace uninstall gemini
+ax-trace uninstall --gemini
 ```
 
 Windows (PowerShell):
@@ -34,7 +34,7 @@ irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/insta
 ax-trace add gemini
 
 # Uninstall Gemini tracing
-ax-trace uninstall gemini
+ax-trace uninstall --gemini
 ```
 
 For unattended installs, pass values as flags and set credentials via environment variables — `ax-trace` will skip the interactive wizard:

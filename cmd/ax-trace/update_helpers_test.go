@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func setHome(t *testing.T, dir string) {
@@ -96,11 +98,11 @@ func TestVenvExists_TrueWhenPresent(t *testing.T) {
 	}
 }
 
-func TestRunUninstallOne_NoVenv_ExitsZero(t *testing.T) {
+func TestRunUninstallSelected_NoVenv_ExitsZero(t *testing.T) {
 	tmp := t.TempDir()
 	setHome(t, tmp)
-	if err := runUninstallOne(context.Background(), "claude-code"); err != nil {
-		t.Errorf("runUninstallOne with no venv = %v, want nil", err)
+	if err := runUninstallSelected(context.Background(), []string{"claude-code"}); err != nil {
+		t.Errorf("runUninstallSelected with no venv = %v, want nil", err)
 	}
 }
 
@@ -154,7 +156,7 @@ func TestUpdateCommand_HasBranchFlag(t *testing.T) {
 			if flag.DefValue != "main" {
 				t.Errorf("--branch default = %q, want %q", flag.DefValue, "main")
 			}
-		case "uninstall [harness]":
+		case "uninstall":
 			uninstallCmd = true
 		}
 	}
@@ -166,7 +168,7 @@ func TestUpdateCommand_HasBranchFlag(t *testing.T) {
 	}
 }
 
-func TestUninstallCommand_AcceptsAtMostOneArg(t *testing.T) {
+func TestUninstallCommand_RejectsPositionalArgs(t *testing.T) {
 	var uninstallCmd interface {
 		ValidateArgs([]string) error
 	}
@@ -182,10 +184,26 @@ func TestUninstallCommand_AcceptsAtMostOneArg(t *testing.T) {
 	if err := uninstallCmd.ValidateArgs([]string{}); err != nil {
 		t.Errorf("uninstall with 0 args = %v, want nil", err)
 	}
-	if err := uninstallCmd.ValidateArgs([]string{"claude-code"}); err != nil {
-		t.Errorf("uninstall with 1 arg = %v, want nil", err)
+	if err := uninstallCmd.ValidateArgs([]string{"claude-code"}); err == nil {
+		t.Error("uninstall with positional arg = nil, want error (NoArgs)")
 	}
-	if err := uninstallCmd.ValidateArgs([]string{"a", "b"}); err == nil {
-		t.Error("uninstall with 2 args = nil, want error (MaximumNArgs(1))")
+}
+
+func TestUninstallCommand_HasHarnessFlags(t *testing.T) {
+	var uninstallCmd *cobra.Command
+	for _, cmd := range rootCmd.Commands() {
+		if strings.HasPrefix(cmd.Use, "uninstall") {
+			uninstallCmd = cmd
+			break
+		}
+	}
+	if uninstallCmd == nil {
+		t.Fatal("uninstall command not registered")
+	}
+	want := []string{"claude", "codex", "copilot", "cursor", "gemini", "kiro"}
+	for _, name := range want {
+		if uninstallCmd.Flag(name) == nil {
+			t.Errorf("uninstall command missing --%s flag", name)
+		}
 	}
 }

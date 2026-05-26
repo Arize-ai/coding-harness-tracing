@@ -21,7 +21,7 @@ curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main
 ax-trace add copilot
 
 # Uninstall
-ax-trace uninstall copilot
+ax-trace uninstall --copilot
 ```
 
 Windows (PowerShell):
@@ -34,7 +34,7 @@ irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/insta
 ax-trace add copilot
 
 # Uninstall
-ax-trace uninstall copilot
+ax-trace uninstall --copilot
 ```
 
 Non-interactive install (CI, scripted setup) — pass credentials via environment variables and skip prompts:

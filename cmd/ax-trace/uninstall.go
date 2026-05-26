@@ -12,25 +12,81 @@ import (
 	"github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace/internal/paths"
 )
 
+// uninstallSelections holds the per-harness --<harness> boolean flags. When
+// none are set, `ax-trace uninstall` does a full wipe. When one or more are
+// set, only those harnesses are uninstalled and the shared runtime is left
+// in place.
+type uninstallSelections struct {
+	claude  bool
+	codex   bool
+	copilot bool
+	cursor  bool
+	gemini  bool
+	kiro    bool
+}
+
+// selected returns the harness keys (as they appear in config.yaml) that
+// the user opted into via --<harness> flags, in a deterministic order.
+func (s *uninstallSelections) selected() []string {
+	var keys []string
+	if s.claude {
+		keys = append(keys, "claude-code")
+	}
+	if s.codex {
+		keys = append(keys, "codex")
+	}
+	if s.copilot {
+		keys = append(keys, "copilot")
+	}
+	if s.cursor {
+		keys = append(keys, "cursor")
+	}
+	if s.gemini {
+		keys = append(keys, "gemini")
+	}
+	if s.kiro {
+		keys = append(keys, "kiro")
+	}
+	return keys
+}
+
 func init() {
+	s := &uninstallSelections{}
 	cmd := &cobra.Command{
-		Use:   "uninstall [harness]",
-		Short: "Uninstall one harness, or all harnesses + the shared runtime",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "uninstall",
+		Short: "Uninstall selected harnesses, or all harnesses + the shared runtime",
+		Long: `Uninstall coding-harness-tracing.
+
+With no flags, uninstalls every installed harness and wipes the shared
+Python runtime plus ax-trace's own state directory.
+
+With one or more --<harness> flags, uninstalls only the selected harnesses
+and leaves the shared runtime in place.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
+			keys := s.selected()
+			if len(keys) == 0 {
 				return runUninstallAll(cmd.Context())
 			}
-			return runUninstallOne(cmd.Context(), args[0])
+			return runUninstallSelected(cmd.Context(), keys)
 		},
 	}
+	cmd.Flags().BoolVar(&s.claude, "claude", false, "Uninstall Claude Code tracing")
+	cmd.Flags().BoolVar(&s.codex, "codex", false, "Uninstall Codex CLI tracing")
+	cmd.Flags().BoolVar(&s.copilot, "copilot", false, "Uninstall GitHub Copilot tracing")
+	cmd.Flags().BoolVar(&s.cursor, "cursor", false, "Uninstall Cursor tracing")
+	cmd.Flags().BoolVar(&s.gemini, "gemini", false, "Uninstall Gemini CLI tracing")
+	cmd.Flags().BoolVar(&s.kiro, "kiro", false, "Uninstall Kiro tracing")
 	rootCmd.AddCommand(cmd)
 }
 
-// runUninstallOne tears down a single harness by exec'ing its install.py with
-// the "uninstall" subcommand. If the venv is missing, prints a friendly note
-// and exits 0 — there's nothing to clean up.
-func runUninstallOne(ctx context.Context, key string) error {
+// runUninstallSelected tears down each requested harness, continuing past
+// per-harness failures so one broken install.py doesn't block the others.
+// Leaves the shared runtime (venv, install dir, ax-trace state) in place.
+//
+// If the venv is missing, returns nil with a friendly note — there's
+// nothing to tear down at the harness level.
+func runUninstallSelected(ctx context.Context, keys []string) error {
 	if !venvExists() {
 		fmt.Fprintln(os.Stdout, "[ax-trace] venv not found — nothing to uninstall")
 		return nil
@@ -40,21 +96,33 @@ func runUninstallOne(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("resolving install dir: %w", err)
 	}
-	installPy := filepath.Join(installDir, "tracing", harnessSubdir(key), "install.py")
-	if _, statErr := os.Stat(installPy); statErr != nil {
-		return fmt.Errorf("unknown harness %q: install script not found at %s", key, installPy)
+
+	var failed []string
+	for _, key := range keys {
+		installPy := filepath.Join(installDir, "tracing", harnessSubdir(key), "install.py")
+		if _, statErr := os.Stat(installPy); statErr != nil {
+			fmt.Fprintf(os.Stderr, "[ax-trace] %s install script not found at %s (skipping)\n", key, installPy)
+			failed = append(failed, key)
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "[ax-trace] uninstalling %s tracing...\n", key)
+		exitCode, dispatchErr := axexec.Dispatch(ctx, axexec.DispatchOptions{
+			BinName: "python",
+			Args:    []string{installPy, "uninstall"},
+		})
+		if dispatchErr != nil {
+			fmt.Fprintf(os.Stderr, "[ax-trace] %s uninstall failed (continuing): %v\n", key, dispatchErr)
+			failed = append(failed, key)
+			continue
+		}
+		if exitCode != 0 {
+			fmt.Fprintf(os.Stderr, "[ax-trace] %s uninstall exited with code %d (continuing)\n", key, exitCode)
+			failed = append(failed, key)
+		}
 	}
 
-	fmt.Fprintf(os.Stdout, "[ax-trace] uninstalling %s tracing...\n", key)
-	exitCode, err := axexec.Dispatch(ctx, axexec.DispatchOptions{
-		BinName: "python",
-		Args:    []string{installPy, "uninstall"},
-	})
-	if err != nil {
-		return fmt.Errorf("uninstalling %s: %w", key, err)
-	}
-	if exitCode != 0 {
-		os.Exit(exitCode)
+	if len(failed) > 0 {
+		return fmt.Errorf("one or more uninstalls failed: %v", failed)
 	}
 	return nil
 }
