@@ -46,9 +46,9 @@ sha256_check() {
 }
 
 # -- resolve version (latest if unset) --------------------------------------
-# Walk paginated releases until we find one tagged ax-trace-v*. The repo also
-# ships non-ax-trace releases, so the first page is not guaranteed to contain
-# our tag.
+# Walk paginated releases until we find one tagged cmd/ax-trace/v*. The repo
+# also ships non-ax-trace releases, so the first page is not guaranteed to
+# contain our tag.
 resolve_version() {
     if [[ -n "$VERSION" ]]; then echo "$VERSION"; return; fi
     local api="https://api.github.com/repos/$REPO/releases"
@@ -56,7 +56,7 @@ resolve_version() {
     while [[ $page -le 5 ]]; do
         local body
         body="$(curl -sSL --retry 3 --retry-delay 2 "$api?per_page=100&page=$page")"
-        tag="$(echo "$body" | grep -oE '"tag_name": *"ax-trace-v[^"]+"' | head -1 | sed 's/.*"ax-trace-\(v[^"]*\)"/\1/')"
+        tag="$(echo "$body" | grep -oE '"tag_name": *"cmd/ax-trace/v[^"]+"' | head -1 | sed 's|.*"cmd/ax-trace/\(v[^"]*\)"|\1|')"
         if [[ -n "$tag" ]]; then echo "$tag"; return; fi
         # If page returned fewer than 100 entries, we've hit the end.
         local count
@@ -71,7 +71,7 @@ resolve_version() {
 # -- download + verify ------------------------------------------------------
 download_release() {
     local version="$1" platform="$2"
-    local base="https://github.com/$REPO/releases/download/ax-trace-${version}"
+    local base="https://github.com/$REPO/releases/download/cmd/ax-trace/${version}"
     local archive="ax-trace_${version#v}_${platform}.tar.gz"
     local checksums="checksums.txt"
 

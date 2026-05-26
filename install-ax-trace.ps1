@@ -15,21 +15,21 @@ if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
 }
 
 if (-not $Version) {
-    # The repo ships non-ax-trace releases too, so paginate until we find an ax-trace-v* tag.
+    # The repo ships non-ax-trace releases too, so paginate until we find a cmd/ax-trace/v* tag.
     $tag = $null
     for ($page = 1; $page -le 5 -and -not $tag; $page++) {
         $api = "https://api.github.com/repos/$Repo/releases?per_page=100&page=$page"
         $releases = @(Invoke-RestMethod -Uri $api -UseBasicParsing)
-        $tag = ($releases | Where-Object { $_.tag_name -like "ax-trace-v*" } | Select-Object -First 1).tag_name
+        $tag = ($releases | Where-Object { $_.tag_name -like "cmd/ax-trace/v*" } | Select-Object -First 1).tag_name
         if ($releases.Count -lt 100) { break }
     }
     if (-not $tag) { throw "Could not resolve latest ax-trace version" }
-    $Version = $tag -replace "^ax-trace-", ""
+    $Version = $tag -replace "^cmd/ax-trace/", ""
 }
 
 Write-Host "[ax-trace] Installing ax-trace $Version for windows_amd64"
 
-$base = "https://github.com/$Repo/releases/download/ax-trace-$Version"
+$base = "https://github.com/$Repo/releases/download/cmd/ax-trace/$Version"
 $archive = "ax-trace_$($Version -replace '^v','')_windows_amd64.zip"
 $checksums = "checksums.txt"
 

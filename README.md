@@ -24,17 +24,13 @@ Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and confi
 
 `ax-trace` is a single-binary CLI that installs and manages tracing for every supported harness. It bootstraps its own Python toolchain via [uv](https://github.com/astral-sh/uv), so no system Python is required.
 
-**macOS / Linux:**
-
 ```bash
-curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.sh | bash
+go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
 ```
 
-**Windows:**
-
-```powershell
-irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.ps1 | iex
-```
+Alternative install paths:
+- **Claude Code marketplace plugin** — installs ax-trace automatically as part of the Claude Code tracing plugin. See [Claude Code Tracing](tracing/claude_code/README.md#claude-code-marketplace).
+- **curl / irm installer** (for scripts or environments without Go): `curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.sh | bash` (Unix) or `irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.ps1 | iex` (Windows).
 
 Then configure a harness:
 

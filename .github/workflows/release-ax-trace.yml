@@ -2,7 +2,7 @@ name: ax-trace release
 
 on:
   push:
-    tags: ['ax-trace-v*']
+    tags: ['cmd/ax-trace/v*']
 
 permissions:
   contents: write
