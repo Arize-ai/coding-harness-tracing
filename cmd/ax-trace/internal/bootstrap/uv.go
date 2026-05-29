@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,11 +14,22 @@ import (
 	"runtime"
 )
 
+// uvVersion pins the uv release we install. Bumping it requires updating both
+// uvInstallSHA256* values below to the sha256 of that release's installer
+// scripts (the uv-installer.sh / uv-installer.ps1 assets on the GitHub
+// release).
+const uvVersion = "0.11.17"
+
 // These are vars (not consts) so tests in the bootstrap package can swap in
-// httptest URLs. They are not part of the public API.
+// httptest URLs and matching hashes. They are not part of the public API.
 var (
-	uvInstallURLUnix    = "https://astral.sh/uv/install.sh"
-	uvInstallURLWindows = "https://astral.sh/uv/install.ps1"
+	uvInstallURLUnix    = "https://github.com/astral-sh/uv/releases/download/" + uvVersion + "/uv-installer.sh"
+	uvInstallURLWindows = "https://github.com/astral-sh/uv/releases/download/" + uvVersion + "/uv-installer.ps1"
+
+	// SHA256 of the pinned installer scripts, verified before the script is
+	// piped to a shell so a tampered download cannot execute arbitrary code.
+	uvInstallSHA256Unix    = "d79d834572b5b5cdd521289c055adcdbacd43bfe9e6b896445f351075dac4113"
+	uvInstallSHA256Windows = "5dd1bcfbc6a8ae171d5397d7e24bd6ece5f7ff8e4e809ec252432c3a8bedc215"
 )
 
 // EnsureUv returns the path to uv, installing it if absent.
@@ -109,16 +122,17 @@ func cacheUvPath(path string) {
 func installUvViaScript(ctx context.Context, opts Options) error {
 	opts = withDefaults(opts)
 
-	var url string
-	var shell string
+	var url, shell, wantSHA string
 	var shellArgs []string
 	switch runtime.GOOS {
 	case "windows":
 		url = uvInstallURLWindows
+		wantSHA = uvInstallSHA256Windows
 		shell = "powershell"
 		shellArgs = []string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"}
 	default:
 		url = uvInstallURLUnix
+		wantSHA = uvInstallSHA256Unix
 		shell = "sh"
 		shellArgs = nil
 	}
@@ -139,6 +153,14 @@ func installUvViaScript(ctx context.Context, opts Options) error {
 	script, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("reading uv installer body: %w", err)
+	}
+
+	sum := sha256.Sum256(script)
+	if got := hex.EncodeToString(sum[:]); got != wantSHA {
+		return fmt.Errorf(
+			"uv installer checksum mismatch for %s: got %s, want %s (pinned uv %s) — refusing to execute",
+			url, got, wantSHA, uvVersion,
+		)
 	}
 
 	return opts.Runner.Run(ctx, shell, shellArgs, bytes.NewReader(script), opts.Stdout, opts.Stderr, nil)

@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +16,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 )
+
+// sha256Hex returns the hex-encoded SHA256 of b, matching the format the uv
+// installer checksum is pinned in.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
 
 // -- fake runner -------------------------------------------------------------
 
@@ -196,13 +206,15 @@ func TestEnsureUv_InvokesInstaller(t *testing.T) {
 	setHome(t, tmp)
 	t.Setenv("PATH", "")
 
+	body := "#!/bin/sh\necho fake uv installer\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "#!/bin/sh\necho fake uv installer\n")
+		fmt.Fprint(w, body)
 	}))
 	defer server.Close()
-	oldURL := uvInstallURLUnix
+	oldURL, oldSHA := uvInstallURLUnix, uvInstallSHA256Unix
 	uvInstallURLUnix = server.URL
-	defer func() { uvInstallURLUnix = oldURL }()
+	uvInstallSHA256Unix = sha256Hex([]byte(body))
+	defer func() { uvInstallURLUnix = oldURL; uvInstallSHA256Unix = oldSHA }()
 
 	// Drop a fake uv into ~/.local/bin so post-install lookup succeeds.
 	localBin := filepath.Join(tmp, ".local", "bin")
@@ -286,13 +298,15 @@ func TestEnsureUv_InstallerRunnerFailurePropagates(t *testing.T) {
 	setHome(t, tmp)
 	t.Setenv("PATH", "")
 
+	body := "#!/bin/sh\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "#!/bin/sh\n")
+		fmt.Fprint(w, body)
 	}))
 	defer server.Close()
-	oldURL := uvInstallURLUnix
+	oldURL, oldSHA := uvInstallURLUnix, uvInstallSHA256Unix
 	uvInstallURLUnix = server.URL
-	defer func() { uvInstallURLUnix = oldURL }()
+	uvInstallSHA256Unix = sha256Hex([]byte(body))
+	defer func() { uvInstallURLUnix = oldURL; uvInstallSHA256Unix = oldSHA }()
 
 	runner := &fakeRunner{Handlers: []func(*fakeCall) bool{
 		func(c *fakeCall) bool {
@@ -311,6 +325,43 @@ func TestEnsureUv_InstallerRunnerFailurePropagates(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when installer subprocess fails")
+	}
+}
+
+// A tampered installer (body whose hash != the pinned SHA256) must be
+// rejected before any shell runs it.
+func TestEnsureUv_InstallerChecksumMismatchRejected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("non-Windows runner shape test")
+	}
+	tmp := t.TempDir()
+	setHome(t, tmp)
+	t.Setenv("PATH", "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#!/bin/sh\necho tampered\n")
+	}))
+	defer server.Close()
+	oldURL, oldSHA := uvInstallURLUnix, uvInstallSHA256Unix
+	uvInstallURLUnix = server.URL
+	uvInstallSHA256Unix = sha256Hex([]byte("a totally different script")) // won't match served body
+	defer func() { uvInstallURLUnix = oldURL; uvInstallSHA256Unix = oldSHA }()
+
+	runner := &fakeRunner{}
+	_, err := EnsureUv(context.Background(), Options{
+		Runner:     runner,
+		HTTPClient: server.Client(),
+		Stdout:     io.Discard,
+		Stderr:     io.Discard,
+	})
+	if err == nil {
+		t.Fatal("expected checksum-mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Errorf("expected checksum mismatch error, got %v", err)
+	}
+	if len(runner.callsByName("sh")) != 0 {
+		t.Error("shell must not be invoked when the installer checksum fails")
 	}
 }
 
