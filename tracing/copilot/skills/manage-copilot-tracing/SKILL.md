@@ -1,19 +1,19 @@
 ---
 name: manage-copilot-tracing
-description: Set up and manage Arize tracing for GitHub Copilot sessions using the ax-trace CLI. Use when users want to set up Copilot tracing, configure Arize AX or Phoenix for Copilot, edit config, run diagnostics, enable/disable tracing, or troubleshoot Copilot tracing. Triggers on "set up copilot tracing", "configure Arize for Copilot", "ax-trace", "enable copilot tracing", "setup-copilot-tracing", or any request about connecting GitHub Copilot to Arize or Phoenix for observability.
+description: Set up and manage Arize tracing for GitHub Copilot sessions using the acht CLI. Use when users want to set up Copilot tracing, configure Arize AX or Phoenix for Copilot, edit config, run diagnostics, enable/disable tracing, or troubleshoot Copilot tracing. Triggers on "set up copilot tracing", "configure Arize for Copilot", "acht", "enable copilot tracing", "setup-copilot-tracing", or any request about connecting GitHub Copilot to Arize or Phoenix for observability.
 ---
 
 # Manage Copilot Tracing
 
 Configure OpenInference tracing for **GitHub Copilot** (VS Code Copilot Chat) to Arize AX (cloud) or Phoenix (self-hosted). Spans are sent directly to the backend from hooks — no background process or backend-specific Python deps run in the user's environment.
 
-The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), writes the Copilot hooks, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Copilot code under `tracing/copilot/`).
+The primary tool is the **`acht`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), writes the Copilot hooks, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Copilot code under `tracing/copilot/`).
 
 ## Copilot-specific: hooks are project-local
 
 Copilot reads hooks from **`.github/hooks/hooks.json` in the repository root** — there is no global Copilot hook file. That means:
 
-- `ax-trace add copilot` must be run **once per repository** you want traced. It writes `.github/hooks/hooks.json` into the current working directory's repo.
+- `acht add copilot` must be run **once per repository** you want traced. It writes `.github/hooks/hooks.json` into the current working directory's repo.
 - The backend config (`~/.arize/harness/config.yaml`) **is** global and shared — credentials are entered once; only the per-repo hooks file must be re-created in each project.
 - When debugging "no traces," first confirm `.github/hooks/hooks.json` exists in *this* repo.
 
@@ -27,14 +27,14 @@ Copilot reads hooks from **`.github/hooks/hooks.json` in the repository root** �
 ## Install
 
 ```bash
-go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
+go install github.com/Arize-ai/coding-harness-tracing/cmd/acht@latest
 
 # run from inside the repo you want traced — re-run in each repo
 cd /path/to/your/repo
-ax-trace add copilot
+acht add copilot
 ```
 
-`ax-trace add copilot` bootstraps the runtime, writes `.github/hooks/hooks.json` into the current repo, and runs the wizard. Fields collected:
+`acht add copilot` bootstraps the runtime, writes `.github/hooks/hooks.json` into the current repo, and runs the wizard. Fields collected:
 
 | Field | Notes |
 |-------|-------|
@@ -51,7 +51,7 @@ ax-trace add copilot
 
 ```bash
 export ARIZE_API_KEY=...
-ax-trace add copilot --backend arize --space-id SPACE_ID --project-name copilot --non-interactive
+acht add copilot --backend arize --space-id SPACE_ID --project-name copilot --non-interactive
 ```
 
 ## Backends
@@ -70,13 +70,13 @@ UI at `http://localhost:6006`. Verify: `curl -sf http://localhost:6006/v1/traces
 
 ## Configure via the CLI
 
-Backend credentials live in `~/.arize/harness/config.yaml` (global). The per-repo hooks live in `.github/hooks/hooks.json` (written by `ax-trace add copilot`). Edit backend settings with `ax-trace config`:
+Backend credentials live in `~/.arize/harness/config.yaml` (global). The per-repo hooks live in `.github/hooks/hooks.json` (written by `acht add copilot`). Edit backend settings with `acht config`:
 
 ```bash
-ax-trace config show                              # api_key masked
-ax-trace config set harnesses.copilot.project_name copilot
-ax-trace config set verbose true
-ax-trace config edit
+acht config show                              # api_key masked
+acht config set harnesses.copilot.project_name copilot
+acht config set verbose true
+acht config edit
 ```
 
 Schema:
@@ -100,38 +100,38 @@ verbose: false                      # ARIZE_VERBOSE env wins over this
 ## Diagnose with doctor
 
 ```bash
-ax-trace doctor
+acht doctor
 ```
 
 Pure-Go health check (works even when the venv is broken). `✓`/`✗` per check with remediation; non-zero exit on failure.
 
 | Verdict | Meaning / fix |
 |---------|---------------|
-| `✗ venv` | Runtime missing/broken → `ax-trace add copilot` or `ax-trace update` |
+| `✗ venv` | Runtime missing/broken → `acht add copilot` or `acht update` |
 | `settings:copilot` (always passes/skips) | Copilot has no *global* settings file, so doctor can't verify the per-repo `.github/hooks/hooks.json`. Check it manually: `cat .github/hooks/hooks.json` in the repo |
-| `✗ env:copilot` | No creds in env or config → `ax-trace config set harnesses.copilot.api_key ...` |
+| `✗ env:copilot` | No creds in env or config → `acht config set harnesses.copilot.api_key ...` |
 | `✗ otlp_endpoint` | Endpoint unreachable → check network/endpoint |
 | all `✓` but no traces | Confirm `.github/hooks/hooks.json` exists in the repo you're working in |
 
 ## Uninstall
 
 ```bash
-ax-trace uninstall --copilot   # remove Copilot tracing, keep the shared runtime
-ax-trace uninstall             # remove all harnesses + the shared runtime
+acht uninstall --copilot   # remove Copilot tracing, keep the shared runtime
+acht uninstall             # remove all harnesses + the shared runtime
 ```
 
 Note: uninstall removes the global config entry; the per-repo `.github/hooks/hooks.json` files are removed for the current repo — delete any others by hand if needed.
 
 ## Troubleshoot
 
-Run `ax-trace doctor` first. Then:
+Run `acht doctor` first. Then:
 
 | Problem | Fix |
 |---------|-----|
-| No traces in a repo | Confirm `.github/hooks/hooks.json` exists in *that* repo; re-run `ax-trace add copilot` there |
+| No traces in a repo | Confirm `.github/hooks/hooks.json` exists in *that* repo; re-run `acht add copilot` there |
 | Hooks not firing | Each `command` in `.github/hooks/hooks.json` must be the absolute venv path `~/.arize/harness/venv/bin/arize-hook-copilot-*` |
 | `PreToolUse` blocking tools | Handler must print `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}`; test: `echo '{"hookEventName":"PreToolUse","tool_name":"test"}' \| arize-hook-copilot-pre-tool` |
 | Phoenix unreachable | `curl -sf <endpoint>/v1/traces` |
 | Test without sending | `ARIZE_DRY_RUN=true` before launching Copilot |
-| Verbose logging | `ax-trace config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/copilot.log` |
-| Wrong project name | `ax-trace config set harnesses.copilot.project_name <name>` |
+| Verbose logging | `acht config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/copilot.log` |
+| Wrong project name | `acht config set harnesses.copilot.project_name <name>` |

@@ -62,7 +62,7 @@ echo [arize] Running %COMMAND% install...
 "%VENV_PYTHON%" "%_PY%" install %WITH_SKILLS%
 set "_INSTALL_RC=%ERRORLEVEL%"
 if "%_INSTALL_RC%"=="0" if not defined AX_TRACE_QUIET (
-    echo [arize] Tip: ax-trace is the recommended installer for new users -- see https://github.com/Arize-ai/coding-harness-tracing#ax-trace
+    echo [arize] Tip: acht is the recommended installer for new users -- see https://github.com/Arize-ai/coding-harness-tracing#acht
 )
 exit /b %_INSTALL_RC%
 

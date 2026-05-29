@@ -1,0 +1,52 @@
+version: 2
+
+project_name: acht
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: acht
+    main: .
+    binary: acht
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+
+archives:
+  - id: acht
+    ids: [acht]
+    name_template: "acht_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: Arize-ai
+    name: coding-harness-tracing
+  prerelease: auto
+  draft: false
+  name_template: "acht {{ .Version }}"

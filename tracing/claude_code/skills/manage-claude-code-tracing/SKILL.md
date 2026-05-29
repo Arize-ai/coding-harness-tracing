@@ -1,13 +1,13 @@
 ---
 name: manage-claude-code-tracing
-description: Set up and manage Arize tracing for Claude Code sessions or Agent SDK applications using the ax-trace CLI. Use when users want to set up tracing, configure Arize AX or Phoenix, edit tracing config, run diagnostics, enable/disable tracing, or troubleshoot Claude Code tracing. Triggers on "set up tracing", "configure Arize", "configure Phoenix", "ax-trace", "enable tracing", "setup-claude-code-tracing", "create Arize project", "get Arize API key", "agent sdk tracing", or any request about connecting Claude Code or the Agent SDK to Arize or Phoenix for observability.
+description: Set up and manage Arize tracing for Claude Code sessions or Agent SDK applications using the acht CLI. Use when users want to set up tracing, configure Arize AX or Phoenix, edit tracing config, run diagnostics, enable/disable tracing, or troubleshoot Claude Code tracing. Triggers on "set up tracing", "configure Arize", "configure Phoenix", "acht", "enable tracing", "setup-claude-code-tracing", "create Arize project", "get Arize API key", "agent sdk tracing", or any request about connecting Claude Code or the Agent SDK to Arize or Phoenix for observability.
 ---
 
 # Manage Claude Code Tracing
 
 Configure OpenInference tracing for Claude Code (CLI or Agent SDK) to Arize AX (cloud) or Phoenix (self-hosted). Spans are sent directly to the backend from hooks — no background process or backend-specific Python deps run in the user's environment.
 
-The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), registers the Claude Code hooks, and manages config. Reach for the repo only when you need to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Claude Code code under `tracing/claude_code/`).
+The primary tool is the **`acht`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), registers the Claude Code hooks, and manages config. Reach for the repo only when you need to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Claude Code code under `tracing/claude_code/`).
 
 ## How to use this skill
 
@@ -23,13 +23,13 @@ Figure out which path the user needs — don't walk through every section:
 
 ```bash
 # install the CLI (any platform with Go)
-go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
+go install github.com/Arize-ai/coding-harness-tracing/cmd/acht@latest
 
 # configure Claude Code tracing (interactive)
-ax-trace add claude
+acht add claude
 ```
 
-`ax-trace add claude` bootstraps the runtime, registers hooks in `~/.claude/settings.json`, and runs an interactive wizard. The wizard collects:
+`acht add claude` bootstraps the runtime, registers hooks in `~/.claude/settings.json`, and runs an interactive wizard. The wizard collects:
 
 | Field | Notes |
 |-------|-------|
@@ -46,7 +46,7 @@ ax-trace add claude
 
 ```bash
 export ARIZE_API_KEY=...
-ax-trace add claude \
+acht add claude \
   --backend arize --space-id SPACE_ID \
   --project-name my-project --non-interactive
 ```
@@ -73,16 +73,16 @@ UI at `http://localhost:6006`. Verify: `curl -sf http://localhost:6006/v1/traces
 
 ## Configure via the CLI
 
-Backend credentials and per-harness settings live in `~/.arize/harness/config.yaml`. Edit it with `ax-trace config` rather than hand-editing — no bootstrap, api keys masked by default.
+Backend credentials and per-harness settings live in `~/.arize/harness/config.yaml`. Edit it with `acht config` rather than hand-editing — no bootstrap, api keys masked by default.
 
 ```bash
-ax-trace config show                                   # whole config (api_key masked)
-ax-trace config get harnesses.claude-code.project_name
-ax-trace config set harnesses.claude-code.project_name my-project
-ax-trace config set verbose true
-ax-trace config delete harnesses.claude-code.space_id
-ax-trace config edit                                   # open in $EDITOR
-ax-trace config show --reveal                          # unmask api keys
+acht config show                                   # whole config (api_key masked)
+acht config get harnesses.claude-code.project_name
+acht config set harnesses.claude-code.project_name my-project
+acht config set verbose true
+acht config delete harnesses.claude-code.space_id
+acht config edit                                   # open in $EDITOR
+acht config show --reveal                          # unmask api keys
 ```
 
 Schema:
@@ -107,7 +107,7 @@ verbose: false                      # terminal trace summaries (ARIZE_VERBOSE en
 
 Claude Code tracing has **two possible install paths**, and where settings live (and how you debug/uninstall) depends on which was used:
 
-- **Installed via `ax-trace` or `install.sh`:** backend credentials are in `~/.arize/harness/config.yaml`; the hook registrations + `ARIZE_TRACE_ENABLED` env live in `~/.claude/settings.json`. Use `ax-trace config` to edit, `ax-trace doctor` to debug, `ax-trace uninstall --claude` to remove.
+- **Installed via `acht` or `install.sh`:** backend credentials are in `~/.arize/harness/config.yaml`; the hook registrations + `ARIZE_TRACE_ENABLED` env live in `~/.claude/settings.json`. Use `acht config` to edit, `acht doctor` to debug, `acht uninstall --claude` to remove.
 - **Installed via the Claude Plugin marketplace:** the wizard is skipped. Hooks load from the plugin, and backend credentials must be set directly in `~/.claude/settings.json` under the `env` block (`ARIZE_API_KEY`, `ARIZE_SPACE_ID`, `ARIZE_OTLP_ENDPOINT`, or `PHOENIX_*`). There may be **no** `~/.arize/harness/config.yaml`. To debug, inspect `~/.claude/settings.json`; to remove, `claude plugin uninstall claude-code-tracing@coding-harness-tracing`.
 
 When debugging, **check which install the user has first** (does `~/.arize/harness/config.yaml` exist and contain a `harnesses.claude-code` block?) before assuming where credentials are.
@@ -115,16 +115,16 @@ When debugging, **check which install the user has first** (does `~/.arize/harne
 ## Diagnose with doctor
 
 ```bash
-ax-trace doctor
+acht doctor
 ```
 
 Pure-Go health check — works even when the venv is broken. Reads `~/.arize/harness/config.yaml`, the harness settings files, env vars, and probes the OTLP endpoint. Each line is `✓` (pass) or `✗` (fail) with a remediation hint; exits non-zero if anything fails.
 
 | Verdict | Meaning / fix |
 |---------|---------------|
-| `✗ venv` | Runtime missing/broken → `ax-trace add claude` (or `ax-trace update`) to rebuild |
-| `✗ settings:claude_code` | `~/.claude/settings.json` missing or unparseable → re-run `ax-trace add claude`, or fix JSON |
-| `✗ env:claude_code` | No `ARIZE_*`/`PHOENIX_*` creds in env or config → `ax-trace config set harnesses.claude-code.api_key ...` (or set the env var for marketplace installs) |
+| `✗ venv` | Runtime missing/broken → `acht add claude` (or `acht update`) to rebuild |
+| `✗ settings:claude_code` | `~/.claude/settings.json` missing or unparseable → re-run `acht add claude`, or fix JSON |
+| `✗ env:claude_code` | No `ARIZE_*`/`PHOENIX_*` creds in env or config → `acht config set harnesses.claude-code.api_key ...` (or set the env var for marketplace installs) |
 | `✗ otlp_endpoint` | Endpoint unreachable (5xx/timeout) → check network/endpoint; retry |
 | all `✓` but no traces | Confirm `ARIZE_TRACE_ENABLED=true` and restart the session; see [Troubleshoot](#troubleshoot) |
 
@@ -132,8 +132,8 @@ Pure-Go health check — works even when the venv is broken. Reads `~/.arize/har
 
 For apps built on the [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview). **Provide the snippets for the developer to add to their code — the agent can't wire this up at runtime** since plugin paths/settings must be set before the SDK session starts. The user must use `ClaudeSDKClient`; the standalone `query()` does not support hooks.
 
-1. Pick a backend and ensure `~/.arize/harness/config.yaml` has credentials (run `ax-trace add claude` once, or [Backends](#backends)).
-2. Get the plugin path: installed via ax-trace/install.sh → `~/.arize/harness/tracing/claude_code`; via marketplace → check `~/.claude/plugins/installed_plugins.json`; not installed → `git clone https://github.com/Arize-ai/coding-harness-tracing.git` and use `./coding-harness-tracing/tracing/claude_code`.
+1. Pick a backend and ensure `~/.arize/harness/config.yaml` has credentials (run `acht add claude` once, or [Backends](#backends)).
+2. Get the plugin path: installed via acht/install.sh → `~/.arize/harness/tracing/claude_code`; via marketplace → check `~/.claude/plugins/installed_plugins.json`; not installed → `git clone https://github.com/Arize-ai/coding-harness-tracing.git` and use `./coding-harness-tracing/tracing/claude_code`.
 3. The SDK subprocess doesn't inherit shell env, so pass tracing env via a settings file:
 
 ```json
@@ -168,31 +168,31 @@ await client.connect();
 await client.query("...");
 ```
 
-`tracing.claude_code.agent_sdk.claude_options()` returns a pre-wired `ClaudeAgentOptions` when the harness is installed via ax-trace/install.sh.
+`tracing.claude_code.agent_sdk.claude_options()` returns a pre-wired `ClaudeAgentOptions` when the harness is installed via acht/install.sh.
 
 **Notes:** The Python SDK historically omits `SessionStart`/`SessionEnd`/`Notification`/`PermissionRequest`; the plugin lazily initializes session state on first `UserPromptSubmit`, so LLM/tool/subagent spans still work. Validate with `"ARIZE_DRY_RUN": "true"` in the settings file and check `~/.arize/harness/logs/claude-code.log`.
 
 ## Uninstall
 
 ```bash
-ax-trace uninstall --claude     # remove Claude Code tracing, keep the shared runtime
-ax-trace uninstall              # remove all harnesses + the shared runtime
+acht uninstall --claude     # remove Claude Code tracing, keep the shared runtime
+acht uninstall              # remove all harnesses + the shared runtime
 ```
 
 Marketplace installs: `claude plugin uninstall claude-code-tracing@coding-harness-tracing`.
 
 ## Troubleshoot
 
-Run `ax-trace doctor` first. Then:
+Run `acht doctor` first. Then:
 
 | Problem | Fix |
 |---------|-----|
 | Traces not appearing | `ARIZE_TRACE_ENABLED` must be `"true"` in `~/.claude/settings.json`; restart the session |
-| Config missing (ax-trace install) | `ax-trace add claude`, or `ax-trace config set harnesses.claude-code.api_key ...` |
+| Config missing (acht install) | `acht add claude`, or `acht config set harnesses.claude-code.api_key ...` |
 | Config missing (marketplace install) | Set `ARIZE_*`/`PHOENIX_*` in `~/.claude/settings.json` `env` block — there is no config.yaml |
 | Phoenix unreachable | `curl -sf <endpoint>/v1/traces` |
 | No output in terminal | Hook stderr is discarded by Claude Code; read `~/.arize/harness/logs/claude-code.log` |
 | Test without sending | `ARIZE_DRY_RUN=true` |
-| Verbose logging | `ax-trace config set verbose true` (or `ARIZE_VERBOSE=true`) |
-| Wrong project name | `ax-trace config set harnesses.claude-code.project_name <name>` |
-| Spans missing user attribution | `ax-trace config set user_id <id>` (or `ARIZE_USER_ID` env) |
+| Verbose logging | `acht config set verbose true` (or `ARIZE_VERBOSE=true`) |
+| Wrong project name | `acht config set harnesses.claude-code.project_name <name>` |
+| Spans missing user attribution | `acht config set user_id <id>` (or `ARIZE_USER_ID` env) |

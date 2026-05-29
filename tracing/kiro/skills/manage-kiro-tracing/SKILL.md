@@ -1,13 +1,13 @@
 ---
 name: manage-kiro-tracing
-description: Set up and manage Arize tracing for Kiro CLI sessions using the ax-trace CLI. Use when users want to set up Kiro tracing, configure Arize AX or Phoenix for Kiro, edit config, run diagnostics, choose or set a default traced agent, enable/disable tracing, or troubleshoot Kiro tracing. Triggers on "set up kiro tracing", "configure Arize for Kiro", "ax-trace", "enable kiro tracing", "setup-kiro-tracing", "kiro agent tracing", or any request about connecting Kiro CLI to Arize or Phoenix for observability.
+description: Set up and manage Arize tracing for Kiro CLI sessions using the acht CLI. Use when users want to set up Kiro tracing, configure Arize AX or Phoenix for Kiro, edit config, run diagnostics, choose or set a default traced agent, enable/disable tracing, or troubleshoot Kiro tracing. Triggers on "set up kiro tracing", "configure Arize for Kiro", "acht", "enable kiro tracing", "setup-kiro-tracing", "kiro agent tracing", or any request about connecting Kiro CLI to Arize or Phoenix for observability.
 ---
 
 # Manage Kiro Tracing
 
 Configure OpenInference tracing for the Kiro CLI to Arize AX (cloud) or Phoenix (self-hosted). Spans are sent directly to the backend from hooks — no background process or backend-specific Python deps run in the user's environment. Each session emits LLM turns, tool calls, cost in credits, model info, and turn duration.
 
-The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), writes the tracing hooks into a Kiro agent, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Kiro code under `tracing/kiro/`).
+The primary tool is the **`acht`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), writes the tracing hooks into a Kiro agent, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Kiro code under `tracing/kiro/`).
 
 ## Kiro-specific: tracing is per-agent
 
@@ -18,7 +18,7 @@ kiro-cli chat --agent arize-traced      # run the traced agent explicitly
 kiro-cli agent set-default arize-traced  # ...or make it the default so `kiro-cli chat` uses it
 ```
 
-So setup is tied to a specific agent name. `ax-trace add kiro` asks which agent (default `arize-traced`); it either creates that agent fresh or merges the five hook entries into an existing agent you name. Whenever you debug, **confirm which agent the user actually runs** — tracing in a different agent won't fire.
+So setup is tied to a specific agent name. `acht add kiro` asks which agent (default `arize-traced`); it either creates that agent fresh or merges the five hook entries into an existing agent you name. Whenever you debug, **confirm which agent the user actually runs** — tracing in a different agent won't fire.
 
 ## How to use this skill
 
@@ -30,11 +30,11 @@ So setup is tied to a specific agent name. `ax-trace add kiro` asks which agent 
 ## Install
 
 ```bash
-go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
-ax-trace add kiro
+go install github.com/Arize-ai/coding-harness-tracing/cmd/acht@latest
+acht add kiro
 ```
 
-`ax-trace add kiro` bootstraps the runtime, writes hooks into the chosen agent file, and runs the wizard. Fields collected:
+`acht add kiro` bootstraps the runtime, writes hooks into the chosen agent file, and runs the wizard. Fields collected:
 
 | Field | Notes |
 |-------|-------|
@@ -55,7 +55,7 @@ All five Kiro events (`agentSpawn`, `userPromptSubmit`, `preToolUse`, `postToolU
 
 ```bash
 export ARIZE_API_KEY=...
-ax-trace add kiro --backend arize --space-id SPACE_ID --project-name kiro --non-interactive
+acht add kiro --backend arize --space-id SPACE_ID --project-name kiro --non-interactive
 ```
 
 After install, run with `kiro-cli chat --agent <name>` (or just `kiro-cli chat` if set as default).
@@ -76,13 +76,13 @@ UI at `http://localhost:6006`. Verify: `curl -sf http://localhost:6006/v1/traces
 
 ## Configure via the CLI
 
-Backend credentials live in `~/.arize/harness/config.yaml`. The hook wiring lives in the agent file `~/.kiro/agents/<name>.json` (written by `ax-trace add kiro`). Edit backend settings with `ax-trace config`:
+Backend credentials live in `~/.arize/harness/config.yaml`. The hook wiring lives in the agent file `~/.kiro/agents/<name>.json` (written by `acht add kiro`). Edit backend settings with `acht config`:
 
 ```bash
-ax-trace config show                              # api_key masked
-ax-trace config set harnesses.kiro.project_name kiro
-ax-trace config set verbose true
-ax-trace config edit
+acht config show                              # api_key masked
+acht config set harnesses.kiro.project_name kiro
+acht config set verbose true
+acht config edit
 ```
 
 Schema:
@@ -106,38 +106,38 @@ verbose: false                      # ARIZE_VERBOSE env wins over this
 ## Diagnose with doctor
 
 ```bash
-ax-trace doctor
+acht doctor
 ```
 
 Pure-Go health check (works even when the venv is broken). `✓`/`✗` per check with remediation; non-zero exit on failure.
 
 | Verdict | Meaning / fix |
 |---------|---------------|
-| `✗ venv` | Runtime missing/broken → `ax-trace add kiro` or `ax-trace update` |
-| `✗ settings:kiro` | Default agent file `~/.kiro/agents/arize-traced.json` missing → re-run `ax-trace add kiro`. **Note:** doctor checks the *default* agent path; if the user installed into a differently-named agent this can falsely fail — verify with `cat ~/.kiro/agents/<their-agent>.json` |
-| `✗ env:kiro` | No creds in env or config → `ax-trace config set harnesses.kiro.api_key ...` |
+| `✗ venv` | Runtime missing/broken → `acht add kiro` or `acht update` |
+| `✗ settings:kiro` | Default agent file `~/.kiro/agents/arize-traced.json` missing → re-run `acht add kiro`. **Note:** doctor checks the *default* agent path; if the user installed into a differently-named agent this can falsely fail — verify with `cat ~/.kiro/agents/<their-agent>.json` |
+| `✗ env:kiro` | No creds in env or config → `acht config set harnesses.kiro.api_key ...` |
 | `✗ otlp_endpoint` | Endpoint unreachable → check network/endpoint |
 | all `✓` but no traces | Confirm the user runs the traced agent (`--agent <name>` or set-default); see [Troubleshoot](#troubleshoot) |
 
 ## Uninstall
 
 ```bash
-ax-trace uninstall --kiro     # remove Kiro tracing, keep the shared runtime
-ax-trace uninstall            # remove all harnesses + the shared runtime
+acht uninstall --kiro     # remove Kiro tracing, keep the shared runtime
+acht uninstall            # remove all harnesses + the shared runtime
 ```
 
 Removes the Arize hook entries from each agent file; deletes the agent file only if the installer created it.
 
 ## Troubleshoot
 
-Run `ax-trace doctor` first. Then:
+Run `acht doctor` first. Then:
 
 | Problem | Fix |
 |---------|-----|
 | No traces | Confirm the user runs the traced agent: `kiro-cli chat --agent <name>`, or `kiro-cli agent set-default <name>` |
-| Hooks in wrong agent | Check `cat ~/.kiro/agents/<name>.json` has the five `arize-hook-kiro` entries; re-run `ax-trace add kiro` naming the right agent |
+| Hooks in wrong agent | Check `cat ~/.kiro/agents/<name>.json` has the five `arize-hook-kiro` entries; re-run `acht add kiro` naming the right agent |
 | Phoenix unreachable | `curl -sf <endpoint>/v1/traces` |
 | Agent config rejected | `kiro-cli agent validate --path ~/.kiro/agents/<name>.json` |
 | Test without sending | `ARIZE_DRY_RUN=true` (set before launching Kiro) |
-| Verbose logging | `ax-trace config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/kiro.log` |
-| Wrong project name | `ax-trace config set harnesses.kiro.project_name <name>` |
+| Verbose logging | `acht config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/kiro.log` |
+| Wrong project name | `acht config set harnesses.kiro.project_name <name>` |

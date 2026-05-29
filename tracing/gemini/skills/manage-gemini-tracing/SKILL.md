@@ -1,13 +1,13 @@
 ---
 name: manage-gemini-tracing
-description: Set up and manage Arize tracing for Gemini CLI sessions using the ax-trace CLI. Use when users want to set up Gemini tracing, configure Arize AX or Phoenix for Gemini, edit config, run diagnostics, enable/disable tracing, or troubleshoot Gemini tracing. Triggers on "set up gemini tracing", "configure Arize for Gemini", "ax-trace", "enable gemini tracing", "setup-gemini-tracing", or any request about connecting Gemini CLI to Arize or Phoenix for observability.
+description: Set up and manage Arize tracing for Gemini CLI sessions using the acht CLI. Use when users want to set up Gemini tracing, configure Arize AX or Phoenix for Gemini, edit config, run diagnostics, enable/disable tracing, or troubleshoot Gemini tracing. Triggers on "set up gemini tracing", "configure Arize for Gemini", "acht", "enable gemini tracing", "setup-gemini-tracing", or any request about connecting Gemini CLI to Arize or Phoenix for observability.
 ---
 
 # Manage Gemini Tracing
 
 Configure OpenInference tracing for the **Gemini CLI** to Arize AX (cloud) or Phoenix (self-hosted). Spans are sent directly to the backend from hooks — no background process or backend-specific Python deps run in the user's environment.
 
-The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), registers the Gemini hooks, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Gemini code under `tracing/gemini/`).
+The primary tool is the **`acht`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), registers the Gemini hooks, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Gemini code under `tracing/gemini/`).
 
 ## How to use this skill
 
@@ -19,11 +19,11 @@ The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime
 ## Install
 
 ```bash
-go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
-ax-trace add gemini
+go install github.com/Arize-ai/coding-harness-tracing/cmd/acht@latest
+acht add gemini
 ```
 
-`ax-trace add gemini` bootstraps the runtime, registers hooks in `~/.gemini/settings.json`, and runs the wizard. Fields collected:
+`acht add gemini` bootstraps the runtime, registers hooks in `~/.gemini/settings.json`, and runs the wizard. Fields collected:
 
 | Field | Notes |
 |-------|-------|
@@ -42,7 +42,7 @@ The Gemini events (`SessionStart`, `SessionEnd`, `BeforeAgent`, `AfterAgent`, `B
 
 ```bash
 export ARIZE_API_KEY=...
-ax-trace add gemini --backend arize --space-id SPACE_ID --project-name gemini --non-interactive
+acht add gemini --backend arize --space-id SPACE_ID --project-name gemini --non-interactive
 ```
 
 ## Backends
@@ -61,13 +61,13 @@ UI at `http://localhost:6006`. Verify: `curl -sf http://localhost:6006/v1/traces
 
 ## Configure via the CLI
 
-Backend credentials live in `~/.arize/harness/config.yaml`. The hook wiring lives in `~/.gemini/settings.json` (written by `ax-trace add gemini`). Edit backend settings with `ax-trace config`:
+Backend credentials live in `~/.arize/harness/config.yaml`. The hook wiring lives in `~/.gemini/settings.json` (written by `acht add gemini`). Edit backend settings with `acht config`:
 
 ```bash
-ax-trace config show                              # api_key masked
-ax-trace config set harnesses.gemini.project_name gemini
-ax-trace config set verbose true
-ax-trace config edit
+acht config show                              # api_key masked
+acht config set harnesses.gemini.project_name gemini
+acht config set verbose true
+acht config edit
 ```
 
 Schema:
@@ -91,37 +91,37 @@ verbose: false                      # ARIZE_VERBOSE env wins over this
 ## Diagnose with doctor
 
 ```bash
-ax-trace doctor
+acht doctor
 ```
 
 Pure-Go health check (works even when the venv is broken). `✓`/`✗` per check with remediation; non-zero exit on failure.
 
 | Verdict | Meaning / fix |
 |---------|---------------|
-| `✗ venv` | Runtime missing/broken → `ax-trace add gemini` or `ax-trace update` |
-| `✗ settings:gemini` | `~/.gemini/settings.json` missing or unparseable → re-run `ax-trace add gemini`, or fix JSON |
-| `✗ env:gemini` | No creds in env or config → `ax-trace config set harnesses.gemini.api_key ...` |
+| `✗ venv` | Runtime missing/broken → `acht add gemini` or `acht update` |
+| `✗ settings:gemini` | `~/.gemini/settings.json` missing or unparseable → re-run `acht add gemini`, or fix JSON |
+| `✗ env:gemini` | No creds in env or config → `acht config set harnesses.gemini.api_key ...` |
 | `✗ otlp_endpoint` | Endpoint unreachable → check network/endpoint |
 | all `✓` but no traces | Restart the Gemini CLI; see [Troubleshoot](#troubleshoot) |
 
 ## Uninstall
 
 ```bash
-ax-trace uninstall --gemini   # remove Gemini tracing, keep the shared runtime
-ax-trace uninstall            # remove all harnesses + the shared runtime
+acht uninstall --gemini   # remove Gemini tracing, keep the shared runtime
+acht uninstall            # remove all harnesses + the shared runtime
 ```
 
 Removes the Arize hook entries from `~/.gemini/settings.json` and the `harnesses.gemini` config entry.
 
 ## Troubleshoot
 
-Run `ax-trace doctor` first. Then:
+Run `acht doctor` first. Then:
 
 | Problem | Fix |
 |---------|-----|
 | No traces | Verify `~/.gemini/settings.json` has the `arize-hook-gemini-*` entries; restart the Gemini CLI |
 | Phoenix unreachable | `curl -sf <endpoint>/v1/traces` |
 | Test without sending | `ARIZE_DRY_RUN=true` before launching Gemini |
-| Verbose logging | `ax-trace config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/gemini.log` |
-| Wrong project name | `ax-trace config set harnesses.gemini.project_name <name>` |
-| Spans missing user attribution | `ax-trace config set user_id <id>` (or `ARIZE_USER_ID` env) |
+| Verbose logging | `acht config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/gemini.log` |
+| Wrong project name | `acht config set harnesses.gemini.project_name <name>` |
+| Spans missing user attribution | `acht config set user_id <id>` (or `ARIZE_USER_ID` env) |

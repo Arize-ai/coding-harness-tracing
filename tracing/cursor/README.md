@@ -5,7 +5,7 @@ Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for
 ## Setup
 The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, and registers the hooks in `.cursor/hooks.json`.
 
-**Recommended:** `ax-trace add cursor` (after installing ax-trace — see the [top-level README](../../README.md)).
+**Recommended:** `acht add cursor` (after installing acht — see the [top-level README](../../README.md)).
 **Alternative:** `./install.sh cursor` (from the repo root).
 
 Both paths write the same managed config and register the same `.cursor/hooks.json` entries.
@@ -14,7 +14,7 @@ Non-interactive example:
 
 ```bash
 export ARIZE_API_KEY=...   # required; secrets never become CLI flags
-ax-trace add cursor \
+acht add cursor \
     --backend arize \
     --space-id SPACE_ID \
     --non-interactive

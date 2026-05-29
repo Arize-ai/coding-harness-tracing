@@ -7,34 +7,34 @@ The installer prompts for your backend (Phoenix or Arize AX) and project name, w
 
 Pass `--with-skills` to also symlink the `manage-copilot-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Copilot tracing configuration.
 
-### Recommended: ax-trace
+### Recommended: acht
 
-[`ax-trace`](../../README.md) is a single static binary that bootstraps the Python runtime for you. Install it once, then use it for every harness.
+[`acht`](../../README.md) is a single static binary that bootstraps the Python runtime for you. Install it once, then use it for every harness.
 
 macOS / Linux:
 
 ```bash
-# One-time: install the ax-trace binary
-curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.sh | bash
+# One-time: install the acht binary
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-acht.sh | bash
 
 # Install Copilot tracing
-ax-trace add copilot
+acht add copilot
 
 # Uninstall
-ax-trace uninstall --copilot
+acht uninstall --copilot
 ```
 
 Windows (PowerShell):
 
 ```powershell
-# One-time: install the ax-trace binary
-irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.ps1 | iex
+# One-time: install the acht binary
+irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-acht.ps1 | iex
 
 # Install Copilot tracing
-ax-trace add copilot
+acht add copilot
 
 # Uninstall
-ax-trace uninstall --copilot
+acht uninstall --copilot
 ```
 
 Non-interactive install (CI, scripted setup) — pass credentials via environment variables and skip prompts:
@@ -42,7 +42,7 @@ Non-interactive install (CI, scripted setup) — pass credentials via environmen
 ```bash
 export ARIZE_API_KEY=...
 export ARIZE_SPACE_ID=...
-ax-trace add copilot \
+acht add copilot \
   --non-interactive \
   --backend arize \
   --project-name copilot
@@ -52,7 +52,7 @@ For Phoenix, set `PHOENIX_API_KEY` (optional) and pass `--backend phoenix --phoe
 
 ### Alternative: install.sh / install.bat
 
-The original shell installer still works and targets the same `~/.arize/harness/` layout. Use this if you'd rather not install the `ax-trace` binary.
+The original shell installer still works and targets the same `~/.arize/harness/` layout. Use this if you'd rather not install the `acht` binary.
 
 #### Remote setup
 

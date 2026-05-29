@@ -6,7 +6,7 @@ EXTRACTED_FIELDS. Every field is optional: if a constants module does not
 define a field, the manifest emits the per-field default (None for scalars,
 empty list for collection fields) and a warning to stderr. The plan that
 created this generator forbids adding fields to constants.py to fill gaps —
-downstream consumers (the Go binary in cmd/ax-trace) must tolerate null
+downstream consumers (the Go binary in cmd/acht) must tolerate null
 values until the constants modules themselves grow the missing fields.
 
 Writes a stable, sorted JSON file at core/manifest.json. Designed to produce

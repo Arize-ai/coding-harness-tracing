@@ -1,13 +1,13 @@
 ---
 name: manage-codex-tracing
-description: Set up and manage Arize tracing for OpenAI Codex CLI sessions using the ax-trace CLI. Use when users want to set up Codex tracing, configure Arize AX or Phoenix for Codex, edit config, run diagnostics, enable/disable tracing, or troubleshoot Codex tracing. Triggers on "set up codex tracing", "configure Arize for Codex", "configure Phoenix for Codex", "ax-trace", "enable codex tracing", "setup-codex-tracing", or any request about connecting Codex to Arize or Phoenix for observability.
+description: Set up and manage Arize tracing for OpenAI Codex CLI sessions using the acht CLI. Use when users want to set up Codex tracing, configure Arize AX or Phoenix for Codex, edit config, run diagnostics, enable/disable tracing, or troubleshoot Codex tracing. Triggers on "set up codex tracing", "configure Arize for Codex", "configure Phoenix for Codex", "acht", "enable codex tracing", "setup-codex-tracing", or any request about connecting Codex to Arize or Phoenix for observability.
 ---
 
 # Manage Codex Tracing
 
 Configure OpenInference tracing for the OpenAI Codex CLI to Arize AX (cloud) or Phoenix (self-hosted). Spans are sent directly to the backend from Codex's native lifecycle hooks — no OTEL collector or background process runs in the user's environment.
 
-The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), writes the Codex hook config, and manages settings. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Codex code under `tracing/codex/`).
+The primary tool is the **`acht`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), writes the Codex hook config, and manages settings. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Codex code under `tracing/codex/`).
 
 ## Codex architecture (read this first)
 
@@ -32,11 +32,11 @@ There is **no OTEL exporter / collector** anymore — spans go straight to Phoen
 ## Install
 
 ```bash
-go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
-ax-trace add codex
+go install github.com/Arize-ai/coding-harness-tracing/cmd/acht@latest
+acht add codex
 ```
 
-`ax-trace add codex` bootstraps the runtime, writes the managed hook block into `~/.codex/config.toml`, and runs the wizard. Fields collected:
+`acht add codex` bootstraps the runtime, writes the managed hook block into `~/.codex/config.toml`, and runs the wizard. Fields collected:
 
 | Field | Notes |
 |-------|-------|
@@ -55,7 +55,7 @@ ax-trace add codex
 
 ```bash
 export ARIZE_API_KEY=...
-ax-trace add codex --backend arize --space-id SPACE_ID --project-name codex --non-interactive
+acht add codex --backend arize --space-id SPACE_ID --project-name codex --non-interactive
 ```
 
 ## Backends
@@ -74,13 +74,13 @@ UI at `http://localhost:6006`. Verify: `curl -sf http://localhost:6006/v1/traces
 
 ## Configure via the CLI
 
-Backend credentials live in `~/.arize/harness/config.yaml`. The Codex hook wiring lives in `~/.codex/config.toml` (managed block, written by `ax-trace add codex` — don't hand-edit it). Edit backend settings with `ax-trace config`:
+Backend credentials live in `~/.arize/harness/config.yaml`. The Codex hook wiring lives in `~/.codex/config.toml` (managed block, written by `acht add codex` — don't hand-edit it). Edit backend settings with `acht config`:
 
 ```bash
-ax-trace config show                              # api_key masked
-ax-trace config set harnesses.codex.project_name codex
-ax-trace config set verbose true
-ax-trace config edit
+acht config show                              # api_key masked
+acht config set harnesses.codex.project_name codex
+acht config set verbose true
+acht config edit
 ```
 
 Schema:
@@ -104,38 +104,38 @@ verbose: false                      # ARIZE_VERBOSE env wins over this
 ## Diagnose with doctor
 
 ```bash
-ax-trace doctor
+acht doctor
 ```
 
 Pure-Go health check (works even when the venv is broken). `✓`/`✗` per check with remediation; non-zero exit on failure.
 
 | Verdict | Meaning / fix |
 |---------|---------------|
-| `✗ venv` | Runtime missing/broken → `ax-trace add codex` or `ax-trace update` |
-| `✗ settings:codex` | `~/.codex/config.toml` missing → re-run `ax-trace add codex` (doctor checks existence; TOML isn't parsed at v1) |
-| `✗ env:codex` | No creds in env or config → `ax-trace config set harnesses.codex.api_key ...` |
+| `✗ venv` | Runtime missing/broken → `acht add codex` or `acht update` |
+| `✗ settings:codex` | `~/.codex/config.toml` missing → re-run `acht add codex` (doctor checks existence; TOML isn't parsed at v1) |
+| `✗ env:codex` | No creds in env or config → `acht config set harnesses.codex.api_key ...` |
 | `✗ otlp_endpoint` | Endpoint unreachable → check network/endpoint |
 | all `✓` but only single flat spans (no tool spans) | Hooks not trusted yet → run `codex`, `/hooks`, approve `arize-hook-codex-*` |
 
 ## Uninstall
 
 ```bash
-ax-trace uninstall --codex     # remove Codex tracing, keep the shared runtime
-ax-trace uninstall             # remove all harnesses + the shared runtime
+acht uninstall --codex     # remove Codex tracing, keep the shared runtime
+acht uninstall             # remove all harnesses + the shared runtime
 ```
 
 Removes the managed block from `~/.codex/config.toml` and the `harnesses.codex` config entry; clears per-thread state under `~/.arize/harness/state/codex/`.
 
 ## Troubleshoot
 
-Run `ax-trace doctor` first. Then:
+Run `acht doctor` first. Then:
 
 | Problem | Fix |
 |---------|-----|
 | Only one flat span per turn, no tool spans | Hooks not trusted → `codex` → `/hooks` → approve `arize-hook-codex-*` |
-| No traces at all | Verify creds (`ax-trace config show`); confirm the managed block is in `~/.codex/config.toml` |
+| No traces at all | Verify creds (`acht config show`); confirm the managed block is in `~/.codex/config.toml` |
 | Phoenix unreachable | `curl -sf <endpoint>/v1/traces` |
 | Missing token counts | Expected if `notify` didn't fire; native hooks still produce the span tree |
 | Test without sending | `ARIZE_DRY_RUN=true` |
-| Verbose logging | `ax-trace config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/codex.log` |
-| Wrong project name | `ax-trace config set harnesses.codex.project_name <name>` |
+| Verbose logging | `acht config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/codex.log` |
+| Wrong project name | `acht config set harnesses.codex.project_name <name>` |

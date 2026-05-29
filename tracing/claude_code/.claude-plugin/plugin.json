@@ -1,7 +1,7 @@
 {
   "name": "claude-code-tracing",
   "description": "Automatic tracing of Claude Code sessions to Arize AX or Phoenix with OpenInference spans.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": {
     "name": "Arize AI",
     "email": "support@arize.com",

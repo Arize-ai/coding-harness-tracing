@@ -1,13 +1,13 @@
 ---
 name: manage-cursor-tracing
-description: Set up and manage Arize tracing for Cursor IDE / CLI sessions using the ax-trace CLI. Use when users want to set up Cursor tracing, configure Arize AX or Phoenix for Cursor, edit config, run diagnostics, enable/disable tracing, or troubleshoot Cursor tracing. Triggers on "set up cursor tracing", "configure Arize for Cursor", "ax-trace", "enable cursor tracing", "setup-cursor-tracing", or any request about connecting Cursor to Arize or Phoenix for observability.
+description: Set up and manage Arize tracing for Cursor IDE / CLI sessions using the acht CLI. Use when users want to set up Cursor tracing, configure Arize AX or Phoenix for Cursor, edit config, run diagnostics, enable/disable tracing, or troubleshoot Cursor tracing. Triggers on "set up cursor tracing", "configure Arize for Cursor", "acht", "enable cursor tracing", "setup-cursor-tracing", or any request about connecting Cursor to Arize or Phoenix for observability.
 ---
 
 # Manage Cursor Tracing
 
 Configure OpenInference tracing for Cursor (IDE and CLI) to Arize AX (cloud) or Phoenix (self-hosted). Spans are sent directly to the backend from hooks — no background process or backend-specific Python deps run in the user's environment.
 
-The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), registers the Cursor hooks, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Cursor code under `tracing/cursor/`).
+The primary tool is the **`acht`** CLI. It installs a managed Python runtime (via [uv](https://github.com/astral-sh/uv)), registers the Cursor hooks, and manages config. Reach for the repo only to inspect hook/handler internals: <https://github.com/Arize-ai/coding-harness-tracing> (Cursor code under `tracing/cursor/`).
 
 ## How to use this skill
 
@@ -19,11 +19,11 @@ The primary tool is the **`ax-trace`** CLI. It installs a managed Python runtime
 ## Install
 
 ```bash
-go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
-ax-trace add cursor
+go install github.com/Arize-ai/coding-harness-tracing/cmd/acht@latest
+acht add cursor
 ```
 
-`ax-trace add cursor` bootstraps the runtime, registers hooks in `~/.cursor/hooks.json`, and runs the wizard. Fields collected:
+`acht add cursor` bootstraps the runtime, registers hooks in `~/.cursor/hooks.json`, and runs the wizard. Fields collected:
 
 | Field | Notes |
 |-------|-------|
@@ -42,7 +42,7 @@ A single `arize-hook-cursor` entry point handles all Cursor events (IDE + CLI), 
 
 ```bash
 export ARIZE_API_KEY=...
-ax-trace add cursor --backend arize --space-id SPACE_ID --project-name cursor --non-interactive
+acht add cursor --backend arize --space-id SPACE_ID --project-name cursor --non-interactive
 ```
 
 ## Backends
@@ -61,13 +61,13 @@ UI at `http://localhost:6006`. Verify: `curl -sf http://localhost:6006/v1/traces
 
 ## Configure via the CLI
 
-Backend credentials live in `~/.arize/harness/config.yaml`. The hook wiring lives in `~/.cursor/hooks.json` (written by `ax-trace add cursor`). Edit backend settings with `ax-trace config`:
+Backend credentials live in `~/.arize/harness/config.yaml`. The hook wiring lives in `~/.cursor/hooks.json` (written by `acht add cursor`). Edit backend settings with `acht config`:
 
 ```bash
-ax-trace config show                              # api_key masked
-ax-trace config set harnesses.cursor.project_name cursor
-ax-trace config set verbose true
-ax-trace config edit
+acht config show                              # api_key masked
+acht config set harnesses.cursor.project_name cursor
+acht config set verbose true
+acht config edit
 ```
 
 Schema:
@@ -91,37 +91,37 @@ verbose: false                      # ARIZE_VERBOSE env wins over this
 ## Diagnose with doctor
 
 ```bash
-ax-trace doctor
+acht doctor
 ```
 
 Pure-Go health check (works even when the venv is broken). `✓`/`✗` per check with remediation; non-zero exit on failure.
 
 | Verdict | Meaning / fix |
 |---------|---------------|
-| `✗ venv` | Runtime missing/broken → `ax-trace add cursor` or `ax-trace update` |
-| `✗ settings:cursor` | `~/.cursor/hooks.json` missing or unparseable → re-run `ax-trace add cursor`, or fix JSON |
-| `✗ env:cursor` | No creds in env or config → `ax-trace config set harnesses.cursor.api_key ...` |
+| `✗ venv` | Runtime missing/broken → `acht add cursor` or `acht update` |
+| `✗ settings:cursor` | `~/.cursor/hooks.json` missing or unparseable → re-run `acht add cursor`, or fix JSON |
+| `✗ env:cursor` | No creds in env or config → `acht config set harnesses.cursor.api_key ...` |
 | `✗ otlp_endpoint` | Endpoint unreachable → check network/endpoint |
 | all `✓` but no traces | Restart Cursor; see [Troubleshoot](#troubleshoot) |
 
 ## Uninstall
 
 ```bash
-ax-trace uninstall --cursor   # remove Cursor tracing, keep the shared runtime
-ax-trace uninstall            # remove all harnesses + the shared runtime
+acht uninstall --cursor   # remove Cursor tracing, keep the shared runtime
+acht uninstall            # remove all harnesses + the shared runtime
 ```
 
 Removes the Arize hook entries from `~/.cursor/hooks.json` and the `harnesses.cursor` config entry.
 
 ## Troubleshoot
 
-Run `ax-trace doctor` first. Then:
+Run `acht doctor` first. Then:
 
 | Problem | Fix |
 |---------|-----|
 | No traces | Verify `~/.cursor/hooks.json` has `arize-hook-cursor` entries; restart Cursor |
 | Phoenix unreachable | `curl -sf <endpoint>/v1/traces` |
 | Test without sending | `ARIZE_DRY_RUN=true` before launching Cursor |
-| Verbose logging | `ax-trace config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/cursor.log` |
-| Wrong project name | `ax-trace config set harnesses.cursor.project_name <name>` |
-| Spans missing user attribution | `ax-trace config set user_id <id>` (or `ARIZE_USER_ID` env) |
+| Verbose logging | `acht config set verbose true` (or `ARIZE_VERBOSE=true`); errors always go to `~/.arize/harness/logs/cursor.log` |
+| Wrong project name | `acht config set harnesses.cursor.project_name <name>` |
+| Spans missing user attribution | `acht config set user_id <id>` (or `ARIZE_USER_ID` env) |

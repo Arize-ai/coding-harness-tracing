@@ -12,7 +12,7 @@ HOOKS_DIR = Path(".github/hooks")  # project-local (relative)
 HOOKS_FILE = HOOKS_DIR / "hooks.json"
 
 # SETTINGS_FILE intentionally absent: Copilot's hook config is project-local
-# (.github/hooks/hooks.json), not a single global file. ax-trace doctor
+# (.github/hooks/hooks.json), not a single global file. acht doctor
 # legitimately cannot verify a Copilot install via a static path check.
 
 # VS Code Copilot Chat reads any *.json under .github/hooks/ and expects:

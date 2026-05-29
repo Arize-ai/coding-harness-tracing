@@ -7,48 +7,48 @@ The installer prompts for your backend (Phoenix or Arize AX) and project name, w
 
 Pass `--with-skills` to also symlink the `manage-gemini-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Gemini tracing configuration.
 
-### Recommended: ax-trace
+### Recommended: acht
 
-The `ax-trace` CLI is a single static binary that bootstraps the Python wizard for you. Install it once and use it to install, update, and uninstall tracing for any harness.
+The `acht` CLI is a single static binary that bootstraps the Python wizard for you. Install it once and use it to install, update, and uninstall tracing for any harness.
 
 macOS / Linux:
 
 ```bash
-# Install the ax-trace CLI (one-time)
-curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.sh | bash
+# Install the acht CLI (one-time)
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-acht.sh | bash
 
 # Install Gemini tracing
-ax-trace add gemini
+acht add gemini
 
 # Uninstall Gemini tracing
-ax-trace uninstall --gemini
+acht uninstall --gemini
 ```
 
 Windows (PowerShell):
 
 ```powershell
-# Install the ax-trace CLI (one-time)
-irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.ps1 | iex
+# Install the acht CLI (one-time)
+irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-acht.ps1 | iex
 
 # Install Gemini tracing
-ax-trace add gemini
+acht add gemini
 
 # Uninstall Gemini tracing
-ax-trace uninstall --gemini
+acht uninstall --gemini
 ```
 
-For unattended installs, pass values as flags and set credentials via environment variables — `ax-trace` will skip the interactive wizard:
+For unattended installs, pass values as flags and set credentials via environment variables — `acht` will skip the interactive wizard:
 
 ```bash
 export ARIZE_API_KEY="<your-arize-api-key>"
-ax-trace add gemini \
+acht add gemini \
   --backend arize \
   --space-id <your-arize-space-id> \
   --project-name gemini \
   --non-interactive
 ```
 
-Run `ax-trace add gemini --help` for the full list of flags.
+Run `acht add gemini --help` for the full list of flags.
 
 ### Alternative: install.sh / install.bat
 

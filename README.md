@@ -6,47 +6,47 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 
 | Harness | Install command |
 |---------|-----------------|
-| [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | `ax-trace add claude` |
+| [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | `acht add claude` |
 | [Claude Code via Claude Plugin marketplace](tracing/claude_code/README.md#claude-code-marketplace) | `claude plugin install claude-code-tracing@coding-harness-tracing` |
-| [OpenAI Codex CLI](tracing/codex/README.md) | `ax-trace add codex` |
-| [Cursor IDE / CLI](tracing/cursor/README.md) | `ax-trace add cursor` |
-| [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `ax-trace add copilot` |
-| [Gemini CLI](tracing/gemini/README.md) | `ax-trace add gemini` |
-| [Kiro CLI](tracing/kiro/README.md) | `ax-trace add kiro` |
+| [OpenAI Codex CLI](tracing/codex/README.md) | `acht add codex` |
+| [Cursor IDE / CLI](tracing/cursor/README.md) | `acht add cursor` |
+| [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `acht add copilot` |
+| [Gemini CLI](tracing/gemini/README.md) | `acht add gemini` |
+| [Kiro CLI](tracing/kiro/README.md) | `acht add kiro` |
 
 Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and configuration — one install covers both.
 
 ## Install
 
-`ax-trace` is a single-binary CLI that installs and manages tracing for every supported harness. It bootstraps its own Python toolchain via [uv](https://github.com/astral-sh/uv), so no system Python is required.
+`acht` is a single-binary CLI that installs and manages tracing for every supported harness. It bootstraps its own Python toolchain via [uv](https://github.com/astral-sh/uv), so no system Python is required.
 
 ```bash
-go install github.com/Arize-ai/coding-harness-tracing/cmd/ax-trace@latest
+go install github.com/Arize-ai/coding-harness-tracing/cmd/acht@latest
 ```
 
 Then configure a harness:
 
 ```bash
 # interactive — prompts for backend, credentials, project
-ax-trace add claude
+acht add claude
 
 # scripted / CI — pass flags to skip prompts
-ax-trace add codex --backend arize --space-id SPACE_ID --non-interactive
+acht add codex --backend arize --space-id SPACE_ID --non-interactive
 
 # diagnostics, update, removal
-ax-trace doctor
-ax-trace update
-ax-trace uninstall --claude    # uninstall a single harness
-ax-trace uninstall             # wipe all harnesses + the shared runtime
+acht doctor
+acht update
+acht uninstall --claude    # uninstall a single harness
+acht uninstall             # wipe all harnesses + the shared runtime
 ```
 
-`ARIZE_API_KEY` and `PHOENIX_API_KEY` are read from environment variables only — never CLI flags. In interactive mode, ax-trace prompts for the key with masked input when it is not already set.
+`ARIZE_API_KEY` and `PHOENIX_API_KEY` are read from environment variables only — never CLI flags. In interactive mode, acht prompts for the key with masked input when it is not already set.
 
 **Claude Code via the Claude Plugin marketplace:** as an alternative for Claude Code users, you can install tracing through the marketplace plugin. The plugin registers hooks but skips the interactive wizard, so backend credentials must be set directly in `~/.claude/settings.json`. See [Claude Code Tracing](tracing/claude_code/README.md#claude-code-marketplace) for details.
 
 ### Setup walkthrough
 
-When you run `ax-trace add <harness>` interactively (no `--non-interactive` flag and stdin is a terminal), the wizard walks through the steps below in order. Any field you pass as a flag or set as an env var is skipped.
+When you run `acht add <harness>` interactively (no `--non-interactive` flag and stdin is a terminal), the wizard walks through the steps below in order. Any field you pass as a flag or set as an env var is skipped.
 
 #### 1. Harness detection
 

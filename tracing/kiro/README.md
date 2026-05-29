@@ -8,34 +8,34 @@ The installer prompts for your backend (Phoenix or Arize AX) and project name, w
 
 Pass `--with-skills` to also symlink the `manage-kiro-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Kiro tracing configuration.
 
-### Install with `ax-trace` (recommended)
+### Install with `acht` (recommended)
 
-`ax-trace` is a small Go CLI that bootstraps the Python runtime for you and wires up the harness. It works the same on macOS, Linux, and Windows, and runs `ax-trace doctor` to diagnose problems without depending on the venv.
+`acht` is a small Go CLI that bootstraps the Python runtime for you and wires up the harness. It works the same on macOS, Linux, and Windows, and runs `acht doctor` to diagnose problems without depending on the venv.
 
 macOS / Linux:
 
 ```bash
-# One-time: install the ax-trace binary
-curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.sh | bash
+# One-time: install the acht binary
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-acht.sh | bash
 
 # Install Kiro tracing
-ax-trace add kiro
+acht add kiro
 
 # Uninstall
-ax-trace uninstall --kiro
+acht uninstall --kiro
 ```
 
 Windows (PowerShell):
 
 ```powershell
-# One-time: install the ax-trace binary
-irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-ax-trace.ps1 | iex
+# One-time: install the acht binary
+irm https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install-acht.ps1 | iex
 
 # Install Kiro tracing
-ax-trace add kiro
+acht add kiro
 
 # Uninstall
-ax-trace uninstall --kiro
+acht uninstall --kiro
 ```
 
 #### Non-interactive install
@@ -43,7 +43,7 @@ ax-trace uninstall --kiro
 Pre-set every prompt with flags and env vars for unattended installs (CI, devcontainers, fleet provisioning). `ARIZE_API_KEY` (or `PHOENIX_API_KEY`) is read from the environment only — never pass it as a flag.
 
 ```bash
-ARIZE_API_KEY="$ARIZE_API_KEY" ax-trace add kiro \
+ARIZE_API_KEY="$ARIZE_API_KEY" acht add kiro \
   --non-interactive \
   --backend arize \
   --space-id YOUR_SPACE_ID \
@@ -52,7 +52,7 @@ ARIZE_API_KEY="$ARIZE_API_KEY" ax-trace add kiro \
 
 ### Alternative: `install.sh` / `install.bat`
 
-The Python installer still works and remains supported. It targets the same `~/.arize/harness/` layout as `ax-trace`, so the two are interchangeable.
+The Python installer still works and remains supported. It targets the same `~/.arize/harness/` layout as `acht`, so the two are interchangeable.
 
 ```bash
 git clone https://github.com/Arize-ai/coding-harness-tracing.git

@@ -1,0 +1,72 @@
+name: acht tests
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/acht/**'
+      - 'cmd/acht/.goreleaser.yml'
+      - '.github/workflows/test-acht.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/acht/**'
+      - 'cmd/acht/.goreleaser.yml'
+      - '.github/workflows/test-acht.yml'
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: cmd/acht/go.sum
+      - name: Check formatting
+        run: cd cmd/acht && test -z "$(gofmt -l .)"
+      - name: Go vet
+        run: cd cmd/acht && go vet ./...
+      - name: Go test
+        run: cd cmd/acht && go test -v ./...
+
+  build-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: cmd/acht/go.sum
+      - name: Cross-compile
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+          CGO_ENABLED: '0'
+        run: cd cmd/acht && go build -o /tmp/acht .
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: cmd/acht/go.sum
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: latest
+          args: check
+          workdir: cmd/acht

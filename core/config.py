@@ -3,8 +3,8 @@
 Config helper for Arize Coding Harness Tracing.
 
 Reads and writes ~/.arize/harness/config.yaml. Imported by other Python
-modules. The user-facing CLI for editing this file is `ax-trace config`
-(see cmd/ax-trace/config.go) — there is no Python CLI entry point.
+modules. The user-facing CLI for editing this file is `acht config`
+(see cmd/acht/config.go) — there is no Python CLI entry point.
 
 Top-level keys:
   harnesses: dict of per-harness entries (target/endpoint/api_key/project_name/...)

@@ -5,7 +5,7 @@ Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for
 ## Setup
 The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, and registers the hook entries plus the `notify` token-usage backstop in `~/.codex/config.toml`. After installing, approve the hooks via Codex's `/hooks` command (one time per user account).
 
-**Recommended:** `ax-trace add codex` (after installing ax-trace — see top-level README).
+**Recommended:** `acht add codex` (after installing acht — see top-level README).
 **Alternative:** `./install.sh codex` (from the repo root).
 
 Both paths produce the same managed config and still require approving the hooks via Codex's `/hooks` command after install.
@@ -13,7 +13,7 @@ Both paths produce the same managed config and still require approving the hooks
 Non-interactive example:
 
 ```bash
-ax-trace add codex \
+acht add codex \
     --backend arize \
     --space-id SPACE_ID \
     --non-interactive

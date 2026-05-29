@@ -225,7 +225,7 @@ install_harness() {
     fi
     info "Setup complete!"
     if [[ -z "${AX_TRACE_QUIET:-}" ]]; then
-        info "Tip: ax-trace is the recommended installer for new users — see https://github.com/Arize-ai/coding-harness-tracing#ax-trace"
+        info "Tip: acht is the recommended installer for new users — see https://github.com/Arize-ai/coding-harness-tracing#acht"
     fi
 }
 

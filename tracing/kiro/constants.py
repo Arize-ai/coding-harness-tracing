@@ -22,7 +22,7 @@ KIRO_SESSIONS_DIR = Path.home() / ".kiro" / "sessions" / "cli"
 # Default agent name when the user doesn't specify one during install.
 DEFAULT_AGENT_NAME = "arize-traced"
 
-# Canonical settings-file path for manifest consumers (e.g. ax-trace doctor).
+# Canonical settings-file path for manifest consumers (e.g. acht doctor).
 # Points at the global agent file created by the default install. Users who
 # pick a custom agent name will see a doctor warning here — that's an
 # acceptable false-negative trade-off for v1.
