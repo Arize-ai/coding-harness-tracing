@@ -883,6 +883,8 @@ def build_span(
     attrs: "dict | None" = None,
     service_name: str = "coding-harness-tracing",
     scope_name: str = "coding-harness-tracing",
+    status_code: int = 1,
+    status_message: str = "",
 ) -> dict:
     """Build an OTLP JSON span payload.
 
@@ -903,6 +905,10 @@ def build_span(
 
     kind_value = _resolve_kind(kind or "")
 
+    status: dict = {"code": status_code}
+    if status_message:
+        status["message"] = status_message
+
     span_obj = {
         "traceId": trace_id,
         "spanId": span_id,
@@ -911,7 +917,7 @@ def build_span(
         "startTimeUnixNano": f"{start}000000",
         "endTimeUnixNano": f"{end}000000",
         "attributes": _attrs_to_otlp(attrs),
-        "status": {"code": 1},
+        "status": status,
     }
 
     # parentSpanId only included if non-empty (matches bash conditional)
