@@ -13,7 +13,7 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `install.sh` / `install.bat` | `copilot` |
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
-| [opencode](tracing/opencode/README.md) | `install.sh` / `install.bat` | `opencode` |
+| [Opencode CLI](tracing/opencode/README.md) | `install.sh` / `install.bat` | `opencode` |
 
 Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and configuration — one install covers both.
 
