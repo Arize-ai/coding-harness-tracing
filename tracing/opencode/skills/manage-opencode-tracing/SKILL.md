@@ -5,7 +5,7 @@ description: Set up and configure Arize tracing for opencode terminal coding ses
 
 # Setup opencode Tracing
 
-Configure OpenInference tracing for **opencode** terminal coding sessions to Arize AX (cloud) or Phoenix (self-hosted). Unlike the other harnesses in this repo, opencode loads its extensions [in-process inside its Bun runtime](https://opencode.ai/docs/plugins/) — there is no per-event subprocess. The integration ships as a small TypeScript plugin shim that pulls snapshots via the [opencode SDK](https://opencode.ai/docs/sdk/) and spawns a Python reconciler (`arize-hook-opencode`) which emits spans. Spans are sent directly to the backend from the reconciler — no background process or backend-specific dependencies are needed in the user's environment.
+Configure OpenInference tracing for **opencode** terminal coding sessions to Arize AX (cloud) or Phoenix (self-hosted). Unlike the other harnesses in this repo, opencode loads its extensions [in-process inside its Bun runtime](https://opencode.ai/docs/plugins/) — there is no per-event subprocess. The integration ships as a small TypeScript plugin shim that pulls snapshots via the [opencode SDK](https://opencode.ai/docs/sdk/) and spawns a Python reconciler (`arize-hook-opencode`) which emits spans. Spans are sent directly to the backend from the reconciler — no separate buffer/collector service is required.
 
 ## How to Use This Skill
 
@@ -149,7 +149,7 @@ Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts
 1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials under `harnesses.opencode`.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 3. **Plugin installed**: Verify `~/.config/opencode/plugin/arize-tracing.ts` exists and starts with the Arize header marker.
-4. **Reconciler entry point**: Verify `arize-hook-opencode` is on PATH (installed by `install.sh` into the harness venv and exposed via `~/.arize/harness/bin/`).
+4. **Reconciler entry point**: Verify the reconciler binary exists at `~/.arize/harness/venv/bin/arize-hook-opencode` (or `~/.arize/harness/venv/Scripts/arize-hook-opencode.exe` on Windows). The shim spawns this binary by absolute path — it does not rely on PATH resolution. `install.sh` installs it as a venv entry point.
 
 ### Confirm
 
@@ -161,10 +161,10 @@ Tell the user:
 - After saving, open a new opencode session and traces will appear in their Phoenix UI or Arize AX dashboard under the project name
 - Mention `ARIZE_DRY_RUN=true` to test without sending data (set as env var before launching opencode)
 - Mention `ARIZE_VERBOSE=true` for debug output
-- Errors are always written to `~/.arize/harness/logs/opencode.log`; set `ARIZE_VERBOSE=true` in the shell before launching opencode to also capture routine reconciler activity (snapshot ingest, span emits, dedup hits)
+- Errors and reconciler stderr are always written to `~/.arize/harness/logs/opencode.log` (the adapter redirects Python stderr there via `ARIZE_LOG_FILE`); set `ARIZE_VERBOSE=true` in the shell before launching opencode to also capture routine reconciler activity (snapshot ingest, span emits, dedup hits)
 - Toggle tracing on/off via `ARIZE_TRACE_ENABLED` env var (must be exported in the user's shell before launching opencode — the shim and reconciler inherit host env vars)
 - Tail the log file at `~/.arize/harness/logs/opencode.log` for real-time debugging
-- Mention `ARIZE_TRACE_DEBUG=true` to dump raw snapshot payloads under `~/.arize/harness/state/opencode/debug/` for inspection
+- Mention `ARIZE_TRACE_DEBUG=true` to dump raw snapshot payloads under `~/.arize/harness/state/debug/` (files are named `opencode_reconcile_<ts>.yaml` / `opencode_close_<ts>.yaml`) for inspection
 
 ## Architecture (How spans are produced)
 
@@ -191,14 +191,14 @@ Common issues and fixes for opencode:
 |---------|-----|
 | Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.yaml`. Check reconciler log: `tail -20 ~/.arize/harness/logs/opencode.log`. Confirm the plugin is in place: `ls ~/.config/opencode/plugin/arize-tracing.ts`. |
 | Plugin not loading | opencode loads plugins from `~/.config/opencode/plugin/` on startup. If the file exists but isn't loading, restart opencode and check the opencode CLI output for plugin errors. |
-| Reconciler entry point missing | `arize-hook-opencode` must be on PATH. Rerun `./install.sh opencode` to refresh the venv entry point shims under `~/.arize/harness/bin/`. |
+| Reconciler entry point missing | The shim spawns the reconciler by absolute path; verify the binary exists at `~/.arize/harness/venv/bin/arize-hook-opencode` (or `~/.arize/harness/venv/Scripts/arize-hook-opencode.exe` on Windows). Rerun `./install.sh opencode` to reinstall the venv entry point. |
 | Spans appear partial / missing tool spans | Snapshots are pulled on `message.updated` (assistant complete) and `session.idle`. Pending or running tool parts won't emit a span until they reach `completed` or `error` state. Wait for the turn to finish. |
 | Duplicate spans | The reconciler dedupes by message id and tool `callID`. If you still see duplicates, set `ARIZE_VERBOSE=true` and check `~/.arize/harness/logs/opencode.log` for dedup hits to confirm state tracking is working. |
 | Sub-agent (`task` tool) trace not linked to parent | Known v1 limitation: opencode's built-in `task` tool spawns sub-agents with their own `sessionID`, which produce their own independent traces. They are not linked back to the parent session's trace. |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching opencode |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching opencode |
-| Want raw snapshot payloads for inspection | Set `ARIZE_TRACE_DEBUG=true` env var; payloads land under `~/.arize/harness/state/opencode/debug/` |
+| Want raw snapshot payloads for inspection | Set `ARIZE_TRACE_DEBUG=true` env var; payloads land under `~/.arize/harness/state/debug/` as `opencode_reconcile_<ts>.yaml` / `opencode_close_<ts>.yaml` |
 | Wrong project name | Set `harnesses.opencode.project_name` in `~/.arize/harness/config.yaml` (default: `"opencode"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` env var before launching opencode |
 | Tracing not toggling | Ensure `ARIZE_TRACE_ENABLED` is exported in your shell, not just set — the opencode process and any plugin-spawned reconciler inherit host env vars |
