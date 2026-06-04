@@ -180,6 +180,39 @@ class TestInstallFreshWritesFlatHarnessEntry:
 
 
 # ---------------------------------------------------------------------------
+# Plugin source resolution (regression for site-packages FileNotFoundError)
+# ---------------------------------------------------------------------------
+
+
+class TestPluginSourceResolution:
+    """The installer must locate its bundled .ts relative to install.py itself.
+
+    Regression for the real-install crash: the shell router runs install.py from
+    ~/.arize/harness/, but ``tracing.opencode.constants`` is imported from the
+    venv site-packages copy, which does not ship the .ts data asset. Resolving
+    the source via constants.PLUGIN_SOURCE therefore pointed at a nonexistent
+    site-packages path and raised FileNotFoundError.
+    """
+
+    def test_source_resolved_independently_of_constants(self, cwd_tmp, plugin_file, monkeypatch):
+        _mock_prompts(monkeypatch)
+        # Simulate constants imported from a tree that lacks the data asset
+        # (the venv site-packages situation).
+        monkeypatch.setattr(_oc, "PLUGIN_SOURCE", cwd_tmp / "no-such-tree" / "arize-tracing.ts")
+
+        install()
+
+        assert plugin_file.is_file()
+        assert plugin_file.read_text(encoding="utf-8").startswith("// Arize opencode tracing plugin (shim).")
+
+    def test_plugin_source_points_at_existing_asset(self):
+        """_plugin_source() resolves to a file that actually exists on disk."""
+        src = _install._plugin_source()
+        assert src.is_file()
+        assert src.name == "arize-tracing.ts"
+
+
+# ---------------------------------------------------------------------------
 # Install tests — second harness (copy-from)
 # ---------------------------------------------------------------------------
 
@@ -539,7 +572,7 @@ class TestMainDispatch:
         _mock_prompts(monkeypatch)
         monkeypatch.setattr("sys.argv", ["tracing.opencode.install", "install"])
         called = []
-        monkeypatch.setattr(_install, "install", lambda: called.append("install"))
+        monkeypatch.setattr(_install, "install", lambda with_skills=False: called.append("install"))
         _install.main()
         assert called == ["install"]
 
@@ -608,6 +641,71 @@ class TestInstallPromptsForLogging:
 
         mock_prompt_logging.assert_called_once()
         mock_write_logging.assert_called_once_with(logging_result)
+
+
+# ---------------------------------------------------------------------------
+# Skills wiring (--with-skills)
+# ---------------------------------------------------------------------------
+
+
+class TestInstallSkillsWiring:
+    """install() honors with_skills and symlinks the management skill."""
+
+    def test_install_with_skills_true_calls_symlink(self, cwd_tmp, monkeypatch):
+        _mock_prompts(monkeypatch)
+        calls = []
+        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        install(with_skills=True)
+        assert calls == ["opencode"]
+
+    def test_install_default_does_not_symlink(self, cwd_tmp, monkeypatch):
+        _mock_prompts(monkeypatch)
+        calls = []
+        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        install()
+        assert calls == []
+
+    def test_install_with_skills_false_does_not_symlink(self, cwd_tmp, monkeypatch):
+        _mock_prompts(monkeypatch)
+        calls = []
+        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        install(with_skills=False)
+        assert calls == []
+
+    def test_round_trip_creates_then_removes_symlink(self, cwd_tmp, monkeypatch):
+        """install --with-skills creates the symlink; uninstall removes it."""
+        _mock_prompts(monkeypatch)
+        # Stage a fake skills source under the temp INSTALL_DIR that
+        # harness_dir("opencode") resolves to.
+        skills_src = cwd_tmp / ".arize" / "harness" / "tracing" / "opencode" / "skills"
+        skill = skills_src / "manage-opencode-tracing"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("# manage-opencode-tracing\n")
+
+        install(with_skills=True)
+        link = cwd_tmp / ".agents" / "skills" / "manage-opencode-tracing"
+        assert link.is_symlink()
+
+        uninstall()
+        assert not link.exists()
+
+
+class TestMainDispatchSkillsFlag:
+    """main() parses --with-skills and forwards it to install()."""
+
+    def test_main_install_with_skills_flag(self, cwd_tmp, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["tracing.opencode.install", "install", "--with-skills"])
+        captured = {}
+        monkeypatch.setattr(_install, "install", lambda with_skills=False: captured.update(with_skills=with_skills))
+        _install.main()
+        assert captured == {"with_skills": True}
+
+    def test_main_install_without_skills_flag(self, cwd_tmp, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["tracing.opencode.install", "install"])
+        captured = {}
+        monkeypatch.setattr(_install, "install", lambda with_skills=False: captured.update(with_skills=with_skills))
+        _install.main()
+        assert captured == {"with_skills": False}
 
 
 # ---------------------------------------------------------------------------

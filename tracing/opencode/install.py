@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from pathlib import Path
 
 from core.config import get_value, load_config
 from core.setup import (
@@ -26,6 +27,7 @@ from core.setup import (
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
+    symlink_skills,
     unlink_skills,
     write_config,
     write_logging_config,
@@ -55,9 +57,16 @@ def _plugin_file():
 
 
 def _plugin_source():
-    import tracing.opencode.constants as _c
+    """Resolve the bundled plugin asset relative to THIS installer file.
 
-    return _c.PLUGIN_SOURCE
+    Deliberately NOT via ``constants.PLUGIN_SOURCE``: at runtime the shell router
+    executes install.py from the rsynced ~/.arize/harness tree (where the .ts
+    ships alongside it), while ``tracing.opencode.constants`` is imported from the
+    venv site-packages copy, which does not carry the data asset. Resolving from
+    install.py's own location works in every delivery (repo, INSTALL_DIR) and
+    avoids the FileNotFoundError seen in real installs.
+    """
+    return Path(__file__).resolve().parent / "plugin" / "arize-tracing.ts"
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +112,7 @@ def _uninstall_plugin() -> None:
 # ---------------------------------------------------------------------------
 
 
-def install() -> None:
+def install(with_skills: bool = False) -> None:
     """Install the opencode plugin shim and register in config.yaml."""
     ensure_shared_runtime()
 
@@ -132,6 +141,9 @@ def install() -> None:
 
     _install_plugin()
 
+    if with_skills:
+        symlink_skills(HARNESS_NAME)
+
     info("opencode tracing installed")
 
 
@@ -152,13 +164,14 @@ def uninstall() -> None:
 def main() -> None:
     """Dispatch install / uninstall from the command line."""
     if len(sys.argv) < 2 or sys.argv[1] not in ("install", "uninstall"):
-        print(f"usage: {sys.argv[0]} {{install|uninstall}}", file=sys.stderr)
+        print(f"usage: {sys.argv[0]} {{install|uninstall}} [--with-skills]", file=sys.stderr)
         sys.exit(1)
 
     action = sys.argv[1]
+    flags = set(sys.argv[2:])
 
     if action == "install":
-        install()
+        install(with_skills="--with-skills" in flags)
     else:
         uninstall()
 
