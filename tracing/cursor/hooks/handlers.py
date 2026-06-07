@@ -226,7 +226,7 @@ def _handle_before_submit_prompt(input_json, conversation_id, gen_id, trace_id, 
 
 
 def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """LLM child span; IDE also sends deferred User Prompt CHAIN when applicable."""
+    """Defers LLM span until stop (so per-turn tokens land on it). IDE also sends deferred User Prompt CHAIN."""
     sid = span_id_16()
     parent = gen_root_span_get(gen_id)
 
@@ -278,7 +278,25 @@ def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, 
         send_span(root_span)
         log(f"afterAgentResponse: sent deferred root span {root_state['span_id']}")
 
-    # Send LLM child span with input + output + model
+    llm_entry = {
+        "span_id": sid,
+        "parent": parent,
+        "trace_id": trace_id,
+        "input": prompt,
+        "output": response,
+        "model": model,
+        "conversation_id": conversation_id,
+        "user_id": user_id,
+        "start_ms": now_ms,
+    }
+
+    if gen_id:
+        # Defer LLM span to stop; tokens (only available at stop) attach there.
+        state_push(f"llm_{sanitize(gen_id)}", llm_entry)
+        log(f"afterAgentResponse: deferred LLM span {sid}")
+        return
+
+    # Fallback: no gen_id means we have no key to stash under — send inline.
     attrs = {
         "openinference.span.kind": "LLM",
         "input.value": prompt,
@@ -305,7 +323,7 @@ def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, 
         SCOPE_NAME,
     )
     send_span(span)
-    log(f"afterAgentResponse: child span {sid}")
+    log(f"afterAgentResponse: child span {sid} (no gen_id, sent inline)")
 
 
 def _handle_after_agent_thought(input_json, conversation_id, gen_id, trace_id, now_ms):
@@ -649,7 +667,7 @@ def _handle_after_tab_file_edit(input_json, conversation_id, gen_id, trace_id, n
 
 
 def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """Stop span + generation cleanup."""
+    """Flush deferred LLM span(s) with per-turn tokens, then send Agent Stop CHAIN + cleanup."""
     sid = span_id_16()
     parent = gen_root_span_get(gen_id)
 
@@ -658,20 +676,7 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
 
     user_id = _resolve_user_id(input_json)
 
-    attrs = {
-        "openinference.span.kind": "CHAIN",
-        "session.id": conversation_id,
-    }
-    if conversation_id:
-        attrs["cursor.conversation.id"] = conversation_id
-    if user_id:
-        attrs["user.id"] = user_id
-    if status:
-        attrs["cursor.stop.status"] = status
-    if loop_count:
-        attrs["cursor.stop.loop_count"] = loop_count
-
-    # Token counts from CLI stop payload
+    # Token counts from stop payload
     # Use explicit None checks — 0 is a valid token count but falsy with ``or``
     _inp_tok = input_json.get("input_tokens")
     prompt_tokens = _to_int(_inp_tok if _inp_tok is not None else input_json.get("inputTokens"))
@@ -685,20 +690,86 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
     _dur = input_json.get("duration_ms")
     duration_ms = _to_int(_dur if _dur is not None else input_json.get("durationMs"))
 
+    token_attrs = {}
     if prompt_tokens is not None:
-        attrs["llm.token_count.prompt"] = prompt_tokens
+        token_attrs["llm.token_count.prompt"] = prompt_tokens
     if completion_tokens is not None:
-        attrs["llm.token_count.completion"] = completion_tokens
+        token_attrs["llm.token_count.completion"] = completion_tokens
     if cache_read is not None:
-        attrs["llm.token_count.cache_read"] = cache_read
+        token_attrs["llm.token_count.cache_read"] = cache_read
     if cache_write is not None:
-        attrs["llm.token_count.cache_write"] = cache_write
+        token_attrs["llm.token_count.cache_write"] = cache_write
     if prompt_tokens is not None and completion_tokens is not None:
-        attrs["llm.token_count.total"] = prompt_tokens + completion_tokens
+        token_attrs["llm.token_count.total"] = prompt_tokens + completion_tokens
     if model:
-        attrs["llm.model_name"] = model
+        token_attrs["llm.model_name"] = model
+
+    # Drain deferred LLM stack for this generation (LIFO: first pop = most recent).
+    llm_entries = []
+    if gen_id:
+        llm_key = f"llm_{sanitize(gen_id)}"
+        while True:
+            entry = state_pop(llm_key)
+            if entry is None:
+                break
+            llm_entries.append(entry)
+
+    # Flush deferred LLM span(s) before Agent Stop so strict OTLP backends see parent first.
+    for idx, entry in enumerate(llm_entries):
+        entry_conv_id = entry.get("conversation_id")
+        llm_attrs = {
+            "openinference.span.kind": "LLM",
+            "input.value": entry.get("input", ""),
+            "output.value": entry.get("output", ""),
+        }
+        if entry_conv_id:
+            llm_attrs["session.id"] = entry_conv_id
+            llm_attrs["cursor.conversation.id"] = entry_conv_id
+        entry_user = entry.get("user_id")
+        if entry_user:
+            llm_attrs["user.id"] = entry_user
+        entry_model = entry.get("model", "")
+        if entry_model:
+            llm_attrs["llm.model_name"] = entry_model
+        # Tokens are cumulative per turn — attribute only to the most recent LLM span.
+        if idx == 0:
+            llm_attrs.update(token_attrs)
+
+        llm_start = int(entry.get("start_ms") or now_ms)
+        llm_span = build_span(
+            "Agent Response",
+            "LLM",
+            entry.get("span_id", ""),
+            entry.get("trace_id", trace_id),
+            entry.get("parent", ""),
+            llm_start,
+            llm_start,
+            llm_attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
+        send_span(llm_span)
+
+    attrs = {
+        "openinference.span.kind": "CHAIN",
+        "session.id": conversation_id,
+    }
+    if conversation_id:
+        attrs["cursor.conversation.id"] = conversation_id
+    if user_id:
+        attrs["user.id"] = user_id
+    if status:
+        attrs["cursor.stop.status"] = status
+    if loop_count:
+        attrs["cursor.stop.loop_count"] = loop_count
     if duration_ms is not None:
         attrs["cursor.stop.duration_ms"] = duration_ms
+    if model and not llm_entries:
+        attrs["llm.model_name"] = model
+
+    # Fallback (no afterAgentResponse, e.g. CLI): keep token attrs on Agent Stop.
+    if not llm_entries:
+        attrs.update(token_attrs)
 
     span = build_span(
         "Agent Stop",

@@ -179,7 +179,7 @@ Cursor IDE fires 15 hook events. Here's what each one traces:
 |-------|-----------|------|-------------|
 | `sessionStart` | Session Start | CHAIN | Root span for the conversation; captures session metadata |
 | `beforeSubmitPrompt` | User Prompt | CHAIN | Root span for the turn; captures prompt text, model, attachments |
-| `afterAgentResponse` | Agent Response | LLM | LLM response text and model name |
+| `afterAgentResponse` | Agent Response | LLM | LLM response text and model name; span is deferred and sent at end-of-turn (on `stop`) so it can carry per-turn token usage |
 | `afterAgentThought` | Agent Thinking | CHAIN | Agent thinking/reasoning text |
 | `beforeShellExecution` | (state push) | -- | Saves command and start time to disk state |
 | `afterShellExecution` | Shell | TOOL | Merged span with command input and output |
@@ -190,7 +190,7 @@ Cursor IDE fires 15 hook events. Here's what each one traces:
 | `beforeTabFileRead` | Tab Read File | TOOL | Tab file read (file path) |
 | `afterTabFileEdit` | Tab File Edit | TOOL | Tab file edit (path and edits) |
 | `postToolUse` | Tool: {name} | TOOL | Generic tool span; postToolUse is suppressed for tools with a dedicated handler (Shell, Read, File Edit, Tab ops, MCP) to avoid duplicate spans |
-| `stop` | Agent Stop | CHAIN | Per-turn stop event with token counts when available |
+| `stop` | Agent Stop | CHAIN | Per-turn stop event with status / loop_count / duration metadata; per-turn token counts are attached to the deferred `Agent Response` (LLM) span when it is sent at end-of-turn |
 | `sessionEnd` | Session End | CHAIN | End-of-session span with duration and final status |
 
 Shell and MCP events use a disk-backed state stack to merge before/after context into single spans with both input and output.
@@ -216,7 +216,7 @@ Full Cursor CLI assistant and thinking coverage requires parsing --output-format
 
 - **`sessionStart`** produces a `Session Start` CHAIN span that acts as the root for the conversation.
 - **`sessionEnd`** produces a `Session End` CHAIN span with `cursor.session.duration_ms`, `cursor.session.final_status`, `cursor.session.reason`, and end-of-session token counts when available.
-- **`stop`** produces an `Agent Stop` CHAIN span with per-turn token counts captured when the payload includes them: `llm.token_count.prompt`, `llm.token_count.completion`, `llm.token_count.cache_read`, `llm.token_count.cache_write`, `llm.token_count.total`, and `llm.model_name`.
+- **`stop`** produces an `Agent Stop` CHAIN span carrying per-turn status / loop_count / duration metadata. On the Cursor IDE, per-turn token usage is attached to the `Agent Response` (LLM) span instead: that span is deferred from `afterAgentResponse` and sent at end-of-turn when `stop` fires, populated from the `stop` payload with `llm.token_count.prompt`, `llm.token_count.completion`, `llm.token_count.cache_read`, `llm.token_count.cache_write`, `llm.token_count.total`, and `llm.model_name`. Cursor CLI does not emit `afterAgentResponse`, so there is no LLM span to attach to; for the CLI path, token counts remain on the `Agent Stop` / `Session End` CHAIN span as before.
 - **`postToolUse`** produces a generic `Tool: <name>` span ONLY for tools without a dedicated handler. Shell, file read/edit, tab file ops, and MCP execution are handled by their dedicated `before*`/`after*` events; the generic postToolUse is suppressed for these to avoid duplicate spans.
 
 Every span includes `cursor.conversation.id` as a span attribute. Since `sessionStart` and per-turn activity use different `trace_id` values, `cursor.conversation.id` is the recommended cross-trace join key in Arize. To gather all activity for a Cursor session regardless of trace, filter spans by `attributes.cursor.conversation.id = "<id>"`.
