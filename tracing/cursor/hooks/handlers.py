@@ -765,7 +765,6 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
     if duration_ms is not None:
         attrs["cursor.stop.duration_ms"] = duration_ms
     if model and not llm_entries:
-    if model and not llm_entries:
         attrs["llm.model_name"] = model
 
     # Fallback (no afterAgentResponse, e.g. CLI): keep token attrs on Agent Stop.
