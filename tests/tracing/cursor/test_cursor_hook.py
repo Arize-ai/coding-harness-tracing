@@ -408,7 +408,10 @@ class TestHandleAfterAgentResponse:
             mock.patch("tracing.cursor.hooks.handlers.span_id_16", return_value="eeff" * 4),
             mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value="parent123"),
         ):
-            _dispatch("stop", {"conversation_id": "conv-1", "generation_id": "gen-1"})
+            _dispatch(
+                "stop",
+                {"hook_event_name": "stop", "conversation_id": "conv-1", "generation_id": "gen-1"},
+            )
 
         names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
         assert names == ["Agent Response", "Agent Stop"]

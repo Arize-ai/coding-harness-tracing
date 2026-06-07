@@ -716,16 +716,16 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
 
     # Flush deferred LLM span(s) before Agent Stop so strict OTLP backends see parent first.
     for idx, entry in enumerate(llm_entries):
-        entry_conv_id = entry.get("conversation_id", "")
+        entry_conv_id = entry.get("conversation_id")
         llm_attrs = {
             "openinference.span.kind": "LLM",
             "input.value": entry.get("input", ""),
             "output.value": entry.get("output", ""),
-            "session.id": entry_conv_id,
         }
         if entry_conv_id:
+            llm_attrs["session.id"] = entry_conv_id
             llm_attrs["cursor.conversation.id"] = entry_conv_id
-        entry_user = entry.get("user_id", "")
+        entry_user = entry.get("user_id")
         if entry_user:
             llm_attrs["user.id"] = entry_user
         entry_model = entry.get("model", "")
@@ -735,7 +735,7 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
         if idx == 0:
             llm_attrs.update(token_attrs)
 
-        llm_start = entry.get("start_ms", now_ms)
+        llm_start = int(entry.get("start_ms") or now_ms)
         llm_span = build_span(
             "Agent Response",
             "LLM",
@@ -764,7 +764,7 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
         attrs["cursor.stop.loop_count"] = loop_count
     if duration_ms is not None:
         attrs["cursor.stop.duration_ms"] = duration_ms
-    if model:
+    if model and not llm_entries:
         attrs["llm.model_name"] = model
 
     # Fallback (no afterAgentResponse, e.g. CLI): keep token attrs on Agent Stop.
