@@ -14,7 +14,9 @@ import shutil
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Optional
 
@@ -422,6 +424,120 @@ def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
     return payload
 
 
+def _otlp_attr_value_to_python(value: dict):
+    """Convert an OTLP AnyValue JSON object to a plain JSON value."""
+    if not isinstance(value, dict):
+        return value
+    if "stringValue" in value:
+        return value["stringValue"]
+    if "boolValue" in value:
+        return value["boolValue"]
+    if "intValue" in value:
+        try:
+            return int(value["intValue"])
+        except (TypeError, ValueError):
+            return value["intValue"]
+    if "doubleValue" in value:
+        return value["doubleValue"]
+    if "bytesValue" in value:
+        return value["bytesValue"]
+    if "arrayValue" in value:
+        values = value.get("arrayValue", {}).get("values", [])
+        return [_otlp_attr_value_to_python(item) for item in values]
+    if "kvlistValue" in value:
+        values = value.get("kvlistValue", {}).get("values", [])
+        return {item.get("key", ""): _otlp_attr_value_to_python(item.get("value", {})) for item in values}
+    return value
+
+
+def _otlp_attrs_to_dict(attrs: list) -> dict:
+    """Convert OTLP attribute arrays to the object shape Phoenix REST expects."""
+    result = {}
+    for attr in attrs or []:
+        key = attr.get("key")
+        if not key:
+            continue
+        result[key] = _otlp_attr_value_to_python(attr.get("value", {}))
+    return result
+
+
+def _unix_nano_to_iso(value) -> str:
+    """Convert OTLP Unix nanoseconds to an ISO-8601 UTC timestamp."""
+    try:
+        ns = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid Unix nanosecond timestamp: {value!r}")
+    seconds, nanos = divmod(ns, 1_000_000_000)
+    dt = datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=nanos // 1000)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _phoenix_status_code(status: dict) -> str:
+    """Convert OTLP status code enum values to Phoenix status strings."""
+    if not isinstance(status, dict):
+        return "UNSET"
+    raw_code = status.get("code", 0)
+    if raw_code is None:
+        raw_code = 0
+    try:
+        code = int(raw_code)
+    except (TypeError, ValueError):
+        code = 0
+    return {1: "OK", 2: "ERROR"}.get(code, "UNSET")
+
+
+def _phoenix_span_kind(span: dict, attrs: dict) -> str:
+    """Prefer OpenInference span kind attributes, falling back to OTLP kind."""
+    oi_kind = attrs.get("openinference.span.kind")
+    if oi_kind:
+        return str(oi_kind).upper()
+    try:
+        otlp_kind = int(span.get("kind", 0))
+    except (TypeError, ValueError):
+        otlp_kind = 0
+    return {2: "SERVER", 3: "CLIENT", 4: "PRODUCER", 5: "CONSUMER"}.get(otlp_kind, "UNKNOWN")
+
+
+def _otlp_to_phoenix_payload(span_dict: dict) -> dict:
+    """Translate OTLP JSON into Phoenix's native REST create-spans schema."""
+    phoenix_spans = []
+    for rs in span_dict.get("resourceSpans", []):
+        resource_attrs = _otlp_attrs_to_dict(rs.get("resource", {}).get("attributes", []))
+        for ss in rs.get("scopeSpans", []):
+            for span in ss.get("spans", []):
+                attrs = {**resource_attrs, **_otlp_attrs_to_dict(span.get("attributes", []))}
+                item = {
+                    "name": span.get("name", "unknown"),
+                    "context": {
+                        "trace_id": span.get("traceId", ""),
+                        "span_id": span.get("spanId", ""),
+                    },
+                    "span_kind": _phoenix_span_kind(span, attrs),
+                    "start_time": _unix_nano_to_iso(span.get("startTimeUnixNano")),
+                    "end_time": _unix_nano_to_iso(span.get("endTimeUnixNano")),
+                    "status_code": _phoenix_status_code(span.get("status", {})),
+                    "status_message": (span.get("status", {}) or {}).get("message", ""),
+                    "attributes": attrs,
+                }
+                parent_id = span.get("parentSpanId")
+                if parent_id:
+                    item["parent_id"] = parent_id
+
+                events = []
+                for event in span.get("events", []) or []:
+                    events.append(
+                        {
+                            "name": event.get("name", "event"),
+                            "timestamp": _unix_nano_to_iso(event.get("timeUnixNano")),
+                            "attributes": _otlp_attrs_to_dict(event.get("attributes", [])),
+                        }
+                    )
+                if events:
+                    item["events"] = events
+                phoenix_spans.append(item)
+    return {"data": phoenix_spans}
+
+
 def _extract_span_name(span_dict: dict) -> str:
     """Extract the first span name from an OTLP payload."""
     try:
@@ -456,8 +572,9 @@ def send_span(span_dict: dict) -> bool:
             project = backend["project_name"]
             endpoint = backend["endpoint"]
             api_key = backend.get("api_key", "")
-            url = f"{endpoint}/v1/projects/{project}/spans"
-            body = _json.dumps(span_dict).encode("utf-8")
+            project_identifier = urllib.parse.quote(project, safe="")
+            url = f"{endpoint.rstrip('/')}/v1/projects/{project_identifier}/spans"
+            body = _json.dumps(_otlp_to_phoenix_payload(span_dict)).encode("utf-8")
             headers = {"Content-Type": "application/json"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
