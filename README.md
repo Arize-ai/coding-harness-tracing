@@ -10,6 +10,7 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | `Claude Plugin (see below)`| `claude-code-tracing` |
 | [OpenAI Codex CLI](tracing/codex/README.md) | `install.sh` / `install.bat` | `codex` |
 | [Cursor IDE / CLI](tracing/cursor/README.md) | `install.sh` / `install.bat` | `cursor` |
+| [Cursor IDE / CLI](tracing/cursor/README.md) | `Cursor Plugin (/add-plugin)` | `cursor-tracing` |
 | [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `install.sh` / `install.bat` | `copilot` |
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
@@ -19,6 +20,8 @@ Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and confi
 ## Install
 
 > Installing Claude Code tracing via the Claude marketplace? See [Claude Code Tracing](tracing/claude_code/README.md#claude-code-marketplace) for the marketplace-specific flow — backend credentials must be set directly in `~/.claude/settings.json` since the install wizard is skipped.
+
+> Installing Cursor tracing via the Cursor marketplace? The `cursor-tracing` plugin registers all hook events automatically; run the bundled `manage-cursor-tracing` skill once after install to write backend credentials to `~/.arize/harness/config.yaml`. See [Cursor IDE Tracing](tracing/cursor/README.md#plugin-install) for the full flow.
 
 ### Quickstart
 
