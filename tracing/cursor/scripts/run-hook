@@ -1,0 +1,121 @@
+#!/bin/sh
+# Arize tracing hook dispatcher for the Cursor plugin.
+# Called by every Cursor hook event. Bootstraps a dedicated plugin venv on
+# first run, then execs the single dispatcher entry point. Cursor passes the
+# hook payload (including the event name) on stdin, which the entry point
+# reads to route internally.
+#
+# Cursor exposes no plugin-root or per-plugin data env vars, so:
+#   - PLUGIN_ROOT is resolved from the script's own location (CWD-independent)
+#   - the venv lives in a fixed, plugin-dedicated path under ~/.arize/harness
+#
+# All diagnostic output goes to stderr; stdout is reserved for Cursor's
+# control JSON. Any failure exits 0 so tracing never blocks Cursor.
+set -e
+
+HOOK_NAME="arize-hook-cursor"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DATA_DIR="$HOME/.arize/harness"
+VENV_DIR="$DATA_DIR/cursor-plugin-venv"
+MARKER="$DATA_DIR/.cursor-plugin.pyproject.sha256"
+
+# --- Find the entry point binary ---
+find_entry_point() {
+    if [ -x "$VENV_DIR/bin/$HOOK_NAME" ]; then
+        echo "$VENV_DIR/bin/$HOOK_NAME"
+    elif [ -x "$VENV_DIR/Scripts/$HOOK_NAME" ]; then
+        echo "$VENV_DIR/Scripts/$HOOK_NAME"
+    elif [ -x "$VENV_DIR/Scripts/${HOOK_NAME}.exe" ]; then
+        echo "$VENV_DIR/Scripts/${HOOK_NAME}.exe"
+    else
+        return 1
+    fi
+}
+
+# --- Find Python 3.9+ ---
+find_python() {
+    for p in python3 python py; do
+        if "$p" -c "import sys; sys.exit(0 if sys.version_info>=(3,9) else 1)" 2>/dev/null; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# --- Check if (re)install is needed ---
+needs_install() {
+    [ ! -d "$VENV_DIR" ] && return 0
+    [ ! -f "$MARKER" ] && return 0
+    # Compare pyproject.toml hash
+    current=$("$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PLUGIN_ROOT/pyproject.toml" 2>/dev/null) || return 0
+    stored=$(cat "$MARKER" 2>/dev/null) || return 0
+    [ "$current" != "$stored" ]
+}
+
+# --- Bootstrap venv ---
+bootstrap() {
+    PYTHON_CMD=$(find_python) || {
+        echo "[arize] No Python 3.9+ found — tracing will not be available" >&2
+        return 1
+    }
+
+    # Recover from a half-created venv (seen in Cursor Cloud where
+    # python3-venv may be partially available). If $VENV_DIR exists but has
+    # no usable pip, wipe it and rebuild.
+    if [ -d "$VENV_DIR" ] && [ ! -x "$VENV_DIR/bin/pip" ] && [ ! -x "$VENV_DIR/Scripts/pip" ] && [ ! -x "$VENV_DIR/Scripts/pip.exe" ]; then
+        echo "[arize] Removing incomplete venv at $VENV_DIR" >&2
+        rm -rf "$VENV_DIR"
+        rm -f "$MARKER"
+    fi
+
+    if ! needs_install; then
+        return 0
+    fi
+
+    echo "[arize] Setting up Cursor tracing venv..." >&2
+    mkdir -p "$DATA_DIR"
+
+    "$PYTHON_CMD" -m venv "$VENV_DIR" 2>&1 | tail -3 >&2 || {
+        echo "[arize] Failed to create venv" >&2
+        return 1
+    }
+
+    # Find pip in the new venv
+    PIP=""
+    if [ -x "$VENV_DIR/bin/pip" ]; then PIP="$VENV_DIR/bin/pip"
+    elif [ -x "$VENV_DIR/Scripts/pip" ]; then PIP="$VENV_DIR/Scripts/pip"
+    elif [ -x "$VENV_DIR/Scripts/pip.exe" ]; then PIP="$VENV_DIR/Scripts/pip.exe"
+    fi
+    if [ -z "$PIP" ]; then
+        echo "[arize] pip not found in venv" >&2
+        return 1
+    fi
+
+    echo "[arize] Installing cursor-tracing from $PLUGIN_ROOT..." >&2
+    if ! "$PIP" install --quiet "$PLUGIN_ROOT" >&2; then
+        echo "[arize] pip install failed" >&2
+        rm -f "$MARKER"
+        return 1
+    fi
+
+    # Save hash marker
+    "$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" \
+        "$PLUGIN_ROOT/pyproject.toml" > "$MARKER"
+
+    echo "[arize] Cursor tracing venv ready" >&2
+}
+
+# --- Main ---
+# Bootstrap if needed (only does work on first run or after update)
+bootstrap || exit 0
+
+# Find and exec the entry point. Cursor's hook payload is on stdin and is
+# inherited by exec, so the dispatcher reads it directly.
+EP=$(find_entry_point) || {
+    echo "[arize] Entry point '$HOOK_NAME' not found in venv" >&2
+    exit 0
+}
+
+exec "$EP"
