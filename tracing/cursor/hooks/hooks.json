@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "sessionStart": [{ "command": "./scripts/run-hook" }],
+    "sessionEnd": [{ "command": "./scripts/run-hook" }],
+    "beforeSubmitPrompt": [{ "command": "./scripts/run-hook" }],
+    "afterAgentResponse": [{ "command": "./scripts/run-hook" }],
+    "afterAgentThought": [{ "command": "./scripts/run-hook" }],
+    "beforeShellExecution": [{ "command": "./scripts/run-hook" }],
+    "afterShellExecution": [{ "command": "./scripts/run-hook" }],
+    "beforeMCPExecution": [{ "command": "./scripts/run-hook" }],
+    "afterMCPExecution": [{ "command": "./scripts/run-hook" }],
+    "beforeReadFile": [{ "command": "./scripts/run-hook" }],
+    "afterFileEdit": [{ "command": "./scripts/run-hook" }],
+    "beforeTabFileRead": [{ "command": "./scripts/run-hook" }],
+    "afterTabFileEdit": [{ "command": "./scripts/run-hook" }],
+    "stop": [{ "command": "./scripts/run-hook" }],
+    "postToolUse": [{ "command": "./scripts/run-hook" }]
+  }
+}
