@@ -2,7 +2,7 @@
   "name": "cursor-tracing",
   "displayName": "Arize Cursor Tracing",
   "description": "Automatic tracing of Cursor sessions to Arize AX or Phoenix with OpenInference spans.",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "author": {
     "name": "Arize AI",
     "email": "support@arize.com",
