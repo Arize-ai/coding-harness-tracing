@@ -87,6 +87,10 @@ ARIZE_PROJECT_NAME=cursor
 ```
 
 Phoenix can be used instead with `PHOENIX_ENDPOINT` and optional `ARIZE_API_KEY`.
+`ARIZE_INSTALL_BRANCH` is optional; use it only when Cloud Agents must install from a branch other than `main`
+(for example, while validating unmerged bootstrap changes). `ARIZE_INSTALL_URL` can also pin the raw installer URL.
+The generated bootstrap checks for Python venv support and installs `python3-venv` on apt-based Cloud images when
+needed before running the harness installer.
 
 After running the installer, commit the generated `.cursor/hooks.json`, `.cursor/hooks/arize-hook-cursor.sh`,
 `.cursor/hooks/arize-cursor-cloud-setup.sh`, `.cursor/hooks/arize-cloud-env.example`, and `.cursor/environment.json`

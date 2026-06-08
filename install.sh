@@ -177,6 +177,10 @@ PYEOF
 
 setup_venv() {
     local python_cmd="$1"
+    if venv_python &>/dev/null && ! venv_pip &>/dev/null; then
+        warn "Existing venv is missing pip — recreating ${VENV_DIR}"
+        rm -rf "$VENV_DIR"
+    fi
     if ! venv_python &>/dev/null; then
         info "Creating venv..."
         "$python_cmd" -m venv "$VENV_DIR" 2>/dev/null || {

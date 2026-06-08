@@ -6,6 +6,11 @@ ARIZE_API_KEY=
 ARIZE_SPACE_ID=
 ARIZE_PROJECT_NAME=cursor
 
+# Optional: pin Cloud Agents to a branch or raw installer URL while testing
+# unmerged bootstrap changes. Omit these when main has the desired installer.
+# ARIZE_INSTALL_BRANCH=main
+# ARIZE_INSTALL_URL=
+
 # Phoenix alternative:
 # PHOENIX_ENDPOINT=http://localhost:6006
 # ARIZE_API_KEY=

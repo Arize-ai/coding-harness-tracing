@@ -301,6 +301,10 @@ class TestDispatchLogic:
     def test_update_calls_pip_install(self):
         assert "pip" in self.text and "install" in self.text
 
+    def test_setup_venv_recreates_incomplete_venv(self):
+        assert "Existing venv is missing pip" in self.text
+        assert 'rm -rf "$VENV_DIR"' in self.text
+
     def test_update_lists_installed_harnesses(self):
         assert "list_installed_harnesses" in self.text
 

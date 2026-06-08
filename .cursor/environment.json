@@ -1,3 +1,3 @@
 {
-  "install": "ARIZE_API_KEY=\"${ARIZE_API_KEY:-}\" ARIZE_SPACE_ID=\"${ARIZE_SPACE_ID:-}\" PHOENIX_ENDPOINT=\"${PHOENIX_ENDPOINT:-}\" ARIZE_PROJECT_NAME=\"${ARIZE_PROJECT_NAME:-cursor}\" bash .cursor/hooks/arize-cursor-cloud-setup.sh"
+  "install": "ARIZE_API_KEY=\"${ARIZE_API_KEY:-}\" ARIZE_SPACE_ID=\"${ARIZE_SPACE_ID:-}\" PHOENIX_ENDPOINT=\"${PHOENIX_ENDPOINT:-}\" ARIZE_PROJECT_NAME=\"${ARIZE_PROJECT_NAME:-cursor}\" ARIZE_INSTALL_BRANCH=\"${ARIZE_INSTALL_BRANCH:-main}\" ARIZE_INSTALL_URL=\"${ARIZE_INSTALL_URL:-}\" bash .cursor/hooks/arize-cursor-cloud-setup.sh"
 }

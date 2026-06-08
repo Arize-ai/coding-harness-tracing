@@ -160,7 +160,7 @@ Cloud Agents run in a separate remote VM. Local `~/.cursor/hooks.json`, `~/.ariz
 ./install.sh cursor --cloud-agent
 ```
 
-This writes repo-local `.cursor/hooks.json`, `.cursor/hooks/arize-hook-cursor.sh`, `.cursor/hooks/arize-cursor-cloud-setup.sh`, `.cursor/hooks/arize-cloud-env.example`, and `.cursor/environment.json`. The generated environment install command surfaces `ARIZE_API_KEY`, `ARIZE_SPACE_ID`, `PHOENIX_ENDPOINT`, and `ARIZE_PROJECT_NAME` without committing secret values.
+This writes repo-local `.cursor/hooks.json`, `.cursor/hooks/arize-hook-cursor.sh`, `.cursor/hooks/arize-cursor-cloud-setup.sh`, `.cursor/hooks/arize-cloud-env.example`, and `.cursor/environment.json`. The generated environment install command surfaces `ARIZE_API_KEY`, `ARIZE_SPACE_ID`, `PHOENIX_ENDPOINT`, `ARIZE_PROJECT_NAME`, `ARIZE_INSTALL_BRANCH`, and `ARIZE_INSTALL_URL` without committing secret values.
 
 Do not copy local credentials from `~/.arize/harness/config.yaml` into `.cursor/environment.json`; that file is normally committed. Tell users to commit the generated `.cursor/` bootstrap files and configure real values as Cursor Cloud environment secrets.
 
@@ -173,6 +173,7 @@ ARIZE_PROJECT_NAME=cursor
 ```
 
 For Phoenix, configure `PHOENIX_ENDPOINT` instead.
+`ARIZE_INSTALL_BRANCH` is optional; set it only to pin Cloud Agents to an unmerged branch or non-main installer. The generated bootstrap installs missing `python3-venv` support on apt-based Cloud images before running the harness installer.
 
 ### Validate
 
