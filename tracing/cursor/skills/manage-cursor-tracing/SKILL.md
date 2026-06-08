@@ -247,7 +247,9 @@ Every span includes `cursor.conversation.id` as a span attribute. Since `session
 
 ### Hooks JSON Example (IDE + CLI)
 
-When configuring `.cursor/hooks.json`, include both IDE and CLI events:
+> **Plugin users: do NOT hand-write `.cursor/hooks.json` from this example.** The example below is a reference for the **manual `install.sh` path only**. Under a Cursor `/add-plugin` install, the plugin's bundled `hooks/hooks.json` already registers every event automatically; adding these entries on top of the plugin would route each event to the handler twice and produce duplicate spans for every hook. See [Activate Cursor hooks > Plugin install](#plugin-install-cursor-add-plugin).
+
+When configuring `.cursor/hooks.json` on a manual `install.sh` install, include both IDE and CLI events:
 
 ```json
 {
