@@ -379,7 +379,9 @@ class TestCloudAgentInstall:
         monkeypatch.chdir(repo)
         monkeypatch.setattr(cursor_install, "ensure_harness_installed", lambda *args, **kwargs: False)
         monkeypatch.setattr(cursor_install, "prompt_backend", lambda *args, **kwargs: pytest.fail("prompted backend"))
-        monkeypatch.setattr(cursor_install, "prompt_project_name", lambda *args, **kwargs: pytest.fail("prompted project"))
+        monkeypatch.setattr(
+            cursor_install, "prompt_project_name", lambda *args, **kwargs: pytest.fail("prompted project")
+        )
         monkeypatch.setattr(cursor_install, "prompt_user_id", lambda: pytest.fail("prompted user"))
         monkeypatch.setattr(cursor_install, "prompt_content_logging", lambda: pytest.fail("prompted logging"))
         monkeypatch.setattr("sys.stdout", _fake_stdout())
@@ -425,7 +427,9 @@ class TestCloudAgentInstall:
         monkeypatch.chdir(repo)
         env_file = repo / ".cursor" / "environment.json"
         env_file.parent.mkdir()
-        env_file.write_text(json.dumps({"install": "bash .cursor/hooks/arize-cursor-cloud-setup.sh && npm install"}) + "\n")
+        env_file.write_text(
+            json.dumps({"install": "bash .cursor/hooks/arize-cursor-cloud-setup.sh && npm install"}) + "\n"
+        )
         monkeypatch.setattr("sys.stdout", _fake_stdout())
 
         cursor_install._ensure_cloud_environment_bootstrap()
