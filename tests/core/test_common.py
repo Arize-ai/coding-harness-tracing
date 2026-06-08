@@ -763,7 +763,7 @@ class TestPhoenixPayloadTranslation:
                     "name": "tool-call",
                     "context": {"trace_id": "t" * 32, "span_id": "s" * 16},
                     "span_kind": "TOOL",
-                    "start_time": "1970-01-01T00:00:01Z",
+                    "start_time": "1970-01-01T00:00:01.000000Z",
                     "end_time": "1970-01-01T00:00:01.500000Z",
                     "status_code": "ERROR",
                     "status_message": "failed",
@@ -783,6 +783,29 @@ class TestPhoenixPayloadTranslation:
                 }
             ]
         }
+
+    def test_rejects_missing_phoenix_span_timestamp(self):
+        payload = {
+            "resourceSpans": [
+                {
+                    "scopeSpans": [
+                        {
+                            "spans": [
+                                {
+                                    "traceId": "t" * 32,
+                                    "spanId": "s" * 16,
+                                    "name": "missing-time",
+                                    "endTimeUnixNano": "2000000000",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="Invalid Unix nanosecond timestamp"):
+            _otlp_to_phoenix_payload(payload)
 
 
 # ── EnvConfig property tests ──────────────────────────────────────────────
@@ -980,8 +1003,8 @@ class TestSendSpan:
                         "span_id": "abcdef1234567890",
                     },
                     "span_kind": "LLM",
-                    "start_time": "1970-01-01T00:00:01Z",
-                    "end_time": "1970-01-01T00:00:02Z",
+                    "start_time": "1970-01-01T00:00:01.000000Z",
+                    "end_time": "1970-01-01T00:00:02.000000Z",
                     "status_code": "OK",
                     "status_message": "",
                     "attributes": {

@@ -466,10 +466,10 @@ def _unix_nano_to_iso(value) -> str:
     try:
         ns = int(value)
     except (TypeError, ValueError):
-        ns = 0
+        raise ValueError(f"Invalid Unix nanosecond timestamp: {value!r}")
     seconds, nanos = divmod(ns, 1_000_000_000)
     dt = datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=nanos // 1000)
-    return dt.isoformat().replace("+00:00", "Z")
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _phoenix_status_code(status: dict) -> str:
