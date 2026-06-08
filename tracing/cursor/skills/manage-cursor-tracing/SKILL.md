@@ -154,7 +154,7 @@ If the user already has a `.cursor/hooks.json` with other hooks, merge the Arize
 
 ### Cursor Cloud / Background Agents
 
-Cloud Agents run in a separate remote VM. Local `~/.cursor/hooks.json`, `~/.arize/harness/venv`, and `~/.arize/harness/config.yaml` do not exist there. Use the Cloud install mode from the repo:
+Cloud Agents run in a separate remote VM. Local `~/.cursor/hooks.json`, `~/.arize/harness/venv`, and `~/.arize/harness/config.yaml` do not exist there. Each repo that should trace Cloud Agent work needs repo-local Cursor files committed with the project. Use the Cloud install mode from the repo:
 
 ```bash
 ./install.sh cursor --cloud-agent
@@ -162,7 +162,9 @@ Cloud Agents run in a separate remote VM. Local `~/.cursor/hooks.json`, `~/.ariz
 
 This writes repo-local `.cursor/hooks.json`, `.cursor/hooks/arize-hook-cursor.sh`, `.cursor/hooks/arize-cursor-cloud-setup.sh`, `.cursor/hooks/arize-cloud-env.example`, and `.cursor/environment.json`. The generated environment install command surfaces `ARIZE_API_KEY`, `ARIZE_SPACE_ID`, `PHOENIX_ENDPOINT`, and `ARIZE_PROJECT_NAME` without committing secret values.
 
-Tell users to configure real values as Cursor Cloud environment secrets:
+Do not copy local credentials from `~/.arize/harness/config.yaml` into `.cursor/environment.json`; that file is normally committed. Tell users to commit the generated `.cursor/` bootstrap files and configure real values as Cursor Cloud environment secrets.
+
+Required Cursor Cloud secrets:
 
 ```bash
 ARIZE_API_KEY=...

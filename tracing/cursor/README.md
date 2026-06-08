@@ -61,7 +61,8 @@ install.bat uninstall cursor
 ### Cursor Cloud Agents
 
 Cloud/Background Agents run in a separate remote VM, so they cannot use your local `~/.cursor/hooks.json`,
-`~/.arize/harness/venv`, or `~/.arize/harness/config.yaml`. Use project hooks plus a Cloud bootstrap:
+`~/.arize/harness/venv`, or `~/.arize/harness/config.yaml`. Each repo that should trace Cloud Agent work needs
+repo-local Cursor files committed with the project. Use project hooks plus a Cloud bootstrap:
 
 ```bash
 ./install.sh cursor --cloud-agent
@@ -75,7 +76,9 @@ This writes:
 - `.cursor/hooks/arize-cloud-env.example`, a non-secret list of env vars to configure
 - `.cursor/environment.json`, with an `install` command that surfaces the Arize env var names and runs the bootstrap
 
-Do not commit Arize credentials. Configure them as Cursor Cloud environment secrets instead:
+The installer intentionally does not copy credentials from your local `~/.arize/harness/config.yaml` into
+`.cursor/environment.json`, because that file is normally committed and would expose secrets. Configure the real
+values as Cursor Cloud environment secrets instead:
 
 ```bash
 ARIZE_API_KEY=...
@@ -84,6 +87,11 @@ ARIZE_PROJECT_NAME=cursor
 ```
 
 Phoenix can be used instead with `PHOENIX_ENDPOINT` and optional `ARIZE_API_KEY`.
+
+After running the installer, commit the generated `.cursor/hooks.json`, `.cursor/hooks/arize-hook-cursor.sh`,
+`.cursor/hooks/arize-cursor-cloud-setup.sh`, `.cursor/hooks/arize-cloud-env.example`, and `.cursor/environment.json`
+files. Cloud Agents will install the harness in their VM from `.cursor/environment.json`, then emit spans through the
+repo-local hooks using the configured Cursor Cloud secrets.
 
 For local repo-scoped hooks without Cloud bootstrap:
 

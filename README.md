@@ -10,6 +10,7 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | `Claude Plugin (see below)`| `claude-code-tracing` |
 | [OpenAI Codex CLI](tracing/codex/README.md) | `install.sh` / `install.bat` | `codex` |
 | [Cursor IDE / CLI](tracing/cursor/README.md) | `install.sh` / `install.bat` | `cursor` |
+| [Cursor Cloud / Background Agents](tracing/cursor/README.md#cursor-cloud-agents) | `install.sh` / `install.bat` + `--cloud-agent` | `cursor` |
 | [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `install.sh` / `install.bat` | `copilot` |
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
@@ -34,9 +35,6 @@ HARNESS="claude"
 
 # setup tracing for a harness
 curl -sSL "$INSTALL_URL" | bash -s -- "$HARNESS"
-
-# setup repo-local Cursor hooks for Cloud/Background Agents
-curl -sSL "$INSTALL_URL" | bash -s -- cursor --cloud-agent
 
 # remove tracing for a harness
 curl -sSL "$INSTALL_URL" | bash -s -- uninstall "$HARNESS"
@@ -81,9 +79,6 @@ HARNESS="claude"
 
 # setup tracing for a harness
 ./install.sh "$HARNESS"
-
-# setup repo-local Cursor hooks for Cloud/Background Agents
-./install.sh cursor --cloud-agent
 
 # remove tracing for a harness
 ./install.sh uninstall "$HARNESS"
