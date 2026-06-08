@@ -88,7 +88,7 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution. This step is identical for plugin installs and manual `install.sh` installs.
+**Important:** Users must configure backend credentials before tracing will work. `send_span()` resolves credentials from **either** `~/.arize/harness/config.yaml` **or** backend env vars (`ARIZE_API_KEY` + `ARIZE_SPACE_ID`, or `PHOENIX_ENDPOINT`) — see the env var override note below. The `config.yaml` route is recommended (and is the focus of this step), but it is not strictly required when env vars are reliably present. This step is identical for plugin installs and manual `install.sh` installs.
 
 > **Env var override:** Backend credentials can also be supplied via env vars (`ARIZE_API_KEY` + `ARIZE_SPACE_ID` for Arize AX, or `PHOENIX_ENDPOINT` for Phoenix), and they take precedence over `config.yaml`. However, `config.yaml` is the recommended primary path: Cursor does not reliably inject shell env vars into hook processes -- notably a GUI-launched Cursor on macOS will not see vars from your shell profile -- so env-var-only setups silently fail to resolve credentials.
 
