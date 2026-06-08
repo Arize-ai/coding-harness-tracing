@@ -249,6 +249,7 @@ class TestDispatchLogic:
 
     def test_install_harness_receives_passthrough_flags(self):
         assert 'install_harness "$cmd" "$with_skills" "${passthrough[@]}"' in self.text
+        assert 'install_harness "$cmd" "$with_skills"\n' in self.text
 
     def test_install_harness_defined(self):
         """install_harness must be defined if it's called."""

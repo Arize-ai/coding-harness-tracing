@@ -221,9 +221,17 @@ install_harness() {
     local install_py="${INSTALL_DIR}/${dir}/install.py"
     [[ -f "$install_py" ]] || { err "Harness install script not found: ${install_py}"; exit 1; }
     if [[ "$skills" == true ]]; then
-        run_with_tty "$vp" "$install_py" install --with-skills "${passthrough[@]}"
+        if [[ ${#passthrough[@]} -gt 0 ]]; then
+            run_with_tty "$vp" "$install_py" install --with-skills "${passthrough[@]}"
+        else
+            run_with_tty "$vp" "$install_py" install --with-skills
+        fi
     else
-        run_with_tty "$vp" "$install_py" install "${passthrough[@]}"
+        if [[ ${#passthrough[@]} -gt 0 ]]; then
+            run_with_tty "$vp" "$install_py" install "${passthrough[@]}"
+        else
+            run_with_tty "$vp" "$install_py" install
+        fi
     fi
     info "Setup complete!"
 }
@@ -281,7 +289,11 @@ main() {
                 err "--project-hooks and --cloud-agent are only supported for cursor"
                 exit 1
             fi
-            install_harness "$cmd" "$with_skills" "${passthrough[@]}"
+            if [[ ${#passthrough[@]} -gt 0 ]]; then
+                install_harness "$cmd" "$with_skills" "${passthrough[@]}"
+            else
+                install_harness "$cmd" "$with_skills"
+            fi
             ;;
         uninstall)
             if [[ -n "$subcmd" ]]; then
