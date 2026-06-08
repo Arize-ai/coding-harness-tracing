@@ -15,8 +15,6 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
 
-Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and configuration — one install covers both.
-
 ## Install
 
 > Installing Claude Code tracing via the Claude marketplace? See [Claude Code Tracing](tracing/claude_code/README.md#claude-code-marketplace) for the marketplace-specific flow — backend credentials must be set directly in `~/.claude/settings.json` since the install wizard is skipped.
@@ -161,13 +159,6 @@ All configuration lives in `~/.arize/harness/config.yaml`, written by the instal
 | `harnesses.<name>.endpoint` | Yes | — | Phoenix server URL or Arize OTLP gRPC endpoint |
 | `harnesses.<name>.api_key` | Arize: Yes | — | Arize AX API key (or optional Phoenix API key) |
 | `harnesses.<name>.space_id` | Arize: Yes | — | Arize AX space ID |
-
-**Codex-only** (under `harnesses.codex.collector`)
-
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `harnesses.codex.collector.host` | No | `127.0.0.1` | Codex buffer service listen address |
-| `harnesses.codex.collector.port` | No | `4318` | Codex buffer service listen port |
 
 **Content logging** (under top-level `logging`, applies to all harnesses)
 
