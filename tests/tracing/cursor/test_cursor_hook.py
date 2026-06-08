@@ -49,6 +49,22 @@ def captured_spans():
         yield sent
 
 
+def _span(payload: dict) -> dict:
+    return payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+
+
+def _attrs(span: dict) -> dict:
+    return {a["key"]: a["value"] for a in span["attributes"]}
+
+
+def _span_named(sent: list, name: str) -> dict:
+    for payload in sent:
+        span = _span(payload)
+        if span["name"] == name:
+            return span
+    raise AssertionError(f"span {name!r} not found")
+
+
 # ---------------------------------------------------------------------------
 # _print_permissive tests
 # ---------------------------------------------------------------------------
@@ -257,7 +273,6 @@ class TestHandleBeforeSubmitPrompt:
         with (
             mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000),
             mock.patch("tracing.cursor.hooks.handlers.span_id_16", return_value="aabb" * 4),
-            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_save") as save_mock,
         ):
             _dispatch(
                 "beforeSubmitPrompt",
@@ -270,9 +285,9 @@ class TestHandleBeforeSubmitPrompt:
                 },
             )
 
-        save_mock.assert_called_once_with("gen-1", "aabb" * 4)
+        assert adapter.gen_root_span_get("gen-1") == "aabb" * 4
         assert len(captured_spans) == 1
-        root0 = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        root0 = _span(captured_spans[0])
         assert root0["name"] == "User Prompt"
         root_attrs0 = {a["key"]: a["value"] for a in root0["attributes"]}
         assert root_attrs0["input.value"]["stringValue"] == "fix the bug"
@@ -516,10 +531,12 @@ class TestHandleAfterAgentResponse:
                 },
             )
 
-        assert len(captured_spans) == 1
-        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert len(captured_spans) == 2
+        assert _span(captured_spans[0])["name"] == "Cursor Session"
+        span = _span_named(captured_spans, "Agent Response")
         assert span["name"] == "Agent Response"
-        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert span["parentSpanId"] == _span(captured_spans[0])["spanId"]
+        attrs = _attrs(span)
         assert attrs["openinference.span.kind"]["stringValue"] == "LLM"
         assert attrs["output.value"]["stringValue"] == "I found the issue"
 
@@ -579,10 +596,7 @@ class TestHandleAfterShellExecution:
                 },
             )
 
-        attrs = {
-            a["key"]: a["value"]
-            for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
-        }
+        attrs = _attrs(_span_named(captured_spans, "Shell"))
         assert attrs["input.value"]["stringValue"] == "new_cmd"
 
     def test_no_popped_state_uses_now(self, captured_spans, monkeypatch):
@@ -602,7 +616,7 @@ class TestHandleAfterShellExecution:
                 },
             )
 
-        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        span = _span_named(captured_spans, "Shell")
         # start_ms = "3000" -> ns = "3000000000"
         assert span["startTimeUnixNano"] == "3000000000"
 
@@ -617,10 +631,7 @@ class TestHandleAfterShellExecution:
         ):
             _dispatch(fixture["hook_event_name"], fixture)
 
-        attrs = {
-            a["key"]: a["value"]
-            for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
-        }
+        attrs = _attrs(_span_named(captured_spans, "Shell"))
         assert attrs["input.value"]["stringValue"] == "ls -la"
         assert attrs["output.value"]["stringValue"] == "total 0"
         assert attrs["shell.exit_code"]["stringValue"] == "0"
@@ -671,7 +682,7 @@ class TestHandleStop:
             _dispatch("stop", {"conversation_id": "c1"})
 
         cleanup.assert_not_called()
-        assert len(captured_spans) == 1
+        assert [_span(s)["name"] for s in captured_spans] == ["Cursor Session", "Agent Stop"]
 
     def test_optional_attrs_omitted(self, captured_spans, monkeypatch):
         """Status and loop_count omitted when empty."""
@@ -683,7 +694,7 @@ class TestHandleStop:
         ):
             _dispatch("stop", {"conversation_id": "c1", "generation_id": "g1"})
 
-        attr_keys = {a["key"] for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]}
+        attr_keys = {a["key"] for a in _span_named(captured_spans, "Agent Stop")["attributes"]}
         assert "cursor.stop.status" not in attr_keys
         assert "cursor.stop.loop_count" not in attr_keys
 
@@ -885,11 +896,12 @@ class TestHandleAfterMcpExecution:
                 },
             )
 
-        assert len(captured_spans) == 1
-        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert len(captured_spans) == 2
+        span = _span_named(captured_spans, "MCP: list_repos")
+        attrs = _attrs(span)
         assert attrs["tool.name"]["stringValue"] == "list_repos"
         assert span["name"] == "MCP: list_repos"
+        assert span["parentSpanId"] == _span(captured_spans[0])["spanId"]
 
 
 # ---------------------------------------------------------------------------
@@ -977,11 +989,41 @@ class TestHandleAfterFileEdit:
                 },
             )
 
-        attrs = {
-            a["key"]: a["value"]
-            for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
-        }
+        attrs = _attrs(_span_named(captured_spans, "File Edit"))
         assert attrs["input.value"]["stringValue"] == "/foo/bar.py"
+
+    def test_orphan_tool_events_share_session_fallback_root(self, captured_spans, monkeypatch):
+        """Cloud tool events without a prompt root are grouped under one session root."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2000),
+            mock.patch("tracing.cursor.hooks.handlers.span_id_16", side_effect=["1111" * 4, "2222" * 4]),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch(
+                "afterFileEdit",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "file_path": "/foo/bar.py",
+                },
+            )
+            _dispatch(
+                "afterFileEdit",
+                {
+                    "conversationId": "conv-1",
+                    "generationId": "gen-2",
+                    "filePath": "/foo/baz.py",
+                },
+            )
+
+        names = [_span(s)["name"] for s in captured_spans]
+        assert names == ["Cursor Session", "File Edit", "File Edit"]
+        root = _span(captured_spans[0])
+        for payload in captured_spans[1:]:
+            child = _span(payload)
+            assert child["traceId"] == root["traceId"]
+            assert child["parentSpanId"] == root["spanId"]
 
 
 # ---------------------------------------------------------------------------
@@ -1069,10 +1111,7 @@ class TestHandleAfterTabFileEdit:
                 },
             )
 
-        attrs = {
-            a["key"]: a["value"]
-            for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
-        }
+        attrs = _attrs(_span_named(captured_spans, "Tab File Edit"))
         assert attrs["input.value"]["stringValue"] == "/src/main.ts"
 
 
@@ -1408,7 +1447,7 @@ class TestHandleSessionStart:
                 },
             )
 
-        attr_keys = {a["key"] for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]}
+        attr_keys = {a["key"] for a in _span_named(captured_spans, "Session Start")["attributes"]}
         assert "cursor.session.cwd" not in attr_keys
 
 
@@ -1467,10 +1506,7 @@ class TestHandlePostToolUse:
                 },
             )
 
-        attrs = {
-            a["key"]: a["value"]
-            for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
-        }
+        attrs = _attrs(_span_named(captured_spans, "Tool: custom_runner"))
         # custom_runner is not in _SHELL_TOOL_NAMES so command field is NOT used as input
         # tool_input comes from the standard extraction keys
         assert attrs["output.value"]["stringValue"] == "total 40\ndrwxr-xr-x ..."
@@ -1490,7 +1526,7 @@ class TestHandlePostToolUse:
                 },
             )
 
-        attr_keys = {a["key"] for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]}
+        attr_keys = {a["key"] for a in _span_named(captured_spans, "Tool Use")["attributes"]}
         assert "tool.name" not in attr_keys
         assert "input.value" not in attr_keys
         assert "output.value" not in attr_keys
@@ -1553,10 +1589,11 @@ class TestHandlePostToolUse:
                 },
             )
 
-        assert len(captured_spans) == 1
-        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert len(captured_spans) == 2
+        span = _span_named(captured_spans, "Tool: glob")
+        attrs = _attrs(span)
         assert span["name"] == "Tool: glob"
+        assert span["parentSpanId"] == _span(captured_spans[0])["spanId"]
         assert attrs["tool.name"]["stringValue"] == "glob"
         assert attrs["input.value"]["stringValue"] == '{"pattern": "*.py"}'
 
@@ -1644,10 +1681,7 @@ class TestHandleStopTokenCounts:
                 },
             )
 
-        attrs = {
-            a["key"]: a["value"]
-            for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
-        }
+        attrs = _attrs(_span_named(captured_spans, "Agent Stop"))
         assert attrs["llm.token_count.prompt"]["intValue"] == 100
         assert "llm.token_count.completion" not in attrs
         assert "llm.token_count.cache_read" not in attrs
@@ -1724,8 +1758,8 @@ class TestHandleSessionEnd:
                 },
             )
 
-        assert len(captured_spans) == 1
-        attr_keys = {a["key"] for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]}
+        assert len(captured_spans) == 2
+        attr_keys = {a["key"] for a in _span_named(captured_spans, "Session End")["attributes"]}
         assert "session.id" in attr_keys
         assert "cursor.conversation.id" in attr_keys
         assert "cursor.session.duration_ms" not in attr_keys
@@ -2018,7 +2052,7 @@ class TestDeferredLlmSpan:
                 },
             )
 
-        assert len(captured_spans) == 0
+        assert [_span(s)["name"] for s in captured_spans] == ["Cursor Session"]
 
         with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=4000):
             _dispatch(
@@ -2057,10 +2091,10 @@ class TestDeferredLlmSpan:
                 },
             )
 
-        # Only the Agent Stop span is sent (no deferred LLM existed).
+        # Fallback root plus Agent Stop are sent (no deferred LLM existed).
         names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
-        assert names == ["Agent Stop"]
-        stop_attrs = _attrs(captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert names == ["Cursor Session", "Agent Stop"]
+        stop_attrs = _attrs(_span_named(captured_spans, "Agent Stop"))
         assert stop_attrs["openinference.span.kind"]["stringValue"] == "CHAIN"
         assert stop_attrs["llm.token_count.prompt"]["intValue"] == 100
         assert stop_attrs["llm.token_count.completion"]["intValue"] == 50
@@ -2181,8 +2215,8 @@ class TestDeferredLlmSpan:
             )
 
         names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
-        assert names == ["Session End"]
-        attrs = _attrs(captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert names == ["Cursor Session", "Session End"]
+        attrs = _attrs(_span_named(captured_spans, "Session End"))
         assert attrs["llm.token_count.prompt"]["intValue"] == 200
         assert attrs["llm.token_count.completion"]["intValue"] == 75
         assert attrs["llm.token_count.total"]["intValue"] == 275

@@ -8,6 +8,7 @@ pairs.
 
 Replaces cursor-tracing/hooks/common.sh (195 lines).
 """
+
 import hashlib
 import os
 import re
@@ -39,6 +40,37 @@ def trace_id_from_generation(gen_id: str) -> str:
     so all spans in the same generation share a trace_id.
     """
     return hashlib.md5(gen_id.encode()).hexdigest()[:32]
+
+
+def span_id_from_seed(seed: str) -> str:
+    """Deterministic 16-hex span ID from a stable seed."""
+    return hashlib.sha256(seed.encode()).hexdigest()[:16]
+
+
+def fallback_root_span_id(trace_id: str) -> str:
+    """Stable root span ID used when Cursor omits a prompt/root event."""
+    return span_id_from_seed(f"cursor-fallback-root:{trace_id}")
+
+
+def fallback_root_mark_sent(trace_id: str) -> bool:
+    """Mark a fallback root as sent.
+
+    Returns True only for the first process that marks the root. Cursor invokes
+    each hook in a fresh process, so this file marker prevents duplicate root
+    spans while keeping all orphan tool spans parented to the same deterministic
+    root ID.
+    """
+    if not trace_id:
+        return False
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    key = sanitize(trace_id)
+    marker = STATE_DIR / f"fallback_root_{key}.sent"
+    lock_path = STATE_DIR / f".lock_fallback_root_{key}"
+    with FileLock(lock_path):
+        if marker.exists():
+            return False
+        marker.write_text(fallback_root_span_id(trace_id))
+        return True
 
 
 def span_id_16() -> str:

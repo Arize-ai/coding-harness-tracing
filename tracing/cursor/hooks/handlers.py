@@ -7,6 +7,7 @@ Input contract: JSON on stdin, all 15 events (IDE + CLI) routed here.
 stdout: MUST print permissive JSON response, even on error.
 stderr: redirected to ARIZE_LOG_FILE before dispatch.
 """
+
 import json
 import sys
 
@@ -15,6 +16,8 @@ from tracing.cursor.hooks.adapter import (
     SCOPE_NAME,
     SERVICE_NAME,
     check_requirements,
+    fallback_root_mark_sent,
+    fallback_root_span_id,
     gen_root_span_get,
     gen_root_span_save,
     sanitize,
@@ -85,6 +88,16 @@ def _event_name(input_json: dict) -> str:
     return _jq_str(input_json, "hook_event_name", "hookEventName", "event_name", "eventName", "event")
 
 
+def _conversation_id(input_json: dict) -> str:
+    """Extract the stable Cursor conversation/session ID across payload variants."""
+    return _jq_str(input_json, "conversation_id", "conversationId", "session_id", "sessionId")
+
+
+def _generation_id(input_json: dict) -> str:
+    """Extract the Cursor generation/turn ID across payload variants."""
+    return _jq_str(input_json, "generation_id", "generationId", "turn_id", "turnId")
+
+
 def _is_cursor_ide_hook_payload(input_json: dict) -> bool:
     """Return True when the stdin JSON looks like Cursor IDE (vs CLI) hook payloads.
 
@@ -116,6 +129,57 @@ def _trace_id_from_event(gen_id: str, conversation_id: str) -> str:
     return ""
 
 
+def _fallback_trace_id(gen_id: str, conversation_id: str, default_trace_id: str) -> str:
+    """Use the session ID as the trace key when no prompt/root span exists."""
+    if conversation_id:
+        return trace_id_from_generation(conversation_id)
+    if gen_id:
+        return trace_id_from_generation(gen_id)
+    return default_trace_id
+
+
+def _ensure_fallback_root(trace_id: str, conversation_id: str, now_ms: int) -> str:
+    """Emit one deterministic CHAIN root for orphan Cursor events."""
+    if not trace_id:
+        return ""
+
+    root_span_id = fallback_root_span_id(trace_id)
+    if fallback_root_mark_sent(trace_id):
+        attrs = {
+            "openinference.span.kind": "CHAIN",
+        }
+        if conversation_id:
+            attrs["session.id"] = conversation_id
+            attrs["cursor.conversation.id"] = conversation_id
+
+        span = build_span(
+            "Cursor Session",
+            "CHAIN",
+            root_span_id,
+            trace_id,
+            "",
+            now_ms,
+            now_ms,
+            attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
+        send_span(span)
+        log(f"fallback root: span {root_span_id} (trace={trace_id})")
+
+    return root_span_id
+
+
+def _root_parent_context(gen_id: str, conversation_id: str, trace_id: str, now_ms: int) -> "tuple[str, str]":
+    """Return trace ID and parent span ID, creating a fallback root when needed."""
+    parent = gen_root_span_get(gen_id)
+    if parent:
+        return trace_id, parent
+
+    fallback_trace = _fallback_trace_id(gen_id, conversation_id, trace_id)
+    return fallback_trace, _ensure_fallback_root(fallback_trace, conversation_id, now_ms)
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -123,8 +187,8 @@ def _trace_id_from_event(gen_id: str, conversation_id: str) -> str:
 
 def _dispatch(event: str, input_json: dict) -> None:
     """Route event to the appropriate handler."""
-    conversation_id = input_json.get("conversation_id", "")
-    gen_id = input_json.get("generation_id", "")
+    conversation_id = _conversation_id(input_json)
+    gen_id = _generation_id(input_json)
 
     # Early exit: tracing disabled
     if not env.trace_enabled:
@@ -228,7 +292,7 @@ def _handle_before_submit_prompt(input_json, conversation_id, gen_id, trace_id, 
 def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, now_ms):
     """Defers LLM span until stop (so per-turn tokens land on it). IDE also sends deferred User Prompt CHAIN."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     # "text" is the documented field; fall back to "response"/"output" for compat
     response = _jq_str(input_json, "text", "response", "output")
@@ -329,7 +393,7 @@ def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, 
 def _handle_after_agent_thought(input_json, conversation_id, gen_id, trace_id, now_ms):
     """CHAIN span for thinking. Replaces bash lines 138-158."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     thought = _jq_str(input_json, "thought", "thinking", "text")
 
@@ -385,7 +449,7 @@ def _handle_before_shell_execution(input_json, conversation_id, gen_id, trace_id
 def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
     """Merge with before state, create TOOL span. Replaces bash lines 184-232."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
     popped = state_pop(f"shell_{sanitize(gen_id)}") if gen_id else None
 
     if popped:
@@ -467,7 +531,7 @@ def _handle_before_mcp_execution(input_json, conversation_id, gen_id, trace_id, 
 def _handle_after_mcp_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
     """Merge with before state, create TOOL span. Replaces bash lines 262-312."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
     popped = state_pop(f"mcp_{sanitize(gen_id)}") if gen_id else None
 
     if popped:
@@ -521,7 +585,7 @@ def _handle_after_mcp_execution(input_json, conversation_id, gen_id, trace_id, n
 def _handle_before_read_file(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for file read. Replaces bash lines 317-339."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
 
@@ -557,7 +621,7 @@ def _handle_before_read_file(input_json, conversation_id, gen_id, trace_id, now_
 def _handle_after_file_edit(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for file edit. Replaces bash lines 344-371."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
     edits = redact_content(env.log_tool_content, _jq_str(input_json, "edits", "changes", "diff"))
@@ -595,7 +659,7 @@ def _handle_after_file_edit(input_json, conversation_id, gen_id, trace_id, now_m
 def _handle_before_tab_file_read(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for tab file read. Replaces bash lines 376-398."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
 
@@ -631,7 +695,7 @@ def _handle_before_tab_file_read(input_json, conversation_id, gen_id, trace_id, 
 def _handle_after_tab_file_edit(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for tab file edit. Replaces bash lines 403-430."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
     edits = redact_content(env.log_tool_content, _jq_str(input_json, "edits", "changes", "diff"))
@@ -669,7 +733,7 @@ def _handle_after_tab_file_edit(input_json, conversation_id, gen_id, trace_id, n
 def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
     """Flush deferred LLM span(s) with per-turn tokens, then send Agent Stop CHAIN + cleanup."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     status = _jq_str(input_json, "status", "reason")
     loop_count = _jq_str(input_json, "loop_count", "loopCount", "iterations")
@@ -836,7 +900,7 @@ def _handle_session_end(input_json, conversation_id, gen_id, trace_id, now_ms):
     the gen_id keyed root span if one was saved by sessionStart.
     """
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     _dur = input_json.get("duration_ms")
     duration_ms = _to_int(_dur if _dur is not None else input_json.get("durationMs"))
@@ -926,7 +990,7 @@ def _handle_post_tool_use(input_json, conversation_id, gen_id, trace_id, now_ms)
         return
 
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id) if gen_id else ""
+    trace_id, parent = _root_parent_context(gen_id, conversation_id, trace_id, now_ms)
 
     tool_input = _jq_str(input_json, "tool_input", "toolInput", "input", "arguments", "args")
     output = _jq_str(input_json, "result", "output", "response", "stdout")
