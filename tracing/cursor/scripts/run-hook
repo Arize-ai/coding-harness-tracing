@@ -5,9 +5,13 @@
 # hook payload (including the event name) on stdin, which the entry point
 # reads to route internally.
 #
-# Cursor exposes no plugin-root or per-plugin data env vars, so:
-#   - PLUGIN_ROOT is resolved from the script's own location (CWD-independent)
-#   - the venv lives in a fixed, plugin-dedicated path under ~/.arize/harness
+# hooks.json invokes this script as "${CURSOR_PLUGIN_ROOT}/scripts/run-hook":
+# Cursor runs plugin hook commands from the opened project folder (not the
+# plugin dir), so a relative command would not resolve. Even so:
+#   - PLUGIN_ROOT is re-resolved here from the script's own location ($0), so
+#     dispatch is correct regardless of how the script was invoked
+#   - Cursor exposes no per-plugin *data* dir env var, so the venv lives in a
+#     fixed, plugin-dedicated path under ~/.arize/harness
 #
 # All diagnostic output goes to stderr; stdout is reserved for Cursor's
 # control JSON. Any failure exits 0 so tracing never blocks Cursor.
