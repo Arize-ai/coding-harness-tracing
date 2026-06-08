@@ -121,8 +121,15 @@ class TestHooksJson:
                 yield event, entry["command"]
 
     def test_every_command_uses_run_hook(self, data):
+        # Commands must be anchored to the plugin install dir via
+        # ${CURSOR_PLUGIN_ROOT}: Cursor runs plugin hook commands from the
+        # opened *project* folder, not the plugin dir, so a relative
+        # "./scripts/run-hook" resolves to <project>/scripts/run-hook and
+        # silently no-ops. The script still self-resolves PLUGIN_ROOT from $0
+        # as a fallback once it is found.
+        expected = "${CURSOR_PLUGIN_ROOT}/scripts/run-hook"
         for event, cmd in self._iter_commands(data):
-            assert cmd == "./scripts/run-hook", f"{event}: expected './scripts/run-hook', got {cmd!r}"
+            assert cmd == expected, f"{event}: expected {expected!r}, got {cmd!r}"
 
     def test_no_forbidden_tokens_in_commands(self, data):
         for event, cmd in self._iter_commands(data):
