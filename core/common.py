@@ -42,27 +42,27 @@ class _Env:
         return os.environ.get("ARIZE_PROJECT_NAME", "")
 
     def get_user_id(self, service_name: str = "") -> str:
-        """Resolve user id. Layered, later wins:
+        """Resolve user id, checking highest precedence first and returning on
+        the first hit:
 
-        1. top-level ``user_id`` in config.yaml (global)
-        2. ``harnesses.<service_name>.user_id`` in config.yaml (per-harness)
-        3. ``ARIZE_USER_ID`` env var (env always wins; an explicit empty value
+        1. ``ARIZE_USER_ID`` env var (env always wins; an explicit empty value
            blanks it)
+        2. ``harnesses.<service_name>.user_id`` in config.yaml (per-harness)
+        3. top-level ``user_id`` in config.yaml (global)
+        → ``""`` if none set
         """
+        raw = os.environ.get("ARIZE_USER_ID")
+        if raw is not None:
+            return raw
         cfg = self._top_level_config
-        value = ""
-        if cfg.get("user_id"):
-            value = str(cfg["user_id"])
         if service_name:
             harnesses = cfg.get("harnesses")
             if isinstance(harnesses, dict):
                 entry = harnesses.get(service_name)
                 if isinstance(entry, dict) and entry.get("user_id"):
-                    value = str(entry["user_id"])
-        raw = os.environ.get("ARIZE_USER_ID")
-        if raw is not None:
-            value = raw
-        return value
+                    return str(entry["user_id"])
+        val = cfg.get("user_id")
+        return str(val) if val else ""
 
     @property
     def user_id(self) -> str:
