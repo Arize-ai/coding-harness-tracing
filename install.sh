@@ -209,6 +209,8 @@ harness_dir() {
 
 install_harness() {
     local cmd="$1" skills="$2"
+    shift 2
+    local passthrough=("$@")
     local dir; dir=$(harness_dir "$cmd") || { err "Unknown harness: ${cmd}"; usage; exit 1; }
     header "Installing ${cmd} tracing"
     local python_cmd; python_cmd=$(find_python) || { err "No Python 3.9+ found"; exit 1; }
@@ -219,9 +221,9 @@ install_harness() {
     local install_py="${INSTALL_DIR}/${dir}/install.py"
     [[ -f "$install_py" ]] || { err "Harness install script not found: ${install_py}"; exit 1; }
     if [[ "$skills" == true ]]; then
-        run_with_tty "$vp" "$install_py" install --with-skills
+        run_with_tty "$vp" "$install_py" install --with-skills "${passthrough[@]}"
     else
-        run_with_tty "$vp" "$install_py" install
+        run_with_tty "$vp" "$install_py" install "${passthrough[@]}"
     fi
     info "Setup complete!"
 }
@@ -246,6 +248,8 @@ Commands:
 
 Flags:
   --with-skills         Symlink harness skills into .agents/skills/
+  --project-hooks       Cursor only: write repo-local .cursor/hooks.json
+  --cloud-agent         Cursor only: project hooks plus Cloud Agent bootstrap
   --branch NAME         Install from a specific git branch (default: main)
 
 EOF
@@ -255,10 +259,12 @@ EOF
 main() {
     local cmd="${1:-}"; shift || true
     local subcmd="" with_skills=false
+    local passthrough=()
     local args=("$@") i=0
     while [[ $i -lt ${#args[@]} ]]; do
         case "${args[$i]}" in
             --with-skills) with_skills=true ;;
+            --project-hooks|--cloud-agent) passthrough+=("${args[$i]}") ;;
             --branch)
                 i=$((i + 1))
                 INSTALL_BRANCH="${args[$i]:-main}"
@@ -271,7 +277,11 @@ main() {
 
     case "$cmd" in
         claude|codex|copilot|cursor|gemini|kiro)
-            install_harness "$cmd" "$with_skills"
+            if [[ "$cmd" != "cursor" && ${#passthrough[@]} -gt 0 ]]; then
+                err "--project-hooks and --cloud-agent are only supported for cursor"
+                exit 1
+            fi
+            install_harness "$cmd" "$with_skills" "${passthrough[@]}"
             ;;
         uninstall)
             if [[ -n "$subcmd" ]]; then

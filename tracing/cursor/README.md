@@ -58,6 +58,39 @@ install.bat cursor
 install.bat uninstall cursor
 ```
 
+### Cursor Cloud Agents
+
+Cloud/Background Agents run in a separate remote VM, so they cannot use your local `~/.cursor/hooks.json`,
+`~/.arize/harness/venv`, or `~/.arize/harness/config.yaml`. Use project hooks plus a Cloud bootstrap:
+
+```bash
+./install.sh cursor --cloud-agent
+```
+
+This writes:
+
+- `.cursor/hooks.json` with repo-local Cursor hook entries
+- `.cursor/hooks/arize-hook-cursor.sh`, a wrapper that calls the harness binary in the VM
+- `.cursor/hooks/arize-cursor-cloud-setup.sh`, a bootstrap script for the VM
+- `.cursor/hooks/arize-cloud-env.example`, a non-secret list of env vars to configure
+- `.cursor/environment.json`, with an `install` command that surfaces the Arize env var names and runs the bootstrap
+
+Do not commit Arize credentials. Configure them as Cursor Cloud environment secrets instead:
+
+```bash
+ARIZE_API_KEY=...
+ARIZE_SPACE_ID=...
+ARIZE_PROJECT_NAME=cursor
+```
+
+Phoenix can be used instead with `PHOENIX_ENDPOINT` and optional `ARIZE_API_KEY`.
+
+For local repo-scoped hooks without Cloud bootstrap:
+
+```bash
+./install.sh cursor --project-hooks
+```
+
 ## Default Settings
 
 | Setting | Default |

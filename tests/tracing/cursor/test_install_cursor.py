@@ -310,6 +310,130 @@ class TestIdempotent:
             assert len(entries) == 1, f"Event {event} has {len(entries)} entries"
 
 
+class TestProjectHooks:
+    """Repo-local Cursor hooks for Cloud/Background Agent checkouts."""
+
+    def test_project_hooks_write_repo_hooks_and_wrapper(self, fake_home, monkeypatch):
+        cursor_install = _load_cursor_module("install")
+        repo = fake_home / "repo"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        _mock_prompts(monkeypatch)
+
+        cursor_install.install(with_skills=False, project_hooks=True)
+
+        hooks_file = repo / ".cursor" / "hooks.json"
+        wrapper = repo / ".cursor" / "hooks" / "arize-hook-cursor.sh"
+        assert hooks_file.is_file()
+        assert wrapper.is_file()
+        assert wrapper.stat().st_mode & 0o111
+
+        hooks = json.loads(hooks_file.read_text())["hooks"]
+        assert len(hooks) == 15
+        for entries in hooks.values():
+            assert entries == [{"command": "bash .cursor/hooks/arize-hook-cursor.sh"}]
+
+        text = wrapper.read_text()
+        assert "ARIZE_HOOK_CURSOR" in text
+        assert "arize-hook-cursor" in text
+
+    def test_project_hooks_bypass_local_cursor_presence_check(self, fake_home, monkeypatch):
+        cursor_install = _load_cursor_module("install")
+        repo = fake_home / "repo"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        _mock_prompts(monkeypatch)
+        monkeypatch.setattr(cursor_install, "ensure_harness_installed", lambda *args, **kwargs: False)
+
+        cursor_install.install(with_skills=False, project_hooks=True)
+
+        assert (repo / ".cursor" / "hooks.json").is_file()
+
+    def test_project_uninstall_removes_only_arize_hook_entries(self, fake_home, monkeypatch):
+        cursor_install = _load_cursor_module("install")
+        repo = fake_home / "repo"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        _mock_prompts(monkeypatch)
+
+        cursor_install.install(with_skills=False, project_hooks=True)
+        hooks_file = repo / ".cursor" / "hooks.json"
+        data = json.loads(hooks_file.read_text())
+        data["hooks"]["beforeSubmitPrompt"].append({"command": "/usr/local/bin/other-hook"})
+        hooks_file.write_text(json.dumps(data, indent=2) + "\n")
+
+        cursor_install.uninstall()
+
+        hooks = json.loads(hooks_file.read_text()).get("hooks", {})
+        assert "postToolUse" not in hooks
+        assert hooks["beforeSubmitPrompt"] == [{"command": "/usr/local/bin/other-hook"}]
+
+
+class TestCloudAgentInstall:
+    """Cursor Cloud Agent mode writes project bootstrap files without prompting for secrets."""
+
+    def test_cloud_agent_writes_bootstrap_and_environment_without_config_prompt(self, fake_home, monkeypatch):
+        cursor_install = _load_cursor_module("install")
+        repo = fake_home / "repo"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cursor_install, "ensure_harness_installed", lambda *args, **kwargs: False)
+        monkeypatch.setattr(cursor_install, "prompt_backend", lambda *args, **kwargs: pytest.fail("prompted backend"))
+        monkeypatch.setattr(cursor_install, "prompt_project_name", lambda *args, **kwargs: pytest.fail("prompted project"))
+        monkeypatch.setattr(cursor_install, "prompt_user_id", lambda: pytest.fail("prompted user"))
+        monkeypatch.setattr(cursor_install, "prompt_content_logging", lambda: pytest.fail("prompted logging"))
+        monkeypatch.setattr("sys.stdout", _fake_stdout())
+
+        cursor_install.install(with_skills=False, cloud_agent=True)
+
+        assert (repo / ".cursor" / "hooks.json").is_file()
+        assert (repo / ".cursor" / "hooks" / "arize-hook-cursor.sh").is_file()
+        setup_script = repo / ".cursor" / "hooks" / "arize-cursor-cloud-setup.sh"
+        assert setup_script.is_file()
+        assert setup_script.stat().st_mode & 0o111
+        assert "ARIZE_API_KEY" in setup_script.read_text()
+        env_example = repo / ".cursor" / "hooks" / "arize-cloud-env.example"
+        assert env_example.is_file()
+        assert "ARIZE_API_KEY=" in env_example.read_text()
+
+        environment = json.loads((repo / ".cursor" / "environment.json").read_text())
+        assert environment["install"] == cursor_install.CLOUD_SETUP_COMMAND
+        assert "ARIZE_SPACE_ID" in environment["install"]
+        assert "PHOENIX_ENDPOINT" in environment["install"]
+        assert not (fake_home / ".arize" / "harness" / "config.yaml").exists()
+
+    def test_existing_environment_install_is_prefixed(self, fake_home, monkeypatch):
+        cursor_install = _load_cursor_module("install")
+        repo = fake_home / "repo"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        env_file = repo / ".cursor" / "environment.json"
+        env_file.parent.mkdir()
+        env_file.write_text(json.dumps({"install": "npm install", "terminals": []}) + "\n")
+        monkeypatch.setattr("sys.stdout", _fake_stdout())
+
+        cursor_install._ensure_cloud_environment_bootstrap()
+
+        data = json.loads(env_file.read_text())
+        assert data["install"] == f"{cursor_install.CLOUD_SETUP_COMMAND} && npm install"
+        assert data["terminals"] == []
+
+    def test_existing_environment_install_is_not_duplicated(self, fake_home, monkeypatch):
+        cursor_install = _load_cursor_module("install")
+        repo = fake_home / "repo"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        env_file = repo / ".cursor" / "environment.json"
+        env_file.parent.mkdir()
+        env_file.write_text(json.dumps({"install": "bash .cursor/hooks/arize-cursor-cloud-setup.sh && npm install"}) + "\n")
+        monkeypatch.setattr("sys.stdout", _fake_stdout())
+
+        cursor_install._ensure_cloud_environment_bootstrap()
+
+        data = json.loads(env_file.read_text())
+        assert data["install"].count("arize-cursor-cloud-setup.sh") == 1
+
+
 class TestUninstall:
     """Uninstall removes hooks and harness entry."""
 
@@ -451,3 +575,21 @@ class TestDryRun:
 
         config_file = fake_home / ".arize" / "harness" / "config.yaml"
         assert not config_file.exists()
+
+
+class TestMainDispatch:
+    def test_install_passes_project_and_cloud_flags(self, monkeypatch):
+        cursor_install = _load_cursor_module("install")
+        calls = []
+        monkeypatch.setattr(
+            cursor_install,
+            "install",
+            lambda with_skills=False, project_hooks=False, cloud_agent=False: calls.append(
+                (with_skills, project_hooks, cloud_agent)
+            ),
+        )
+        monkeypatch.setattr("sys.argv", ["install.py", "install", "--with-skills", "--project-hooks", "--cloud-agent"])
+
+        cursor_install.main()
+
+        assert calls == [(True, True, True)]

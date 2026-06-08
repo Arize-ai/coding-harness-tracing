@@ -35,6 +35,9 @@ HARNESS="claude"
 # setup tracing for a harness
 curl -sSL "$INSTALL_URL" | bash -s -- "$HARNESS"
 
+# setup repo-local Cursor hooks for Cloud/Background Agents
+curl -sSL "$INSTALL_URL" | bash -s -- cursor --cloud-agent
+
 # remove tracing for a harness
 curl -sSL "$INSTALL_URL" | bash -s -- uninstall "$HARNESS"
 
@@ -78,6 +81,9 @@ HARNESS="claude"
 
 # setup tracing for a harness
 ./install.sh "$HARNESS"
+
+# setup repo-local Cursor hooks for Cloud/Background Agents
+./install.sh cursor --cloud-agent
 
 # remove tracing for a harness
 ./install.sh uninstall "$HARNESS"

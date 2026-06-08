@@ -165,6 +165,11 @@ class TestUsageOutput:
     def test_branch_flag(self):
         assert "--branch NAME" in self.text
 
+    def test_cursor_cloud_flags(self):
+        assert "--project-hooks" in self.text
+        assert "--cloud-agent" in self.text
+        assert "only supported for cursor" in self.text
+
 
 # ---------------------------------------------------------------------------
 # Smoke tests (subprocess execution)
@@ -241,6 +246,9 @@ class TestDispatchLogic:
     def test_install_harness_called(self):
         """install_harness function should be called for harness commands."""
         assert 'install_harness "$cmd"' in self.text
+
+    def test_install_harness_receives_passthrough_flags(self):
+        assert 'install_harness "$cmd" "$with_skills" "${passthrough[@]}"' in self.text
 
     def test_install_harness_defined(self):
         """install_harness must be defined if it's called."""
