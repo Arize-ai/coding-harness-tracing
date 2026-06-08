@@ -26,9 +26,12 @@ def fake_home(tmp_path, monkeypatch):
     """Redirect Path.home() to tmp_path so all file writes land in a temp dir.
 
     Also patches the module-level constants in install.py and core.setup that
-    derive from Path.home() so they point at the temp tree.
+    derive from Path.home() so they point at the temp tree. Cursor project-hook
+    paths are intentionally relative, so run each test from tmp_path to keep
+    install/uninstall helpers from touching the repository's real .cursor files.
     """
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.chdir(tmp_path)
 
     # Patch INSTALL_DIR / VENV_DIR / CONFIG_FILE in core.setup
     import core.setup as setup_mod
