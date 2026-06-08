@@ -1,0 +1,11 @@
+# Configure these as Cursor Cloud Agent environment secrets.
+# Do not commit real credential values.
+
+# Arize AX:
+ARIZE_API_KEY=
+ARIZE_SPACE_ID=
+ARIZE_PROJECT_NAME=cursor
+
+# Phoenix alternative:
+# PHOENIX_ENDPOINT=http://localhost:6006
+# ARIZE_API_KEY=
