@@ -41,14 +41,32 @@ class _Env:
     def project_name(self) -> str:
         return os.environ.get("ARIZE_PROJECT_NAME", "")
 
-    @property
-    def user_id(self) -> str:
-        # env var > config.yaml top-level `user_id` > ""
+    def get_user_id(self, service_name: str = "") -> str:
+        """Resolve user id. Layered, later wins:
+
+        1. top-level ``user_id`` in config.yaml (global)
+        2. ``harnesses.<service_name>.user_id`` in config.yaml (per-harness)
+        3. ``ARIZE_USER_ID`` env var (env always wins; an explicit empty value
+           blanks it)
+        """
+        cfg = self._top_level_config
+        value = ""
+        if cfg.get("user_id"):
+            value = str(cfg["user_id"])
+        if service_name:
+            harnesses = cfg.get("harnesses")
+            if isinstance(harnesses, dict):
+                entry = harnesses.get(service_name)
+                if isinstance(entry, dict) and entry.get("user_id"):
+                    value = str(entry["user_id"])
         raw = os.environ.get("ARIZE_USER_ID")
         if raw is not None:
-            return raw
-        val = self._top_level_config.get("user_id")
-        return str(val) if val else ""
+            value = raw
+        return value
+
+    @property
+    def user_id(self) -> str:
+        return self.get_user_id()
 
     @property
     def verbose(self) -> bool:
@@ -114,6 +132,60 @@ class _Env:
         if isinstance(val, bool):
             return val
         return default
+
+    @staticmethod
+    def _parse_otel_resource_attributes() -> dict:
+        """Parse OTEL_RESOURCE_ATTRIBUTES ("k1=v1,k2=v2") into a dict of str->str.
+
+        Splits on ',', then on the first '=' per token. Trims whitespace from
+        key and value. Tokens with no '=' or an empty key are skipped silently
+        (fail-soft). Returns {} when the env var is unset or empty.
+        """
+        raw = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
+        result: dict = {}
+        if not raw:
+            return result
+        for token in raw.split(","):
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                continue
+            result[key] = value
+        return result
+
+    def custom_attributes(self, service_name: str = "") -> dict:
+        """Resolve custom span attributes for a harness.
+
+        Layered, later wins:
+          1. top-level ``attributes:`` in config.yaml (global — all harnesses)
+          2. ``harnesses.<service_name>.attributes:`` in config.yaml (per-harness)
+          3. ``OTEL_RESOURCE_ATTRIBUTES`` env var (env always wins)
+
+        Config values keep their YAML type (an int stays an int, bool stays
+        bool); env values are always strings. Returns a fresh dict every call.
+        """
+        cfg = self._top_level_config
+        merged: dict = {}
+
+        glob = cfg.get("attributes")
+        if isinstance(glob, dict):
+            merged.update(glob)
+
+        if service_name:
+            harnesses = cfg.get("harnesses")
+            if isinstance(harnesses, dict):
+                entry = harnesses.get(service_name)
+                if isinstance(entry, dict):
+                    per = entry.get("attributes")
+                    if isinstance(per, dict):
+                        merged.update(per)
+
+        merged.update(self._parse_otel_resource_attributes())
+
+        return merged
 
     @property
     def log_prompts(self) -> bool:
@@ -1012,8 +1084,9 @@ def build_span(
 
     If end_ms is empty/None/0, defaults to start_ms (matches bash: end="${7:-$start}").
     """
-    if attrs is None:
-        attrs = {}
+    attrs = {} if attrs is None else dict(attrs)
+    for k, v in env.custom_attributes(service_name).items():
+        attrs.setdefault(k, v)
 
     start = int(start_ms) if start_ms else 0
     end = int(end_ms) if end_ms else start
