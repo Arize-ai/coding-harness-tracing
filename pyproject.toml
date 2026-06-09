@@ -55,6 +55,9 @@ arize-hook-gemini-before-model = "tracing.gemini.hooks.handlers:before_model"
 arize-hook-gemini-after-model = "tracing.gemini.hooks.handlers:after_model"
 arize-hook-gemini-before-tool = "tracing.gemini.hooks.handlers:before_tool"
 arize-hook-gemini-after-tool = "tracing.gemini.hooks.handlers:after_tool"
+# Antigravity hooks
+arize-hook-antigravity-pre-invocation = "tracing.antigravity.hooks.handlers:pre_invocation"
+arize-hook-antigravity-stop = "tracing.antigravity.hooks.handlers:stop"
 # Cursor hook
 arize-hook-cursor = "tracing.cursor.hooks.handlers:main"
 # Kiro hook
