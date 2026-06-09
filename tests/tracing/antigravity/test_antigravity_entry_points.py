@@ -219,35 +219,14 @@ def test_install_sh_help_output_lists_antigravity() -> None:
     assert "antigravity" in result.stdout, "--help output must mention antigravity"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="bash not available on Windows")
-def test_install_sh_antigravity_does_not_short_circuit_to_unknown_command(tmp_path: Path) -> None:
-    """``./install.sh antigravity`` must be accepted by the router (i.e. not 'Unknown command').
-
-    We can't actually run install_harness end-to-end here (it would clone the repo,
-    bootstrap a venv, etc.), but we can confirm the router accepts the command word
-    by pointing INSTALL_DIR/repo at an empty temp directory: the router will get
-    past the dispatch and fail later for a different reason. The relevant signal
-    is that ``Unknown command: antigravity`` is *not* printed.
-    """
-    env = {
-        **os.environ,
-        "NO_COLOR": "1",
-        # Force the router away from a real install. We don't care if it fails
-        # in setup_venv/install_repo; we only care that it didn't reject the
-        # command word.
-        "HOME": str(tmp_path),
-        "ARIZE_INSTALL_BRANCH": "this-branch-does-not-exist-for-testing",
-    }
-    result = subprocess.run(
-        ["bash", str(INSTALL_SH), "antigravity"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        env=env,
-    )
-    # We expect a non-zero exit (Python / network setup failures), but the
-    # *router* should not have rejected the word "antigravity".
-    assert "Unknown command: antigravity" not in result.stderr, f"Router rejected antigravity. stderr:\n{result.stderr}"
+# NOTE: We deliberately do NOT execute ``./install.sh antigravity`` to prove the
+# router accepts the command. Once accepted, the router correctly proceeds into the
+# real install path (shared-runtime/venv bootstrap and interactive backend prompts),
+# which hangs with no stdin. Router acceptance is covered statically instead by
+# TestInstallShAntigravity.test_main_dispatch_includes_antigravity (asserting
+# ``antigravity`` is in the command-validation alternation that guards the
+# "Unknown command" default) — matching tests/core/test_shell_router.py, which only
+# runs harmless --help/no-args subprocesses.
 
 
 # ---------------------------------------------------------------------------
