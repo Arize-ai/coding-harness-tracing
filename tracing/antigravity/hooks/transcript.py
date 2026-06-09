@@ -169,6 +169,8 @@ def parse_transcript(path: str | Path) -> list[dict[str, Any]]:
     Prefers a sibling ``transcript_full.jsonl`` if present (it carries the full
     untruncated record content). Returns ``[]`` on any missing/unreadable file.
     """
+    if not path:
+        return []
     p = Path(path).expanduser()
     full = p.with_name("transcript_full.jsonl")
     if full.is_file():
