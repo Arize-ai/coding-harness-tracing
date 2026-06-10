@@ -106,7 +106,7 @@ def resolve_session(input_json: dict) -> StateManager:
         else:
             session_key = _get_grandparent_pid()
 
-    state_file = STATE_DIR / f"state_{session_key}.yaml"
+    state_file = STATE_DIR / f"state_{session_key}.json"
     lock_path = STATE_DIR / f".lock_{session_key}"
 
     sm = StateManager(
@@ -164,13 +164,13 @@ def check_requirements() -> bool:
 def gc_stale_state_files() -> None:
     """Remove state files for PIDs that are no longer running.
 
-    Only cleans numeric (PID-based) filenames: state_12345.yaml
-    Skips non-numeric session keys: state_sess-abc123.yaml
+    Only cleans numeric (PID-based) filenames: state_12345.json
+    Skips non-numeric session keys: state_sess-abc123.json
     These are CLI-mode state files; VS Code mode uses sessionId strings.
     """
     if not STATE_DIR.is_dir():
         return
-    for f in STATE_DIR.glob("state_*.yaml"):
+    for f in STATE_DIR.glob("state_*.json"):
         key = f.stem.replace("state_", "", 1)
         if not key.isdigit():
             continue

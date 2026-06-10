@@ -80,7 +80,7 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution.
+**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.json` to exist for backend credential resolution.
 
 ### Ask the user for:
 
@@ -94,29 +94,37 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ### Write the config
 
-The config file at `~/.arize/harness/config.yaml` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/copilot}`
+The config file at `~/.arize/harness/config.json` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/copilot}`
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.copilot` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.copilot` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
 
 **Phoenix:**
-```yaml
-harnesses:
-  copilot:
-    project_name: copilot
-    target: phoenix
-    endpoint: <endpoint>
-    api_key: ""
+```json
+{
+  "harnesses": {
+    "copilot": {
+      "project_name": "copilot",
+      "target": "phoenix",
+      "endpoint": "<endpoint>",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 **Arize AX:**
-```yaml
-harnesses:
-  copilot:
-    project_name: copilot
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <id>
+```json
+{
+  "harnesses": {
+    "copilot": {
+      "project_name": "copilot",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<id>"
+    }
+  }
+}
 ```
 
 If the user has a custom OTLP endpoint, set it in `harnesses.copilot.endpoint`.
@@ -142,7 +150,7 @@ All `command` values should be absolute paths to the venv binary (e.g. `~/.arize
 
 ### Validate
 
-1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials.
+1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 3. **Hooks active**: Verify `.github/hooks/hooks.json` exists in the project root and each `command` path is the absolute venv binary path.
 4. **Quick dry-run test** (optional):
@@ -153,7 +161,7 @@ All `command` values should be absolute paths to the venv binary (e.g. `~/.arize
 ### Confirm
 
 Tell the user:
-- Config saved to `~/.arize/harness/config.yaml`
+- Config saved to `~/.arize/harness/config.json`
 - Copilot hooks activated via `.github/hooks/hooks.json`
 - Spans are sent directly to the backend from hooks -- no background process needed
 - After saving, open a new Copilot session and traces will appear in their Phoenix UI or Arize AX dashboard under the project name
@@ -188,12 +196,12 @@ All other handlers print `{"continue": true}`.
 
 | Problem | Fix |
 |---------|-----|
-| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.yaml`. Check hook log: `tail -20 ~/.arize/harness/logs/copilot.log` |
+| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/copilot.log` |
 | Hooks not firing | Verify `.github/hooks/hooks.json` exists in the project root and each `command` path is the absolute venv binary path |
 | `PreToolUse` blocking tools | Check the handler prints the correct permission JSON. Test: `echo '{"hookEventName":"PreToolUse","tool_name":"test"}' \| arize-hook-copilot-pre-tool` |
-| Config missing | Run the installer or create `~/.arize/harness/config.yaml` manually (include `harnesses.copilot` section) |
+| Config missing | Run the installer or create `~/.arize/harness/config.json` manually (include `harnesses.copilot` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Copilot |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching Copilot |
-| Wrong project name | Set `harnesses.copilot.project_name` in `~/.arize/harness/config.yaml` (default: `"copilot"`) |
+| Wrong project name | Set `harnesses.copilot.project_name` in `~/.arize/harness/config.json` (default: `"copilot"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` env var before launching Copilot |
