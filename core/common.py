@@ -6,6 +6,7 @@ key-value state backed by YAML files), and OTLP span building functions.
 Replaces the jq-based state functions in common.sh lines 46-109 and
 build_span/build_multi_span from common.sh lines 277-317 / codex common.sh lines 110-145.
 """
+
 import atexit
 import functools
 import json as _json
@@ -582,6 +583,13 @@ def send_span(span_dict: dict) -> bool:
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     return 200 <= resp.status < 300
+            except urllib.error.HTTPError as e:
+                try:
+                    detail = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    detail = ""
+                error(f"Phoenix send failed: HTTP {e.code}: {detail or e.reason}")
+                return False
             except Exception as e:
                 error(f"Phoenix send failed: {e}")
                 return False
@@ -610,6 +618,13 @@ def send_span(span_dict: dict) -> bool:
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     return 200 <= resp.status < 300
+            except urllib.error.HTTPError as e:
+                try:
+                    detail = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    detail = ""
+                error(f"Arize send failed: HTTP {e.code}: {detail or e.reason}")
+                return False
             except Exception as e:
                 error(f"Arize send failed: {e}")
                 return False
