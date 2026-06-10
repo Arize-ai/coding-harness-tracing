@@ -213,6 +213,10 @@ Claude Code reads env vars from `~/.claude/settings.json` under the `env` block;
 - [Phoenix](https://github.com/Arize-ai/phoenix)
 - [OpenInference](https://github.com/Arize-ai/openinference)
 
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the contribution process, and the CLA.
+
 ## License
 
 MIT
