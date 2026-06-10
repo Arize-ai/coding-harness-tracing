@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Tests for tracing.cursor.hooks.adapter — Cursor-specific adapter module."""
 import hashlib
+import json
 import threading
 
 import pytest
-import yaml
 
 from tracing.cursor.hooks import adapter
 
@@ -99,20 +99,20 @@ class TestStateStack:
         assert adapter.state_pop("nonexistent") is None
 
     def test_pop_corrupted_returns_none(self):
-        stack_file = adapter.STATE_DIR / "bad.stack.yaml"
-        stack_file.write_text(":::not valid yaml{{{")
+        stack_file = adapter.STATE_DIR / "bad.stack.json"
+        stack_file.write_text(":::not valid json{{{")
         assert adapter.state_pop("bad") is None
 
     def test_push_creates_file(self):
         adapter.state_push("new_key", {"x": 1})
-        stack_file = adapter.STATE_DIR / "new_key.stack.yaml"
+        stack_file = adapter.STATE_DIR / "new_key.stack.json"
         assert stack_file.exists()
 
     def test_pop_last_leaves_empty_list(self):
         adapter.state_push("k2", {"x": 1})
         adapter.state_pop("k2")
-        stack_file = adapter.STATE_DIR / "k2.stack.yaml"
-        data = yaml.safe_load(stack_file.read_text())
+        stack_file = adapter.STATE_DIR / "k2.stack.json"
+        data = json.loads(stack_file.read_text())
         assert data == []
 
     def test_concurrent_push(self):
@@ -132,18 +132,18 @@ class TestStateStack:
             t.join()
 
         assert not errors
-        stack_file = adapter.STATE_DIR / "concurrent.stack.yaml"
-        data = yaml.safe_load(stack_file.read_text())
+        stack_file = adapter.STATE_DIR / "concurrent.stack.json"
+        data = json.loads(stack_file.read_text())
         assert isinstance(data, list)
         assert len(data) == 5
         values = sorted(d["i"] for d in data)
         assert values == [0, 1, 2, 3, 4]
 
-    def test_stack_file_valid_yaml(self):
-        adapter.state_push("yaml_check", {"a": 1})
-        adapter.state_push("yaml_check", {"b": 2})
-        stack_file = adapter.STATE_DIR / "yaml_check.stack.yaml"
-        data = yaml.safe_load(stack_file.read_text())
+    def test_stack_file_valid_json(self):
+        adapter.state_push("json_check", {"a": 1})
+        adapter.state_push("json_check", {"b": 2})
+        stack_file = adapter.STATE_DIR / "json_check.stack.json"
+        data = json.loads(stack_file.read_text())
         assert isinstance(data, list)
         assert len(data) == 2
 
@@ -185,7 +185,7 @@ class TestStateCleanupGeneration:
         adapter.state_cleanup_generation(gen_id)
 
         assert not (adapter.STATE_DIR / f"root_{safe}").exists()
-        assert not list(adapter.STATE_DIR.glob(f"*{safe}*.stack.yaml"))
+        assert not list(adapter.STATE_DIR.glob(f"*{safe}*.stack.json"))
 
     def test_cleanup_no_files_no_error(self):
         adapter.state_cleanup_generation("gen-nonexistent")  # should not raise
