@@ -66,7 +66,7 @@ def install(with_skills: bool = False, agent_name: str | None = None) -> None:
         if not dry_run():
             write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
         else:
-            info("would write config.yaml with backend credentials")
+            info("would write config.json with backend credentials")
     else:
         project_name = prompt_project_name(get_value(config, f"harnesses.{HARNESS_NAME}.project_name") or HARNESS_NAME)
         merge_harness_entry(HARNESS_NAME, project_name)
@@ -75,7 +75,7 @@ def install(with_skills: bool = False, agent_name: str | None = None) -> None:
         logging_block = prompt_content_logging()
         write_logging_config(logging_block)
     else:
-        info("Using existing logging settings from config.yaml")
+        info("Using existing logging settings from config.json")
 
     chosen = agent_name or _prompt_agent_name()
     agent_path = _resolve_agent_path(chosen)
