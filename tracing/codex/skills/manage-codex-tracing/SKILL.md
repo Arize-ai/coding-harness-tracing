@@ -310,6 +310,6 @@ Common issues and fixes:
 | Want verbose logging | Set `ARIZE_VERBOSE=true` in env or `export ARIZE_VERBOSE=true` |
 | Wrong project name | Set `ARIZE_PROJECT_NAME` in `~/.codex/arize-env.sh` (default: `codex`) |
 | Existing `notify` hook | Codex supports only one `notify` — create a wrapper script that calls both |
-| Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.yaml ~/.arize/harness/state/codex/spans_*.jsonl` |
+| Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.json ~/.arize/harness/state/codex/spans_*.jsonl` |
 | Flat spans only (no children) | The real hooks haven't been trusted yet. Run `codex` → `/hooks` and approve each `arize-hook-codex-*` entry. |
 | User ID not appearing on spans | Set `ARIZE_USER_ID` in `~/.codex/arize-env.sh` or export before running Codex |

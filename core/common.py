@@ -341,7 +341,7 @@ def resolve_backend(span_dict: dict) -> dict:
 
     harness_cfg = cfg.get("harnesses", {}).get(service_name) or {}
 
-    # Resolve project_name: env > YAML > service_name
+    # Resolve project_name: env > config > service_name
     project_name = env.project_name or harness_cfg.get("project_name", "") or service_name
 
     # Resolve target: env-derived backend takes precedence over config target

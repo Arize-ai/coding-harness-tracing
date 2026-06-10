@@ -169,6 +169,11 @@ class TestLoadConfig:
 
     def test_empty_file_returns_empty(self, tmp_path):
         path = tmp_path / "empty.json"
+        path.write_text("")
+        assert load_config(str(path)) == {}
+
+    def test_null_file_returns_empty(self, tmp_path):
+        path = tmp_path / "null.json"
         path.write_text("null")
         assert load_config(str(path)) == {}
 
@@ -295,12 +300,14 @@ class TestMainWrite:
         data = json.loads(Path(cli_config).read_text())
         assert data == {"new_key": "new_value"}
 
-    def test_write_empty_stdin_fails(self, cli_config, monkeypatch):
+    def test_write_empty_stdin(self, cli_config, monkeypatch):
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
         monkeypatch.setattr("sys.argv", ["config.py", "write"])
         with pytest.raises(SystemExit) as exc:
             main()
-        assert exc.value.code == 1
+        assert exc.value.code == 0
+        data = json.loads(Path(cli_config).read_text())
+        assert data == {}
 
     def test_write_non_mapping_fails(self, cli_config, monkeypatch):
         monkeypatch.setattr("sys.stdin", io.StringIO('["item"]'))

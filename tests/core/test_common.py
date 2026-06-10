@@ -1208,7 +1208,7 @@ class TestResolveBackend:
 
     # ── Config-only paths ──────────────────────────────────────────────────
 
-    def test_phoenix_from_yaml(self, monkeypatch):
+    def test_phoenix_from_config(self, monkeypatch):
         """Config harness entry with phoenix target; resolver returns those fields."""
         cfg = {
             "harnesses": {
@@ -1228,7 +1228,7 @@ class TestResolveBackend:
         assert result["api_key"] == "ph-key"
         assert result["project_name"] == "claude-code"
 
-    def test_arize_from_yaml(self, monkeypatch):
+    def test_arize_from_config(self, monkeypatch):
         """Config harness entry with arize target including space_id."""
         cfg = {
             "harnesses": {
@@ -1281,7 +1281,7 @@ class TestResolveBackend:
         cfg = {
             "harnesses": {
                 "claude-code": {
-                    "project_name": "from-yaml",
+                    "project_name": "from-config",
                     "target": "arize",
                     "api_key": "ak",
                     "space_id": "sp",
@@ -1295,7 +1295,7 @@ class TestResolveBackend:
 
     # ── env-overrides-config precedence ────────────────────────────────────
 
-    def test_env_arize_overrides_yaml_phoenix(self, monkeypatch):
+    def test_env_arize_overrides_config_phoenix(self, monkeypatch):
         """Env-set arize creds win even when config configures phoenix."""
         monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         monkeypatch.setenv("ARIZE_SPACE_ID", "space-env")
@@ -1313,7 +1313,7 @@ class TestResolveBackend:
         assert result["target"] == "arize"
         assert result["api_key"] == "ak-env"
 
-    def test_env_api_key_overrides_yaml(self, monkeypatch):
+    def test_env_api_key_overrides_config(self, monkeypatch):
         """ARIZE_API_KEY env overrides config api_key while keeping config target/endpoint/space_id."""
         monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         cfg = {
@@ -1321,8 +1321,8 @@ class TestResolveBackend:
                 "claude-code": {
                     "target": "arize",
                     "endpoint": "otlp.arize.com:443",
-                    "api_key": "ak-yaml",
-                    "space_id": "sp-yaml",
+                    "api_key": "ak-config",
+                    "space_id": "sp-config",
                 },
             },
         }
@@ -1330,7 +1330,7 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["api_key"] == "ak-env"
-        assert result["space_id"] == "sp-yaml"
+        assert result["space_id"] == "sp-config"
 
     # ── error paths ────────────────────────────────────────────────────────
 
@@ -1355,14 +1355,14 @@ class TestResolveBackend:
         # Partial env doesn't switch target to arize; falls through to no-backend.
         assert "No backend configured" in stderr
 
-    def test_arize_yaml_missing_space_id(self, capsys, monkeypatch):
+    def test_arize_config_missing_space_id(self, capsys, monkeypatch):
         """Config arize entry without space_id and no env fallback → none."""
         cfg = {
             "harnesses": {
                 "claude-code": {
                     "target": "arize",
                     "endpoint": "otlp.arize.com:443",
-                    "api_key": "ak-yaml",
+                    "api_key": "ak-config",
                 },
             },
         }
@@ -1373,7 +1373,7 @@ class TestResolveBackend:
         stderr = capsys.readouterr().err
         assert "missing space_id" in stderr
 
-    def test_phoenix_yaml_missing_endpoint(self, capsys, monkeypatch):
+    def test_phoenix_config_missing_endpoint(self, capsys, monkeypatch):
         """Config phoenix entry without endpoint and no PHOENIX_ENDPOINT env → none."""
         cfg = {
             "harnesses": {

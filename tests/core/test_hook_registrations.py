@@ -406,12 +406,11 @@ class TestCursorHookReference:
 
 
 class TestStateFileExtension:
-    """Verify docs reference .yaml state files, not .json."""
+    """Verify docs reference .json state files, not .yaml."""
 
-    def test_state_files_use_yaml_extension(self):
-        """All state file references in docs should use .yaml, not .json."""
+    def test_state_files_use_json_extension(self):
+        """All state file references in docs should use .json, not .yaml."""
         for f in _collect_md_files():
             content = f.read_text()
-            # Check for state_*.json references (should be state_*.yaml)
-            if "state_*.json" in content:
-                assert False, f"{f.relative_to(REPO_ROOT)}: still references state_*.json (should be state_*.yaml)"
+            if "state_*.yaml" in content:
+                assert False, f"{f.relative_to(REPO_ROOT)}: still references state_*.yaml (should be state_*.json)"

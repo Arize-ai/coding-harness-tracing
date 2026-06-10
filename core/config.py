@@ -33,10 +33,13 @@ def load_config(config_path=None):
     if not os.path.isfile(path):
         return {}
     with open(path, "r") as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Malformed JSON in {path}: {e}")
+        text = f.read()
+    if not text.strip():
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Malformed JSON in {path}: {e}")
     if data is None:
         return {}
     if not isinstance(data, dict):
@@ -189,8 +192,12 @@ def main():
         sys.exit(0)
 
     if command == "write":
+        text = sys.stdin.read()
+        if not text.strip():
+            save_config({})
+            sys.exit(0)
         try:
-            data = json.load(sys.stdin)
+            data = json.loads(text)
         except json.JSONDecodeError as e:
             sys.stderr.write(f"error: invalid JSON on stdin: {e}\n")
             sys.exit(1)
