@@ -84,11 +84,11 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** For marketplace installs, users must run this setup skill before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution.
+**Important:** For marketplace installs, users must run this setup skill before tracing will work. The `send_span()` function requires `~/.arize/harness/config.json` to exist for backend credential resolution.
 
 Configuration has two parts:
 
-1. **Backend config** (`~/.arize/harness/config.yaml`) -- backend credentials and per-harness settings, read by `send_span()`. This skill creates it.
+1. **Backend config** (`~/.arize/harness/config.json`) -- backend credentials and per-harness settings, read by `send_span()`. This skill creates it.
 2. **Claude settings** (`~/.claude/settings.json` or `.claude/settings.local.json`) -- tracing feature flags and user-level env vars
 
 ### Ask the user for:
@@ -104,29 +104,37 @@ Configuration has two parts:
 
 ### Write the backend config
 
-The config file at `~/.arize/harness/config.yaml` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs}`
+The config file at `~/.arize/harness/config.json` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs}`
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.claude-code` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.claude-code` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
 
 **Phoenix:**
-```yaml
-harnesses:
-  claude-code:
-    project_name: claude-code
-    target: phoenix
-    endpoint: <endpoint>
-    api_key: ""
+```json
+{
+  "harnesses": {
+    "claude-code": {
+      "project_name": "claude-code",
+      "target": "phoenix",
+      "endpoint": "<endpoint>",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 **Arize AX:**
-```yaml
-harnesses:
-  claude-code:
-    project_name: claude-code
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <id>
+```json
+{
+  "harnesses": {
+    "claude-code": {
+      "project_name": "claude-code",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<id>"
+    }
+  }
+}
 ```
 
 If the user has a custom OTLP endpoint, set it in `harnesses.claude-code.endpoint`.
@@ -147,7 +155,7 @@ Read the file (or create `{}` if it doesn't exist), then merge env vars into the
 }
 ```
 
-If a custom project name was provided, set it in `harnesses.claude-code.project_name` in the config (`~/.arize/harness/config.yaml`), not as an env var.
+If a custom project name was provided, set it in `harnesses.claude-code.project_name` in the config (`~/.arize/harness/config.json`), not as an env var.
 
 If a user ID was provided, also set `"ARIZE_USER_ID": "<id>"`. This adds a `user.id` attribute to all traced spans.
 
@@ -161,13 +169,13 @@ echo '{}' > .claude/settings.local.json
 
 ### Validate
 
-1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials.
+1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 
 ### Confirm
 
 Tell the user:
-- Backend config saved to `~/.arize/harness/config.yaml`
+- Backend config saved to `~/.arize/harness/config.json`
 - Claude settings saved to the chosen file:
   - Global: `~/.claude/settings.json`
   - Project-local: `.claude/settings.local.json`
@@ -214,7 +222,7 @@ No Python dependencies are needed -- both Phoenix and Arize AX use HTTP/JSON.
 
 ### 3. Set up the backend config
 
-Ensure `~/.arize/harness/config.yaml` has the correct backend credentials (see [Configure Settings](#configure-settings) above).
+Ensure `~/.arize/harness/config.json` has the correct backend credentials (see [Configure Settings](#configure-settings) above).
 
 ### 4. Create a settings file
 
@@ -235,7 +243,7 @@ Optional env vars that can also be added to the settings file:
 - `ARIZE_DRY_RUN`: Set to `"true"` to test without sending data
 - `ARIZE_VERBOSE`: Set to `"true"` for debug output
 
-To customize the project name, set it in `harnesses.claude-code.project_name` in the config (`~/.arize/harness/config.yaml`) rather than as an env var.
+To customize the project name, set it in `harnesses.claude-code.project_name` in the config (`~/.arize/harness/config.json`) rather than as an env var.
 
 ### 5. Add the plugin to their code
 
@@ -288,7 +296,7 @@ For full Agent SDK documentation, see: https://platform.claude.com/docs/en/agent
 - **Hook coverage**: The CLI registers a broad hook set (16 events as of this writing, including session-lifecycle, prompt/tool, compaction, and permission events). The Agent SDKs may expose a smaller subset depending on version; check the SDK's `HookEvent` enum / type for the events your SDK version supports.
 - **Python SDK** in particular has historically not supported `SessionStart`, `SessionEnd`, `Notification`, and `PermissionRequest`. The plugin handles this automatically -- session state is lazily initialized on the first `UserPromptSubmit`, so core tracing (LLM spans, tool spans, subagent spans) works fully.
 - Tracing env vars must be passed via a settings file in `ClaudeAgentOptions` -- the SDK subprocess does not inherit shell environment variables.
-- If the user is **troubleshooting** an existing Agent SDK setup, you can help by checking log files (`~/.arize/harness/logs/claude-code.log`), verifying the settings file contains the correct env vars, verifying `~/.arize/harness/config.yaml` has correct backend credentials, or enabling dry-run mode.
+- If the user is **troubleshooting** an existing Agent SDK setup, you can help by checking log files (`~/.arize/harness/logs/claude-code.log`), verifying the settings file contains the correct env vars, verifying `~/.arize/harness/config.json` has correct backend credentials, or enabling dry-run mode.
 
 ## Troubleshoot
 
@@ -296,11 +304,11 @@ Common issues and fixes:
 
 | Problem | Fix |
 |---------|-----|
-| Traces not appearing | Check `ARIZE_TRACE_ENABLED` is `"true"` in Claude settings, and verify config exists: `cat ~/.arize/harness/config.yaml` |
-| Config missing | Run the installer or create `~/.arize/harness/config.yaml` manually (include `harnesses` section) |
+| Traces not appearing | Check `ARIZE_TRACE_ENABLED` is `"true"` in Claude settings, and verify config exists: `cat ~/.arize/harness/config.json` |
+| Config missing | Run the installer or create `~/.arize/harness/config.json` manually (include `harnesses` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | No output in terminal | Hook stderr is discarded by Claude Code; check `~/.arize/harness/logs/claude-code.log` |
 | Want to test without sending | Set `ARIZE_DRY_RUN` to `"true"` in env config |
 | Want verbose logging | Set `ARIZE_VERBOSE` to `"true"` in env config |
-| Wrong project name | Set `harnesses.claude-code.project_name` in `~/.arize/harness/config.yaml` (default: `"claude-code"`) |
+| Wrong project name | Set `harnesses.claude-code.project_name` in `~/.arize/harness/config.json` (default: `"claude-code"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` in env config to add `user.id` to all spans |
