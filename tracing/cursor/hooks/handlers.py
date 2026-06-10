@@ -60,7 +60,7 @@ def _jq_str(input_json: dict, *keys, default: str = "") -> str:
 
 
 def _resolve_user_id(input_json: dict) -> str:
-    """env.user_id (env var > config.yaml `user_id`) > payload `user_email` > "".
+    """env.user_id (env var > config.json `user_id`) > payload `user_email` > "".
 
     Cursor has no per-session state for user_id, so each handler resolves it
     inline. Configured user_id wins over the implicit `user_email` payload field

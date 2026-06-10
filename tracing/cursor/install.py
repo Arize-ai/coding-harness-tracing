@@ -62,7 +62,7 @@ def install(with_skills: bool = False) -> None:
 
             write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
         else:
-            info("would write config.yaml with backend credentials")
+            info("would write config.json with backend credentials")
     else:
         project_name = prompt_project_name(get_value(config, f"harnesses.{HARNESS_NAME}.project_name") or HARNESS_NAME)
         merge_harness_entry(HARNESS_NAME, project_name)
@@ -73,7 +73,7 @@ def install(with_skills: bool = False) -> None:
         logging_block = prompt_content_logging()
         write_logging_config(logging_block)
     else:
-        info("Using existing logging settings from config.yaml")
+        info("Using existing logging settings from config.json")
 
     _register_cursor_hooks()
     if with_skills:
