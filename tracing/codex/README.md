@@ -3,7 +3,7 @@
 Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for the OpenAI Codex CLI. Spans are exported to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix).
 
 ## Setup
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, and registers the hook entries plus the `notify` token-usage backstop in `~/.codex/config.toml`. After installing, approve the hooks via Codex's `/hooks` command (one time per user account).
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers the hook entries plus the `notify` token-usage backstop in `~/.codex/config.toml`. After installing, approve the hooks via Codex's `/hooks` command (one time per user account).
 
 Pass `--with-skills` to also symlink the `manage-codex-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Codex tracing configuration.
 
