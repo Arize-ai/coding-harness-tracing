@@ -66,7 +66,7 @@ def _get_span(span_payload):
 @pytest.fixture
 def state(tmp_path):
     """Create a StateManager with a temp state file, pre-initialized."""
-    sf = tmp_path / "state_test.yaml"
+    sf = tmp_path / "state_test.json"
     lp = tmp_path / ".lock_test"
     sm = StateManager(state_dir=tmp_path, state_file=sf, lock_path=lp)
     sm.init_state()
@@ -1375,12 +1375,10 @@ class TestSessionStartIntegration:
         _handle_session_start({"session_id": "sess-123", "cwd": "/tmp/proj"})
 
         # State file is keyed by the payload session_id (resolve_session key).
-        state_file = gemini_state_dir / "state_sess-123.yaml"
+        state_file = gemini_state_dir / "state_sess-123.json"
         assert state_file.exists()
 
-        import yaml
-
-        data = yaml.safe_load(state_file.read_text())
+        data = json.loads(state_file.read_text())
         # session.id reuses the payload session_id so Arize spans correlate
         # back to the same Gemini session.
         assert data["session_id"] == "sess-123"
@@ -1398,7 +1396,7 @@ class TestSessionStartIntegration:
 
         _handle_session_start({})
 
-        state_file = gemini_state_dir / "state_env-sid.yaml"
+        state_file = gemini_state_dir / "state_env-sid.json"
         assert state_file.exists()
 
     def test_pid_fallback_when_both_missing(self, tmp_harness_dir, gemini_state_dir, monkeypatch, captured_spans_real):
@@ -1411,7 +1409,7 @@ class TestSessionStartIntegration:
 
         _handle_session_start({})
 
-        state_files = list(gemini_state_dir.glob("state_*.yaml"))
+        state_files = list(gemini_state_dir.glob("state_*.json"))
         assert len(state_files) == 1
         key = state_files[0].stem.replace("state_", "", 1)
         assert key.isdigit()
@@ -1512,7 +1510,7 @@ class TestSendSpanAsync:
 class TestFlushPendingModelCall:
     def test_no_current_model_call_id_is_noop(self, tmp_path):
         """No-op when state has no current_model_call_id."""
-        sm = StateManager(state_dir=tmp_path, state_file=tmp_path / "s.yaml", lock_path=tmp_path / ".l")
+        sm = StateManager(state_dir=tmp_path, state_file=tmp_path / "s.json", lock_path=tmp_path / ".l")
         sm.init_state()
         with mock.patch("tracing.gemini.hooks.handlers._send_span_async") as send_mock:
             _flush_pending_model_call(sm)
@@ -1521,7 +1519,7 @@ class TestFlushPendingModelCall:
     def test_no_active_trace_drops_accumulators_silently(self, tmp_path):
         """If a model call is pending but no trace is active, accumulators are
         cleared without emitting a dangling LLM span."""
-        sm = StateManager(state_dir=tmp_path, state_file=tmp_path / "s.yaml", lock_path=tmp_path / ".l")
+        sm = StateManager(state_dir=tmp_path, state_file=tmp_path / "s.json", lock_path=tmp_path / ".l")
         sm.init_state()
         sm.set("current_model_call_id", "orphan")
         sm.set("model_orphan_response", "partial")
@@ -1541,7 +1539,7 @@ class TestSessionEndEdgeCases:
     def test_no_session_id_returns_silently(self, tmp_path, monkeypatch):
         """SessionEnd with an uninitialized state returns without raising or
         calling gc (covers the early-return guard)."""
-        sm = StateManager(state_dir=tmp_path, state_file=tmp_path / "s.yaml", lock_path=tmp_path / ".l")
+        sm = StateManager(state_dir=tmp_path, state_file=tmp_path / "s.json", lock_path=tmp_path / ".l")
         sm.init_state()
         with (
             mock.patch("tracing.gemini.hooks.handlers.resolve_session", return_value=sm),
@@ -1552,11 +1550,11 @@ class TestSessionEndEdgeCases:
 
     def test_lock_file_unlinked_on_session_end(self, tmp_path):
         """A regular file at lock_path is unlinked during session_end cleanup."""
-        sf = tmp_path / "state_x.yaml"
+        sf = tmp_path / "state_x.json"
         lp = tmp_path / ".lock_x"
         # Write state directly so we don't acquire any lock that would race
         # with the file-vs-dir we install at lock_path below.
-        sf.write_text("session_id: x\n")
+        sf.write_text(json.dumps({"session_id": "x"}, indent=2))
         lp.write_text("")  # fcntl-style file lock
         sm = StateManager(state_dir=tmp_path, state_file=sf, lock_path=lp)
         with (
@@ -1569,9 +1567,9 @@ class TestSessionEndEdgeCases:
 
     def test_lock_dir_rmdir_on_session_end(self, tmp_path):
         """A directory at lock_path is rmdir'd during session_end cleanup."""
-        sf = tmp_path / "state_y.yaml"
+        sf = tmp_path / "state_y.json"
         lp = tmp_path / ".lock_y"
-        sf.write_text("session_id: y\n")
+        sf.write_text(json.dumps({"session_id": "y"}, indent=2))
         lp.mkdir()  # mkdir-fallback lock
         sm = StateManager(state_dir=tmp_path, state_file=sf, lock_path=lp)
         with (
