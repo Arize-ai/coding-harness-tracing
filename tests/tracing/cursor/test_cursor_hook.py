@@ -206,7 +206,7 @@ class TestDispatch:
             h.assert_not_called()
 
     def test_no_backend_send_fails_gracefully(self, monkeypatch):
-        """send_span failure doesn't crash — IDE defers root to afterAgentResponse (hook_event_name)."""
+        """send_span failure doesn't crash — IDE defers root to afterAgentResponse and LLM to stop."""
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
         with (
             mock.patch("tracing.cursor.hooks.handlers.send_span", return_value=False) as send_mock,
@@ -230,7 +230,18 @@ class TestDispatch:
                     "response": "done",
                 },
             )
-            assert send_mock.call_count == 2
+            # afterAgentResponse sends the deferred root User Prompt only; LLM is deferred to stop.
+            assert send_mock.call_count == 1
+            _dispatch(
+                "stop",
+                {
+                    "hook_event_name": "stop",
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                },
+            )
+            # stop flushes the deferred LLM span (Agent Response) and emits Agent Stop.
+            assert send_mock.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +252,7 @@ class TestDispatch:
 class TestHandleBeforeSubmitPrompt:
 
     def test_cli_payload_sends_root_before_submit(self, captured_spans, monkeypatch):
-        """CLI-style payload (hookEventName only): root CHAIN at submit; LLM at afterAgentResponse."""
+        """CLI-style payload (hookEventName only): root CHAIN at submit; LLM is deferred to stop."""
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
         with (
             mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000),
@@ -279,8 +290,22 @@ class TestHandleBeforeSubmitPrompt:
                 },
             )
 
+        # afterAgentResponse no longer emits the LLM span — it is deferred to stop.
         names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
-        assert names == ["User Prompt", "Agent Response"]
+        assert names == ["User Prompt"]
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=10000):
+            _dispatch(
+                "stop",
+                {
+                    "hookEventName": "stop",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                },
+            )
+
+        names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
+        assert names == ["User Prompt", "Agent Response", "Agent Stop"]
         llm = captured_spans[1]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         llm_attrs = {a["key"]: a["value"] for a in llm["attributes"]}
         assert llm_attrs["openinference.span.kind"]["stringValue"] == "LLM"
@@ -289,7 +314,7 @@ class TestHandleBeforeSubmitPrompt:
         assert llm_attrs["session.id"]["stringValue"] == "conv-1"
 
     def test_ide_payload_defers_root_chain_to_after_response(self, captured_spans, monkeypatch):
-        """IDE payload (hook_event_name): original deferred CHAIN with full duration and output on root."""
+        """IDE payload (hook_event_name): root CHAIN at afterAgentResponse; LLM deferred to stop."""
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
         with (
             mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000),
@@ -320,14 +345,34 @@ class TestHandleBeforeSubmitPrompt:
                 },
             )
 
+        # Only the deferred root User Prompt CHAIN is sent at afterAgentResponse.
         names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
-        assert names == ["User Prompt", "Agent Response"]
+        assert names == ["User Prompt"]
         root = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         root_attrs = {a["key"]: a["value"] for a in root["attributes"]}
         assert root_attrs["input.value"]["stringValue"] == "fix the bug"
         assert root_attrs["output.value"]["stringValue"] == "I fixed the bug"
         assert root["startTimeUnixNano"].startswith("5000")
         assert root["endTimeUnixNano"].startswith("9000")
+
+        # Agent Response LLM span appears at stop, carrying the same input/output.
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=10000):
+            _dispatch(
+                "stop",
+                {
+                    "hook_event_name": "stop",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                },
+            )
+
+        names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
+        assert names == ["User Prompt", "Agent Response", "Agent Stop"]
+        llm = captured_spans[1]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        llm_attrs = {a["key"]: a["value"] for a in llm["attributes"]}
+        assert llm_attrs["openinference.span.kind"]["stringValue"] == "LLM"
+        assert llm_attrs["input.value"]["stringValue"] == "fix the bug"
+        assert llm_attrs["output.value"]["stringValue"] == "I fixed the bug"
 
 
 # ---------------------------------------------------------------------------
@@ -337,13 +382,13 @@ class TestHandleBeforeSubmitPrompt:
 
 class TestHandleAfterAgentResponse:
 
-    def test_creates_llm_span_with_response(self, captured_spans, monkeypatch):
-        """Creates LLM span with response and gets parent from gen_root_span_get."""
+    def test_defers_llm_span_until_stop(self, captured_spans, monkeypatch):
+        """afterAgentResponse defers the LLM span; it is emitted only at stop."""
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
         with (
             mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2000),
             mock.patch("tracing.cursor.hooks.handlers.span_id_16", return_value="ccdd" * 4),
-            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value="parent123") as get_mock,
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value="parent123"),
         ):
             _dispatch(
                 "afterAgentResponse",
@@ -355,14 +400,128 @@ class TestHandleAfterAgentResponse:
                 },
             )
 
-        get_mock.assert_called_once_with("gen-1")
+        # afterAgentResponse no longer sends a span immediately
+        assert len(captured_spans) == 0
+
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=3000),
+            mock.patch("tracing.cursor.hooks.handlers.span_id_16", return_value="eeff" * 4),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value="parent123"),
+        ):
+            _dispatch(
+                "stop",
+                {"hook_event_name": "stop", "conversation_id": "conv-1", "generation_id": "gen-1"},
+            )
+
+        names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
+        assert names == ["Agent Response", "Agent Stop"]
+
+        llm_span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        attrs = {a["key"]: a["value"] for a in llm_span["attributes"]}
+        assert attrs["openinference.span.kind"]["stringValue"] == "LLM"
+        assert attrs["output.value"]["stringValue"] == "I found the issue"
+        assert llm_span["parentSpanId"] == "parent123"
+
+    def test_defers_llm_span_with_full_attributes(self, captured_spans, monkeypatch):
+        """Deferred LLM span carries input, output, session.id, model_name when flushed at stop."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=4000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value="parentX"),
+        ):
+            _dispatch(
+                "beforeSubmitPrompt",
+                {
+                    "hook_event_name": "beforeSubmitPrompt",
+                    "conversation_id": "conv-9",
+                    "generation_id": "gen-9",
+                    "prompt": "do the thing",
+                    "model_name": "claude-4",
+                },
+            )
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "hook_event_name": "afterAgentResponse",
+                    "conversation_id": "conv-9",
+                    "generation_id": "gen-9",
+                    "response": "did the thing",
+                    "model_name": "claude-4",
+                },
+            )
+
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=8000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value="parentX"),
+        ):
+            _dispatch("stop", {"conversation_id": "conv-9", "generation_id": "gen-9"})
+
+        llm_span = next(
+            s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+            for s in captured_spans
+            if s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] == "Agent Response"
+        )
+        attrs = {a["key"]: a["value"] for a in llm_span["attributes"]}
+        assert attrs["openinference.span.kind"]["stringValue"] == "LLM"
+        assert attrs["input.value"]["stringValue"] == "do the thing"
+        assert attrs["output.value"]["stringValue"] == "did the thing"
+        assert attrs["session.id"]["stringValue"] == "conv-9"
+        assert attrs["cursor.conversation.id"]["stringValue"] == "conv-9"
+        assert attrs["llm.model_name"]["stringValue"] == "claude-4"
+
+    def test_defers_llm_span_preserves_after_agent_response_timing(self, captured_spans, monkeypatch):
+        """Deferred LLM span uses the start_ms recorded at afterAgentResponse, not stop's now_ms."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2500),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "yo",
+                },
+            )
+
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=9999),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch("stop", {"conversation_id": "conv-1", "generation_id": "gen-1"})
+
+        llm_span = next(
+            s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+            for s in captured_spans
+            if s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] == "Agent Response"
+        )
+        # start_ms recorded at afterAgentResponse (2500), not at stop (9999).
+        assert llm_span["startTimeUnixNano"] == "2500000000"
+        assert llm_span["endTimeUnixNano"] == "2500000000"
+
+    def test_no_gen_id_sends_llm_span_immediately(self, captured_spans, monkeypatch):
+        """Without gen_id state can't be keyed, so the LLM span is sent immediately (fallback)."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2000),
+            mock.patch("tracing.cursor.hooks.handlers.span_id_16", return_value="ccdd" * 4),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-1",
+                    "response": "I found the issue",
+                },
+            )
+
         assert len(captured_spans) == 1
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert span["name"] == "Agent Response"
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
         assert attrs["openinference.span.kind"]["stringValue"] == "LLM"
         assert attrs["output.value"]["stringValue"] == "I found the issue"
-        assert span["name"] == "Agent Response"
-        assert span["parentSpanId"] == "parent123"
 
 
 # ---------------------------------------------------------------------------
@@ -1590,11 +1749,10 @@ class TestConversationIdAttribute:
             "generation_id": "gen-abc",
             "prompt": "test",
         },
-        "afterAgentResponse": {
-            "conversation_id": "conv-abc",
-            "generation_id": "gen-aar",
-            "text": "response",
-        },
+        # afterAgentResponse is excluded: under the deferred-LLM design it no longer
+        # emits a span on its own — the Agent Response LLM span is flushed at stop.
+        # cursor.conversation.id on that deferred span is covered by
+        # TestDeferredLlmSpan below.
         "afterAgentThought": {
             "conversation_id": "conv-abc",
             "generation_id": "gen-aat",
@@ -1752,3 +1910,419 @@ class TestIdeSafety:
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
         assert attrs["openinference.span.kind"]["stringValue"] == "TOOL"
         assert attrs["tool.name"]["stringValue"] == "shell"
+
+
+# ---------------------------------------------------------------------------
+# Deferred LLM span tests (afterAgentResponse stashes; stop flushes)
+# ---------------------------------------------------------------------------
+
+
+def _spans_by_name(captured):
+    """Flatten captured_spans into {name: [span_dict, ...]}."""
+    out = {}
+    for sent in captured:
+        s = sent["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        out.setdefault(s["name"], []).append(s)
+    return out
+
+
+def _attrs(span):
+    return {a["key"]: a["value"] for a in span["attributes"]}
+
+
+class TestDeferredLlmSpan:
+    """Per-turn token counts must land on Agent Response (LLM), not Agent Stop (CHAIN).
+
+    The fix: afterAgentResponse stashes the LLM span; stop pops it, attaches the
+    token counts from the stop payload, and sends the LLM span before Agent Stop.
+    """
+
+    def test_ide_happy_path_tokens_land_on_llm_span(self, captured_spans, monkeypatch):
+        """IDE turn (beforeSubmit → after → stop with tokens): tokens on LLM span, none on Agent Stop."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000):
+            _dispatch(
+                "beforeSubmitPrompt",
+                {
+                    "hook_event_name": "beforeSubmitPrompt",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "prompt": "fix the bug",
+                    "model_name": "claude-sonnet-4.5",
+                },
+            )
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=7000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "hook_event_name": "afterAgentResponse",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "fixed",
+                    "model_name": "claude-sonnet-4.5",
+                },
+            )
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=9000):
+            _dispatch(
+                "stop",
+                {
+                    "hook_event_name": "stop",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "status": "completed",
+                    "input_tokens": 85919,
+                    "output_tokens": 1523,
+                    "cache_read_tokens": 68000,
+                    "cache_write_tokens": 0,
+                    "model": "claude-sonnet-4.5",
+                },
+            )
+
+        spans = _spans_by_name(captured_spans)
+        assert "User Prompt" in spans
+        assert "Agent Response" in spans
+        assert "Agent Stop" in spans
+
+        llm_attrs = _attrs(spans["Agent Response"][0])
+        assert llm_attrs["openinference.span.kind"]["stringValue"] == "LLM"
+        assert llm_attrs["llm.token_count.prompt"]["intValue"] == 85919
+        assert llm_attrs["llm.token_count.completion"]["intValue"] == 1523
+        assert llm_attrs["llm.token_count.cache_read"]["intValue"] == 68000
+        assert llm_attrs["llm.token_count.cache_write"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.total"]["intValue"] == 87442
+        assert llm_attrs["llm.model_name"]["stringValue"] == "claude-sonnet-4.5"
+
+        stop_attrs = _attrs(spans["Agent Stop"][0])
+        assert stop_attrs["openinference.span.kind"]["stringValue"] == "CHAIN"
+        for k in (
+            "llm.token_count.prompt",
+            "llm.token_count.completion",
+            "llm.token_count.cache_read",
+            "llm.token_count.cache_write",
+            "llm.token_count.total",
+        ):
+            assert k not in stop_attrs, f"{k} should not be on Agent Stop CHAIN span"
+
+    def test_stop_emits_llm_span_before_agent_stop(self, captured_spans, monkeypatch):
+        """Order: Agent Response (LLM) is sent first, then Agent Stop (CHAIN)."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "done",
+                },
+            )
+
+        assert len(captured_spans) == 0
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=4000):
+            _dispatch(
+                "stop",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                },
+            )
+
+        names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
+        # LLM must come before Agent Stop so strict OTLP backends see the parent first.
+        assert names.index("Agent Response") < names.index("Agent Stop")
+
+    def test_stop_fallback_keeps_tokens_on_chain_when_no_deferred_llm(self, captured_spans, monkeypatch):
+        """No prior afterAgentResponse → CLI/sessionEnd-style behavior: Agent Stop carries tokens."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+            mock.patch("tracing.cursor.hooks.handlers.state_cleanup_generation"),
+        ):
+            _dispatch(
+                "stop",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_tokens": 25,
+                    "cache_write_tokens": 5,
+                    "model": "claude-sonnet-4.5",
+                    "status": "completed",
+                },
+            )
+
+        # Only the Agent Stop span is sent (no deferred LLM existed).
+        names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
+        assert names == ["Agent Stop"]
+        stop_attrs = _attrs(captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert stop_attrs["openinference.span.kind"]["stringValue"] == "CHAIN"
+        assert stop_attrs["llm.token_count.prompt"]["intValue"] == 100
+        assert stop_attrs["llm.token_count.completion"]["intValue"] == 50
+        assert stop_attrs["llm.token_count.cache_read"]["intValue"] == 25
+        assert stop_attrs["llm.token_count.cache_write"]["intValue"] == 5
+        assert stop_attrs["llm.token_count.total"]["intValue"] == 150
+        assert stop_attrs["llm.model_name"]["stringValue"] == "claude-sonnet-4.5"
+
+    def test_deferred_llm_dropped_when_stop_never_fires(self, captured_spans, monkeypatch):
+        """beforeSubmit + afterAgentResponse without stop: deferred LLM span is never sent."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=1000):
+            _dispatch(
+                "beforeSubmitPrompt",
+                {
+                    "hook_event_name": "beforeSubmitPrompt",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "prompt": "p",
+                },
+            )
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "hook_event_name": "afterAgentResponse",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "r",
+                },
+            )
+
+        # afterAgentResponse sends the deferred root, but no Agent Response LLM yet.
+        names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
+        assert "Agent Response" not in names
+
+    def test_stop_without_tokens_still_flushes_deferred_llm_without_token_attrs(self, captured_spans, monkeypatch):
+        """If the stop payload has no tokens, the flushed LLM span has no llm.token_count.*."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "done",
+                },
+            )
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=3000):
+            _dispatch(
+                "stop",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                },
+            )
+
+        spans = _spans_by_name(captured_spans)
+        assert "Agent Response" in spans
+        llm_attrs = _attrs(spans["Agent Response"][0])
+        for k in (
+            "llm.token_count.prompt",
+            "llm.token_count.completion",
+            "llm.token_count.cache_read",
+            "llm.token_count.cache_write",
+            "llm.token_count.total",
+        ):
+            assert k not in llm_attrs
+
+    def test_zero_token_count_not_treated_as_absent(self, captured_spans, monkeypatch):
+        """0 is a valid token count and must appear on the LLM span (no truthiness bugs)."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=1000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "done",
+                },
+            )
+            _dispatch(
+                "stop",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                },
+            )
+
+        spans = _spans_by_name(captured_spans)
+        llm_attrs = _attrs(spans["Agent Response"][0])
+        assert llm_attrs["llm.token_count.prompt"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.completion"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.cache_read"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.cache_write"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.total"]["intValue"] == 0
+
+    def test_session_end_token_routing_unchanged(self, captured_spans, monkeypatch):
+        """sessionEnd is NOT affected — tokens still attach to the Session End CHAIN span."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=9000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+            mock.patch("tracing.cursor.hooks.handlers.state_cleanup_generation"),
+        ):
+            _dispatch(
+                "sessionEnd",
+                {
+                    "conversation_id": "conv-end",
+                    "generation_id": "gen-end",
+                    "input_tokens": 200,
+                    "output_tokens": 75,
+                },
+            )
+
+        names = [s["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] for s in captured_spans]
+        assert names == ["Session End"]
+        attrs = _attrs(captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert attrs["llm.token_count.prompt"]["intValue"] == 200
+        assert attrs["llm.token_count.completion"]["intValue"] == 75
+        assert attrs["llm.token_count.total"]["intValue"] == 275
+
+    def test_deferred_llm_uses_recorded_parent_and_start_time_at_stop(self, captured_spans, monkeypatch):
+        """The flushed LLM span uses the parent and start_ms recorded at afterAgentResponse."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        # beforeSubmitPrompt records the root via gen_root_span_save (real disk).
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=1000):
+            _dispatch(
+                "beforeSubmitPrompt",
+                {
+                    "hook_event_name": "beforeSubmitPrompt",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "prompt": "p",
+                },
+            )
+
+        # Capture the root span id that beforeSubmitPrompt persisted.
+        from tracing.cursor.hooks.adapter import gen_root_span_get as real_get
+
+        root_span_id = real_get("gen-1")
+        assert root_span_id  # sanity
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2500):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "hook_event_name": "afterAgentResponse",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "r",
+                },
+            )
+
+        # stop runs at a much later timestamp — the LLM span must still use 2500.
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=99999):
+            _dispatch(
+                "stop",
+                {
+                    "hook_event_name": "stop",
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                },
+            )
+
+        spans = _spans_by_name(captured_spans)
+        llm_span = spans["Agent Response"][0]
+        assert llm_span["parentSpanId"] == root_span_id
+        assert llm_span["startTimeUnixNano"] == "2500000000"
+        assert llm_span["endTimeUnixNano"] == "2500000000"
+
+    def test_multiple_deferred_llms_only_most_recent_gets_token_counts(self, captured_spans, monkeypatch):
+        """Two afterAgentResponse events in one generation: each becomes an LLM span;
+        tokens only attach to the most recent (last pushed = first popped)."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=1000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "first response",
+                    "model_name": "claude-4",
+                },
+            )
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "response": "second response",
+                    "model_name": "claude-4",
+                },
+            )
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=3000):
+            _dispatch(
+                "stop",
+                {
+                    "conversation_id": "conv-1",
+                    "generation_id": "gen-1",
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                },
+            )
+
+        spans = _spans_by_name(captured_spans)
+        agent_response_spans = spans.get("Agent Response", [])
+        assert len(agent_response_spans) == 2
+
+        outputs = [_attrs(s).get("output.value", {}).get("stringValue") for s in agent_response_spans]
+        # Identify which span carries tokens; that one must be the most recent
+        # (second response). The other (first response) must have no token attrs.
+        token_idx = next(i for i, s in enumerate(agent_response_spans) if "llm.token_count.prompt" in _attrs(s))
+        no_token_idx = 1 - token_idx
+        assert outputs[token_idx] == "second response"
+        assert outputs[no_token_idx] == "first response"
+
+        with_tokens = _attrs(agent_response_spans[token_idx])
+        assert with_tokens["llm.token_count.prompt"]["intValue"] == 100
+        assert with_tokens["llm.token_count.completion"]["intValue"] == 20
+        assert with_tokens["llm.token_count.total"]["intValue"] == 120
+
+        without = _attrs(agent_response_spans[no_token_idx])
+        for k in (
+            "llm.token_count.prompt",
+            "llm.token_count.completion",
+            "llm.token_count.total",
+        ):
+            assert k not in without
+
+    def test_deferred_llm_carries_conversation_id_and_user_id(self, captured_spans, monkeypatch):
+        """The flushed LLM span includes cursor.conversation.id and user.id when present."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        # _resolve_user_id prefers env.user_id over payload user_email; clear env so
+        # the test exercises the payload-only branch deterministically across machines.
+        monkeypatch.setenv("ARIZE_USER_ID", "")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=1000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "conv-abc",
+                    "generation_id": "gen-1",
+                    "response": "r",
+                    "user_email": "alice@example.com",
+                },
+            )
+            _dispatch(
+                "stop",
+                {
+                    "conversation_id": "conv-abc",
+                    "generation_id": "gen-1",
+                },
+            )
+
+        spans = _spans_by_name(captured_spans)
+        llm_attrs = _attrs(spans["Agent Response"][0])
+        assert llm_attrs["session.id"]["stringValue"] == "conv-abc"
+        assert llm_attrs["cursor.conversation.id"]["stringValue"] == "conv-abc"
+        assert llm_attrs["user.id"]["stringValue"] == "alice@example.com"

@@ -94,21 +94,102 @@ verbose: false                      # ARIZE_VERBOSE env wins over this
 ax-trace doctor
 ```
 
-Pure-Go health check (works even when the venv is broken). `✓`/`✗` per check with remediation; non-zero exit on failure.
+If the user already has a `.cursor/hooks.json` with other hooks, merge the Arize entries into the existing arrays for each event.
 
-| Verdict | Meaning / fix |
-|---------|---------------|
-| `✗ venv` | Runtime missing/broken → `ax-trace add cursor` or `ax-trace update` |
-| `✗ settings:cursor` | `~/.cursor/hooks.json` missing or unparseable → re-run `ax-trace add cursor`, or fix JSON |
-| `✗ env:cursor` | No creds in env or config → `ax-trace config set harnesses.cursor.api_key ...` |
-| `✗ otlp_endpoint` | Endpoint unreachable → check network/endpoint |
-| all `✓` but no traces | Restart Cursor; see [Troubleshoot](#troubleshoot) |
+### Validate
 
-## Uninstall
+1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials.
+2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
+3. **Hooks active**: Verify `.cursor/hooks.json` exists in the project root and contains the Arize hook entries.
 
-```bash
-ax-trace uninstall --cursor   # remove Cursor tracing, keep the shared runtime
-ax-trace uninstall            # remove all harnesses + the shared runtime
+### Confirm
+
+Tell the user:
+- Config saved to `~/.arize/harness/config.yaml`
+- Cursor hooks activated via `.cursor/hooks.json`
+- Spans are sent directly to the backend from hooks — no background process needed
+- After saving, open a new Cursor session and traces will appear in their Phoenix UI or Arize AX dashboard under the project name
+- Mention `ARIZE_DRY_RUN=true` to test without sending data (set as env var before launching Cursor)
+- Mention `ARIZE_VERBOSE=true` for debug output
+- Errors are always written to `~/.arize/harness/logs/cursor.log`; set `ARIZE_VERBOSE=true` in the shell before launching Cursor to also capture routine hook activity
+
+## Hook Events
+
+### IDE Hooks
+
+Cursor IDE fires 15 hook events. Here's what each one traces:
+
+| Event | Span Name | Kind | Description |
+|-------|-----------|------|-------------|
+| `sessionStart` | Session Start | CHAIN | Root span for the conversation; captures session metadata |
+| `beforeSubmitPrompt` | User Prompt | CHAIN | Root span for the turn; captures prompt text, model, attachments |
+| `afterAgentResponse` | Agent Response | LLM | LLM response text and model name; span is deferred and sent at end-of-turn (on `stop`) so it can carry per-turn token usage |
+| `afterAgentThought` | Agent Thinking | CHAIN | Agent thinking/reasoning text |
+| `beforeShellExecution` | (state push) | -- | Saves command and start time to disk state |
+| `afterShellExecution` | Shell | TOOL | Merged span with command input and output |
+| `beforeMCPExecution` | (state push) | -- | Saves tool name, input, and start time |
+| `afterMCPExecution` | MCP: {tool} | TOOL | Merged span with tool input and result |
+| `beforeReadFile` | Read File | TOOL | File path being read |
+| `afterFileEdit` | File Edit | TOOL | File path and edit details |
+| `beforeTabFileRead` | Tab Read File | TOOL | Tab file read (file path) |
+| `afterTabFileEdit` | Tab File Edit | TOOL | Tab file edit (path and edits) |
+| `postToolUse` | Tool: {name} | TOOL | Generic tool span; postToolUse is suppressed for tools with a dedicated handler (Shell, Read, File Edit, Tab ops, MCP) to avoid duplicate spans |
+| `stop` | Agent Stop | CHAIN | Per-turn stop event with status / loop_count / duration metadata; per-turn token counts are attached to the deferred `Agent Response` (LLM) span when it is sent at end-of-turn |
+| `sessionEnd` | Session End | CHAIN | End-of-session span with duration and final status |
+
+Shell and MCP events use a disk-backed state stack to merge before/after context into single spans with both input and output.
+
+### CLI Hooks
+
+Cursor CLI currently emits a smaller hook surface than the IDE. The supported
+CLI hooks in this package are:
+
+- `sessionStart`
+- `sessionEnd`
+- `beforeShellExecution`
+- `afterShellExecution`
+- `afterFileEdit`
+- `postToolUse`
+- `stop`
+
+Cursor CLI hooks do not currently emit afterAgentResponse or afterAgentThought.
+
+Full Cursor CLI assistant and thinking coverage requires parsing --output-format stream-json, which is out of scope for this change.
+
+### What We Capture
+
+- **`sessionStart`** produces a `Session Start` CHAIN span that acts as the root for the conversation.
+- **`sessionEnd`** produces a `Session End` CHAIN span with `cursor.session.duration_ms`, `cursor.session.final_status`, `cursor.session.reason`, and end-of-session token counts when available.
+- **`stop`** produces an `Agent Stop` CHAIN span carrying per-turn status / loop_count / duration metadata. On the Cursor IDE, per-turn token usage is attached to the `Agent Response` (LLM) span instead: that span is deferred from `afterAgentResponse` and sent at end-of-turn when `stop` fires, populated from the `stop` payload with `llm.token_count.prompt`, `llm.token_count.completion`, `llm.token_count.cache_read`, `llm.token_count.cache_write`, `llm.token_count.total`, and `llm.model_name`. Cursor CLI does not emit `afterAgentResponse`, so there is no LLM span to attach to; for the CLI path, token counts remain on the `Agent Stop` / `Session End` CHAIN span as before.
+- **`postToolUse`** produces a generic `Tool: <name>` span ONLY for tools without a dedicated handler. Shell, file read/edit, tab file ops, and MCP execution are handled by their dedicated `before*`/`after*` events; the generic postToolUse is suppressed for these to avoid duplicate spans.
+
+Every span includes `cursor.conversation.id` as a span attribute. Since `sessionStart` and per-turn activity use different `trace_id` values, `cursor.conversation.id` is the recommended cross-trace join key in Arize. To gather all activity for a Cursor session regardless of trace, filter spans by `attributes.cursor.conversation.id = "<id>"`.
+
+### Hooks JSON Example (IDE + CLI)
+
+When configuring `.cursor/hooks.json`, include both IDE and CLI events:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "sessionEnd": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "beforeSubmitPrompt": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "afterAgentResponse": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "afterAgentThought": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "beforeShellExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "afterShellExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "beforeMCPExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "afterMCPExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "beforeReadFile": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "afterFileEdit": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "stop": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "beforeTabFileRead": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "afterTabFileEdit": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
+    "postToolUse": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }]
+  }
+}
 ```
 
 Removes the Arize hook entries from `~/.cursor/hooks.json` and the `harnesses.cursor` config entry.

@@ -13,6 +13,7 @@ from core.common import (
     FileLock,
     StateManager,
     _attrs_to_otlp,
+    _otlp_to_phoenix_payload,
     _resolve_kind,
     _to_otlp_attr_value,
     build_multi_span,
@@ -713,6 +714,100 @@ class TestBuildMultiSpan:
         assert scope["name"] == "override-scope"
 
 
+# ── Phoenix REST payload translation tests ────────────────────────────────
+
+
+class TestPhoenixPayloadTranslation:
+    def test_translates_otlp_payload_to_phoenix_create_spans_body(self):
+        payload = {
+            "resourceSpans": [
+                {
+                    "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "svc"}}]},
+                    "scopeSpans": [
+                        {
+                            "scope": {"name": "scope"},
+                            "spans": [
+                                {
+                                    "traceId": "t" * 32,
+                                    "spanId": "s" * 16,
+                                    "parentSpanId": "p" * 16,
+                                    "name": "tool-call",
+                                    "kind": 1,
+                                    "startTimeUnixNano": "1000000000",
+                                    "endTimeUnixNano": "1500000000",
+                                    "attributes": [
+                                        {"key": "openinference.span.kind", "value": {"stringValue": "TOOL"}},
+                                        {"key": "count", "value": {"intValue": "3"}},
+                                    ],
+                                    "events": [
+                                        {
+                                            "name": "exception",
+                                            "timeUnixNano": "1250000000",
+                                            "attributes": [{"key": "message", "value": {"stringValue": "boom"}}],
+                                        }
+                                    ],
+                                    "status": {"code": 2, "message": "failed"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = _otlp_to_phoenix_payload(payload)
+
+        assert result == {
+            "data": [
+                {
+                    "name": "tool-call",
+                    "context": {"trace_id": "t" * 32, "span_id": "s" * 16},
+                    "span_kind": "TOOL",
+                    "start_time": "1970-01-01T00:00:01.000000Z",
+                    "end_time": "1970-01-01T00:00:01.500000Z",
+                    "status_code": "ERROR",
+                    "status_message": "failed",
+                    "attributes": {
+                        "service.name": "svc",
+                        "openinference.span.kind": "TOOL",
+                        "count": 3,
+                    },
+                    "parent_id": "p" * 16,
+                    "events": [
+                        {
+                            "name": "exception",
+                            "timestamp": "1970-01-01T00:00:01.250000Z",
+                            "attributes": {"message": "boom"},
+                        }
+                    ],
+                }
+            ]
+        }
+
+    def test_rejects_missing_phoenix_span_timestamp(self):
+        payload = {
+            "resourceSpans": [
+                {
+                    "scopeSpans": [
+                        {
+                            "spans": [
+                                {
+                                    "traceId": "t" * 32,
+                                    "spanId": "s" * 16,
+                                    "name": "missing-time",
+                                    "endTimeUnixNano": "2000000000",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="Invalid Unix nanosecond timestamp"):
+            _otlp_to_phoenix_payload(payload)
+
+
 # ── EnvConfig property tests ──────────────────────────────────────────────
 
 
@@ -801,8 +896,27 @@ class TestSendSpan:
     _SAMPLE_SPAN = {
         "resourceSpans": [
             {
-                "resource": {"attributes": []},
-                "scopeSpans": [{"scope": {"name": "test"}, "spans": [{"name": "test-span"}]}],
+                "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "test-service"}}]},
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "test"},
+                        "spans": [
+                            {
+                                "traceId": "0123456789abcdef0123456789abcdef",
+                                "spanId": "abcdef1234567890",
+                                "name": "test-span",
+                                "kind": 1,
+                                "startTimeUnixNano": "1000000000",
+                                "endTimeUnixNano": "2000000000",
+                                "attributes": [
+                                    {"key": "openinference.span.kind", "value": {"stringValue": "LLM"}},
+                                    {"key": "input.value", "value": {"stringValue": "hello"}},
+                                ],
+                                "status": {"code": 1},
+                            }
+                        ],
+                    }
+                ],
             }
         ]
     }
@@ -880,7 +994,27 @@ class TestSendSpan:
         assert req.get_header("Authorization") == "Bearer test-key"
         assert req.method == "POST"
         body = json.loads(req.data)
-        assert body == self._SAMPLE_SPAN
+        assert body == {
+            "data": [
+                {
+                    "name": "test-span",
+                    "context": {
+                        "trace_id": "0123456789abcdef0123456789abcdef",
+                        "span_id": "abcdef1234567890",
+                    },
+                    "span_kind": "LLM",
+                    "start_time": "1970-01-01T00:00:01.000000Z",
+                    "end_time": "1970-01-01T00:00:02.000000Z",
+                    "status_code": "OK",
+                    "status_message": "",
+                    "attributes": {
+                        "service.name": "test-service",
+                        "openinference.span.kind": "LLM",
+                        "input.value": "hello",
+                    },
+                }
+            ]
+        }
 
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
