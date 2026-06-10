@@ -38,7 +38,7 @@ def _read_stdin(event: str) -> dict:
     """Read JSON from stdin. Returns {} on empty/invalid input.
 
     When ARIZE_TRACE_DEBUG=true, the parsed payload is written to
-    ~/.arize/harness/state/debug/copilot_<event>_<ts>.yaml so we can
+    ~/.arize/harness/state/debug/copilot_<event>_<ts>.json so we can
     inspect the actual field schema Copilot is sending.
     """
     try:
