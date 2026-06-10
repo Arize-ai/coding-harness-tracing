@@ -54,7 +54,7 @@ def resolve_session(input_json: dict) -> StateManager:
         key = f"unknown-{os.getpid()}"
         log(f"resolve_session: no session_id in payload or env; using {key}")
 
-    state_file = STATE_DIR / f"state_{key}.yaml"
+    state_file = STATE_DIR / f"state_{key}.json"
     lock_path = STATE_DIR / f".lock_{key}"
 
     sm = StateManager(state_dir=STATE_DIR, state_file=state_file, lock_path=lock_path)
@@ -96,7 +96,7 @@ def gc_stale_state_files() -> None:
     if not STATE_DIR.is_dir():
         return
     cutoff = time.time() - 86400
-    for f in STATE_DIR.glob("state_*.yaml"):
+    for f in STATE_DIR.glob("state_*.json"):
         try:
             if f.stat().st_mtime < cutoff:
                 f.unlink(missing_ok=True)
