@@ -2,7 +2,7 @@
 """Arize Copilot Tracing Plugin - Interactive Setup.
 
 Configures tracing for GitHub Copilot in both VS Code and CLI modes.
-Writes config.yaml to ~/.arize/harness/config.yaml and installs hooks
+Writes config.json to ~/.arize/harness/config.json and installs hooks
 into .github/hooks/ (project-local).
 
 The ``arize-setup-copilot`` entry point calls ``main()`` here, which runs the

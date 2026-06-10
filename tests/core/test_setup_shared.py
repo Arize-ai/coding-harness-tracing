@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -27,7 +27,7 @@ def fake_install(tmp_path, monkeypatch):
 
     monkeypatch.setattr(setup_mod, "INSTALL_DIR", install_dir)
     monkeypatch.setattr(setup_mod, "VENV_DIR", install_dir / "venv")
-    monkeypatch.setattr(setup_mod, "CONFIG_FILE", install_dir / "config.yaml")
+    monkeypatch.setattr(setup_mod, "CONFIG_FILE", install_dir / "config.json")
     monkeypatch.setattr(setup_mod, "BIN_DIR", install_dir / "bin")
     monkeypatch.setattr(setup_mod, "RUN_DIR", install_dir / "run")
     monkeypatch.setattr(setup_mod, "LOG_DIR", install_dir / "logs")
@@ -37,14 +37,14 @@ def fake_install(tmp_path, monkeypatch):
     import core.constants as c
 
     monkeypatch.setattr(c, "BASE_DIR", install_dir)
-    monkeypatch.setattr(c, "CONFIG_FILE", install_dir / "config.yaml")
+    monkeypatch.setattr(c, "CONFIG_FILE", install_dir / "config.json")
 
     return install_dir
 
 
 @pytest.fixture
 def populated_config(fake_install):
-    """Write a config.yaml with one harness entry in the flat schema."""
+    """Write a config.json with one harness entry in the flat schema."""
     config = {
         "harnesses": {
             "claude-code": {
@@ -55,10 +55,10 @@ def populated_config(fake_install):
             },
         },
     }
-    config_path = fake_install / "config.yaml"
+    config_path = fake_install / "config.json"
     fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        json.dump(config, f, indent=2)
     return config
 
 
@@ -171,10 +171,10 @@ class TestMergeHarnessEntry:
 
         merge_harness_entry("copilot", "my-copilot")
 
-        config_path = fake_install / "config.yaml"
+        config_path = fake_install / "config.json"
         assert config_path.exists()
         with open(config_path) as f:
-            config = yaml.safe_load(f)
+            config = json.load(f)
         assert config["harnesses"]["copilot"]["project_name"] == "my-copilot"
 
     def test_preserves_existing_harness(self, fake_install, populated_config):
@@ -182,8 +182,8 @@ class TestMergeHarnessEntry:
 
         merge_harness_entry("copilot", "my-copilot")
 
-        with open(fake_install / "config.yaml") as f:
-            config = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            config = json.load(f)
         # Original harness preserved
         assert config["harnesses"]["claude-code"]["project_name"] == "claude-code"
         assert config["harnesses"]["claude-code"]["target"] == "phoenix"
@@ -200,8 +200,8 @@ class TestMergeHarnessEntry:
             credentials={"endpoint": "otlp.arize.com:443", "api_key": "ak-xxx", "space_id": "sp-1"},
         )
 
-        with open(fake_install / "config.yaml") as f:
-            config = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            config = json.load(f)
         entry = config["harnesses"]["copilot"]
         assert entry["target"] == "arize"
         assert entry["endpoint"] == "otlp.arize.com:443"
@@ -215,7 +215,7 @@ class TestMergeHarnessEntry:
 
         merge_harness_entry("copilot", "my-copilot")
 
-        assert not (fake_install / "config.yaml").exists()
+        assert not (fake_install / "config.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +235,8 @@ class TestRemoveHarnessEntry:
 
         remove_harness_entry("claude-code")
 
-        with open(fake_install / "config.yaml") as f:
-            config = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            config = json.load(f)
         assert "claude-code" not in config.get("harnesses", {})
 
     def test_noop_missing_key(self, fake_install, populated_config):
@@ -244,8 +244,8 @@ class TestRemoveHarnessEntry:
 
         remove_harness_entry("nonexistent")
 
-        with open(fake_install / "config.yaml") as f:
-            config = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            config = json.load(f)
         # Original entry still present
         assert "claude-code" in config["harnesses"]
 
@@ -255,8 +255,8 @@ class TestRemoveHarnessEntry:
 
         remove_harness_entry("claude-code")
 
-        with open(fake_install / "config.yaml") as f:
-            config = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            config = json.load(f)
         # Entry should still be there
         assert "claude-code" in config["harnesses"]
 
@@ -409,7 +409,7 @@ class TestWipeSharedRuntime:
 
         # Create some content
         (fake_install / "bin").mkdir(exist_ok=True)
-        (fake_install / "config.yaml").write_text("test: true")
+        (fake_install / "config.json").write_text('{"test": true}')
 
         wipe_shared_runtime()
 
@@ -429,12 +429,12 @@ class TestWipeSharedRuntime:
         monkeypatch.setenv("ARIZE_DRY_RUN", "true")
         from core.setup.wipe import wipe_shared_runtime
 
-        (fake_install / "config.yaml").write_text("test: true")
+        (fake_install / "config.json").write_text('{"test": true}')
 
         wipe_shared_runtime()
 
         assert fake_install.exists()
-        assert (fake_install / "config.yaml").exists()
+        assert (fake_install / "config.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +552,7 @@ class TestWriteConfigFlat:
     def test_write_config_writes_flat_arize_entry(self, fake_install):
         from core.setup import write_config
 
-        config_path = str(fake_install / "config.yaml")
+        config_path = str(fake_install / "config.json")
         write_config(
             "arize",
             {"endpoint": "otlp.arize.com:443", "api_key": "ak-1", "space_id": "sp-1"},
@@ -562,7 +562,7 @@ class TestWriteConfigFlat:
         )
 
         with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = json.load(f)
         entry = cfg["harnesses"]["claude-code"]
         assert entry == {
             "project_name": "claude-code",
@@ -577,7 +577,7 @@ class TestWriteConfigFlat:
     def test_write_config_writes_flat_phoenix_entry(self, fake_install):
         from core.setup import write_config
 
-        config_path = str(fake_install / "config.yaml")
+        config_path = str(fake_install / "config.json")
         write_config(
             "phoenix",
             {"endpoint": "http://localhost:6006", "api_key": ""},
@@ -587,7 +587,7 @@ class TestWriteConfigFlat:
         )
 
         with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = json.load(f)
         entry = cfg["harnesses"]["cursor"]
         assert entry == {
             "project_name": "cursor",
@@ -601,7 +601,7 @@ class TestWriteConfigFlat:
     def test_write_config_writes_collector_for_codex(self, fake_install):
         from core.setup import write_config
 
-        config_path = str(fake_install / "config.yaml")
+        config_path = str(fake_install / "config.json")
         write_config(
             "phoenix",
             {"endpoint": "http://localhost:6006", "api_key": ""},
@@ -612,7 +612,7 @@ class TestWriteConfigFlat:
         )
 
         with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = json.load(f)
         assert cfg["harnesses"]["codex"]["collector"] == {"host": "127.0.0.1", "port": 4318}
         # collector must NOT be at top level
         assert "collector" not in cfg
@@ -620,7 +620,7 @@ class TestWriteConfigFlat:
     def test_write_config_preserves_existing_harnesses(self, fake_install):
         from core.setup import write_config
 
-        config_path = str(fake_install / "config.yaml")
+        config_path = str(fake_install / "config.json")
         write_config(
             "phoenix",
             {"endpoint": "http://localhost:6006", "api_key": ""},
@@ -637,7 +637,7 @@ class TestWriteConfigFlat:
         )
 
         with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = json.load(f)
         assert "claude-code" in cfg["harnesses"]
         assert "copilot" in cfg["harnesses"]
         assert cfg["harnesses"]["claude-code"]["target"] == "phoenix"
@@ -646,7 +646,7 @@ class TestWriteConfigFlat:
     def test_write_config_strips_top_level_backend_and_collector(self, fake_install):
         from core.setup import write_config
 
-        config_path = str(fake_install / "config.yaml")
+        config_path = str(fake_install / "config.json")
         # Pre-write a config with legacy top-level keys
         legacy = {
             "backend": {"target": "phoenix"},
@@ -654,7 +654,7 @@ class TestWriteConfigFlat:
             "harnesses": {},
         }
         with open(config_path, "w") as f:
-            yaml.safe_dump(legacy, f)
+            json.dump(legacy, f, indent=2)
 
         write_config(
             "phoenix",
@@ -665,7 +665,7 @@ class TestWriteConfigFlat:
         )
 
         with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = json.load(f)
         assert "backend" not in cfg
         assert "collector" not in cfg
         assert "cursor" in cfg["harnesses"]
@@ -683,8 +683,8 @@ class TestMergeHarnessEntryFlat:
 
         merge_harness_entry("claude-code", "renamed-project")
 
-        with open(fake_install / "config.yaml") as f:
-            cfg = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            cfg = json.load(f)
         entry = cfg["harnesses"]["claude-code"]
         assert entry["project_name"] == "renamed-project"
         # Other fields preserved
@@ -702,8 +702,8 @@ class TestMergeHarnessEntryFlat:
             credentials={"endpoint": "otlp.arize.com:443", "api_key": "ak-new", "space_id": "sp-new"},
         )
 
-        with open(fake_install / "config.yaml") as f:
-            cfg = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            cfg = json.load(f)
         entry = cfg["harnesses"]["claude-code"]
         assert entry["target"] == "arize"
         assert entry["api_key"] == "ak-new"
@@ -715,10 +715,10 @@ class TestMergeHarnessEntryFlat:
 
         merge_harness_entry("copilot", "my-copilot")
 
-        config_path = fake_install / "config.yaml"
+        config_path = fake_install / "config.json"
         assert config_path.exists()
         with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+            cfg = json.load(f)
         assert cfg == {"harnesses": {"copilot": {"project_name": "my-copilot"}}}
 
 
@@ -733,8 +733,8 @@ class TestRemoveHarnessEntryFlat:
 
         remove_harness_entry("claude-code")
 
-        with open(fake_install / "config.yaml") as f:
-            cfg = yaml.safe_load(f)
+        with open(fake_install / "config.json") as f:
+            cfg = json.load(f)
         assert "claude-code" not in cfg.get("harnesses", {})
 
 

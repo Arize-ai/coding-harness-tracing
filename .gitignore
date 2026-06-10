@@ -43,7 +43,7 @@ entities.json
 
 # Runtime artifacts (generated at install/run time, not versioned)
 state/
-config.yaml
+config.json
 logs/
 run/
 .arize-tmp-traces/
