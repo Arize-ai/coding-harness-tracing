@@ -1,0 +1,63 @@
+name: Bug Report
+description: Report a bug in coding-harness-tracing
+title: "[BUG]: "
+labels: [bug, triage]
+body:
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      description: Which coding-assistant harness is affected?
+      options:
+        - claude
+        - codex
+        - cursor
+        - copilot
+        - gemini
+        - kiro
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      description: Which tracing backend are you sending spans to?
+      options:
+        - Arize AX
+        - Phoenix
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Installed package/plugin version (if known).
+      placeholder: e.g. 0.3.1
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: OS, Python version, install method (install.sh / marketplace / pip), logs, screenshots, etc.
