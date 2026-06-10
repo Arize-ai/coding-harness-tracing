@@ -147,6 +147,38 @@ class TestStateStack:
         assert isinstance(data, list)
         assert len(data) == 2
 
+    def test_stack_file_is_pretty_indented(self):
+        """JSON output uses indent=2 per the project's serialization convention."""
+        adapter.state_push("pretty", {"a": 1, "b": [1, 2]})
+        stack_file = adapter.STATE_DIR / "pretty.stack.json"
+        text = stack_file.read_text()
+        # indented JSON contains newlines between entries
+        assert "\n" in text
+        # confirm round-trip
+        assert json.loads(text) == [{"a": 1, "b": [1, 2]}]
+
+    def test_push_then_pop_roundtrip_with_nested(self):
+        """JSON encoder must round-trip nested dicts/lists with the same fidelity YAML did."""
+        payload = {"cmd": "echo hi", "env": {"FOO": "bar"}, "args": ["a", "b", "c"]}
+        adapter.state_push("nested", payload)
+        popped = adapter.state_pop("nested")
+        assert popped == payload
+
+    def test_empty_file_treated_as_empty_stack(self):
+        """An empty stack file should be treated as []. push must still succeed."""
+        empty = adapter.STATE_DIR / "empty.stack.json"
+        empty.write_text("")
+        # push should not raise — empty content → JSONDecodeError → fallback to []
+        adapter.state_push("empty", {"k": 1})
+        assert json.loads(empty.read_text()) == [{"k": 1}]
+
+    def test_corrupt_file_on_push_resets_to_list(self):
+        """If existing file is corrupt JSON, push resets list and appends."""
+        corrupt = adapter.STATE_DIR / "corrupt.stack.json"
+        corrupt.write_text("{not json")
+        adapter.state_push("corrupt", {"k": "v"})
+        assert json.loads(corrupt.read_text()) == [{"k": "v"}]
+
 
 # ── gen_root_span ─────────────────────────────────────────────────────────
 
