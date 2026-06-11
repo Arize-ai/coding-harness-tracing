@@ -19,6 +19,7 @@ single source of truth for the session.
 Input contract: JSON as ``sys.argv[1]`` (NOT stdin -- Codex passes notify
 JSON as a CLI argument). No stdout response expected.
 """
+
 from __future__ import annotations
 
 import json
@@ -344,6 +345,8 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
     user_prompt = redact_content(env.log_prompts, turn.get("user_prompt") or "")
     assistant_output = redact_content(env.log_prompts, turn.get("assistant_output") or "")
     final_output = assistant_output or "(No response)"
+    cwd = turn.get("cwd") or ""
+    workspace = Path(cwd).name if cwd else ""
 
     attrs: dict = {
         "session.id": thread_id,
@@ -354,6 +357,10 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
         "output.value": final_output,
         "codex.thread_id": thread_id,
     }
+    if cwd:
+        attrs["codex.cwd"] = cwd
+    if workspace:
+        attrs["codex.workspace"] = workspace
     if turn_id:
         attrs["codex.turn_id"] = turn_id
     if user_id:
@@ -393,6 +400,10 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
             "output.value": redact_content(env.log_tool_content, output_raw),
             "session.id": thread_id,
         }
+        if cwd:
+            tool_attrs["codex.cwd"] = cwd
+        if workspace:
+            tool_attrs["codex.workspace"] = workspace
         if entry.get("call_id"):
             tool_attrs["codex.tool.call_id"] = entry["call_id"]
         child_start = entry.get("start_ts") or turn["turn_start_ms"]

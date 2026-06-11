@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Tests for core.common — FileLock, StateManager, and span building."""
+
+import io
 import json
 import threading
 import time
@@ -1058,6 +1060,30 @@ class TestSendSpan:
 
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
+    def test_phoenix_http_error_logs_response_body(self, mock_urlopen, mock_resolve, capsys, monkeypatch):
+        """Phoenix HTTP errors include the response body in logs."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "phoenix",
+            "endpoint": "http://phoenix:6006",
+            "api_key": "",
+            "project_name": "default",
+        }
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://phoenix:6006/v1/projects/default/spans",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(b'{"error":"bad span"}'),
+        )
+
+        assert send_span(self._SAMPLE_SPAN) is False
+        assert '{"error":"bad span"}' in capsys.readouterr().err
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
     def test_arize_direct_send(self, mock_urlopen, mock_resolve, monkeypatch):
         """send_span sends directly to Arize HTTP/JSON endpoint."""
         monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
@@ -1106,6 +1132,31 @@ class TestSendSpan:
         mock_urlopen.side_effect = urllib.error.URLError("connection refused")
 
         assert send_span(self._SAMPLE_SPAN) is False
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_arize_http_error_logs_response_body(self, mock_urlopen, mock_resolve, capsys, monkeypatch):
+        """Arize HTTP errors include the response body in logs."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "arize",
+            "api_key": "key",
+            "space_id": "space",
+            "endpoint": "otlp.arize.com:443",
+            "project_name": "proj",
+        }
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://otlp.arize.com:443/v1/traces",
+            500,
+            "Internal Server Error",
+            {},
+            io.BytesIO(b'{"code":13,"message":"unable to validate authorization from span"}'),
+        )
+
+        assert send_span(self._SAMPLE_SPAN) is False
+        assert "unable to validate authorization from span" in capsys.readouterr().err
 
     @mock.patch("core.common.resolve_backend")
     def test_no_backend_returns_false(self, mock_resolve, monkeypatch):
