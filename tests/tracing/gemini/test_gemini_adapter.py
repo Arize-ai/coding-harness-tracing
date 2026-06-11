@@ -13,7 +13,7 @@ import time
 import pytest
 import yaml
 
-from core.common import StateManager
+from core.common import StateManager, env
 
 # ---------------------------------------------------------------------------
 # We import the adapter module itself so we can monkeypatch its module-level
@@ -224,8 +224,6 @@ class TestEnsureSessionInitialized:
         monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
         monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
 
-        import core.common
-
         monkeypatch.setattr(
             "core.config.load_config",
             lambda config_path=None: {
@@ -233,13 +231,13 @@ class TestEnsureSessionInitialized:
                 "harnesses": {adapter.SERVICE_NAME: {"user_id": "scoped@x"}},
             },
         )
-        core.common.env.__dict__.pop("_top_level_config", None)
+        env.__dict__.pop("_top_level_config", None)
         try:
             sm = self._make_state(gemini_state_dir, "user-scoped")
             adapter.ensure_session_initialized(sm, {})
             assert sm.get("user_id") == "scoped@x"
         finally:
-            core.common.env.__dict__.pop("_top_level_config", None)
+            env.__dict__.pop("_top_level_config", None)
 
 
 # ── gc_stale_state_files tests ───────────────────────────────────────────────
