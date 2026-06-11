@@ -358,7 +358,7 @@ class TestBuildAndSendSpans:
             "user_prompt": "hi",
             "assistant_output": "hello",
             "model": "gpt-5.5",
-            "cwd": "/x",
+            "cwd": "/x/workspace",
             "permission_mode": "on-request",
             "sandbox_mode": "workspace-write",
             "token_usage": {
@@ -394,11 +394,15 @@ class TestBuildAndSendSpans:
         assert parent_attrs["llm.model_name"]["stringValue"] == "gpt-5.5"
         assert parent_attrs["codex.approval_mode"]["stringValue"] == "on-request"
         assert parent_attrs["codex.sandbox_mode"]["stringValue"] == "workspace-write"
+        assert parent_attrs["codex.cwd"]["stringValue"] == "/x/workspace"
+        assert parent_attrs["codex.workspace"]["stringValue"] == "workspace"
         assert parent_attrs["llm.token_count.total"]["intValue"] == 15
 
         child_attrs = _attrs_of_span(spans[1])
         assert child_attrs["tool.name"]["stringValue"] == "exec_command"
         assert child_attrs["codex.tool.call_id"]["stringValue"] == "c1"
+        assert child_attrs["codex.cwd"]["stringValue"] == "/x/workspace"
+        assert child_attrs["codex.workspace"]["stringValue"] == "workspace"
         assert child_attrs["input.value"]["stringValue"] == '{"cmd":"ls"}'
         assert child_attrs["output.value"]["stringValue"] == "ok"
 
