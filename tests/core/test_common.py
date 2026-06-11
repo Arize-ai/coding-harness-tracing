@@ -850,14 +850,13 @@ class TestLoggingFlagPrecedence:
 
     def _patch_config(self, monkeypatch, block):
         """Patch core.config.load_config so _Env._logging_config returns *block*."""
-        import core.common
 
         monkeypatch.setattr(
             "core.config.load_config",
             lambda config_path=None: {"logging": block} if block is not None else {},
         )
         # Drop the cached value so the next access re-reads.
-        core.common.env.__dict__.pop("_logging_config", None)
+        env.__dict__.pop("_logging_config", None)
 
     def test_default_true_when_nothing_set(self, monkeypatch):
         self._patch_config(monkeypatch, None)
@@ -1729,10 +1728,9 @@ class TestBuildSpanCustomAttributes:
         assert attrs["cost_center"] == {"intValue": 4021}
 
     def test_handler_set_attr_not_overwritten(self, monkeypatch):
-        import core.common
 
         monkeypatch.setattr(
-            core.common.env,
+            env,
             "custom_attributes",
             lambda service_name="": {"project.name": "from-custom"},
         )
@@ -1763,10 +1761,9 @@ class TestBuildSpanCustomAttributes:
         assert set(attrs.keys()) == {"project.name", "user.id"}
 
     def test_caller_attrs_dict_not_mutated(self, monkeypatch):
-        import core.common
 
         monkeypatch.setattr(
-            core.common.env,
+            env,
             "custom_attributes",
             lambda service_name="": {"team": "payments"},
         )
@@ -1783,7 +1780,6 @@ class TestBuildSpanCustomAttributes:
         assert caller_attrs == {"project.name": "p"}
 
     def test_resolver_receives_service_name(self, monkeypatch):
-        import core.common
 
         seen = {}
 
@@ -1791,7 +1787,7 @@ class TestBuildSpanCustomAttributes:
             seen["service_name"] = service_name
             return {}
 
-        monkeypatch.setattr(core.common.env, "custom_attributes", fake)
+        monkeypatch.setattr(env, "custom_attributes", fake)
         build_span(
             name="t",
             kind="LLM",
