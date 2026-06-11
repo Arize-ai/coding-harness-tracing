@@ -1612,10 +1612,8 @@ class TestCustomAttributes:
         _env.__dict__.pop("_top_level_config", None)
 
     def _patch_config(self, monkeypatch, cfg):
-        import core.common
-
         monkeypatch.setattr("core.config.load_config", lambda config_path=None: cfg or {})
-        core.common.env.__dict__.pop("_top_level_config", None)
+        env.__dict__.pop("_top_level_config", None)
 
     def test_nothing_set_returns_empty(self, monkeypatch):
         self._patch_config(monkeypatch, {})
@@ -1713,10 +1711,8 @@ class TestBuildSpanCustomAttributes:
         return {a["key"]: a["value"] for a in attrs}
 
     def test_custom_attrs_appear_in_built_span(self, monkeypatch):
-        import core.common
-
         monkeypatch.setattr(
-            core.common.env,
+            env,
             "custom_attributes",
             lambda service_name="": {"team": "payments", "cost_center": 4021},
         )
@@ -1753,9 +1749,7 @@ class TestBuildSpanCustomAttributes:
         assert attrs["project.name"] == {"stringValue": "from-handler"}
 
     def test_empty_resolver_is_noop(self, monkeypatch):
-        import core.common
-
-        monkeypatch.setattr(core.common.env, "custom_attributes", lambda service_name="": {})
+        monkeypatch.setattr(env, "custom_attributes", lambda service_name="": {})
         result = build_span(
             name="t",
             kind="LLM",
@@ -1826,10 +1820,8 @@ class TestGetUserId:
         _env.__dict__.pop("_top_level_config", None)
 
     def _patch_config(self, monkeypatch, cfg):
-        import core.common
-
         monkeypatch.setattr("core.config.load_config", lambda config_path=None: cfg or {})
-        core.common.env.__dict__.pop("_top_level_config", None)
+        env.__dict__.pop("_top_level_config", None)
 
     def test_nothing_set_returns_empty(self, monkeypatch):
         self._patch_config(monkeypatch, {})
