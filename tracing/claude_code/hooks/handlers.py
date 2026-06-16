@@ -6,6 +6,7 @@ entry point registered in pyproject.toml [project.scripts].
 """
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from core.common import (
@@ -346,16 +347,58 @@ def _handle_user_prompt_submit(input_json: dict) -> None:
         state.set("trace_start_line", "0")
 
 
+def _usage_int(usage: dict, key: str) -> int:
+    """Read an int token count from a usage dict, treating non-ints as 0."""
+    val = usage.get(key, 0)
+    return val if isinstance(val, int) else 0
+
+
+@dataclass
+class _TokenUsage:
+    """Token counts parsed from a transcript.
+
+    ``prompt`` is the OpenInference prompt total: it includes *all* input
+    subtypes (uncached input + cache reads + cache writes), per the Arize/
+    Phoenix cost model where the base "input" portion is derived as
+    ``prompt - cache_read - cache_write``. ``cache_read`` and ``cache_write``
+    are therefore subsets of ``prompt``, surfaced separately so the cost
+    engine can price them at their own (much cheaper) rates instead of the
+    full input rate. Without the breakdown, prompt-cache tokens are billed as
+    full-price input, over-reporting cost ~3-4x for heavily-cached agent runs.
+    """
+
+    prompt: int = 0
+    completion: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+
+    def token_count_attrs(self) -> dict:
+        """Return OpenInference token-count attributes for span emission.
+
+        Cache detail attributes are only included when non-zero to avoid
+        cluttering spans for uncached calls.
+        """
+        attrs: dict = {
+            "llm.token_count.prompt": self.prompt,
+            "llm.token_count.completion": self.completion,
+            "llm.token_count.total": self.prompt + self.completion,
+        }
+        if self.cache_read:
+            attrs["llm.token_count.prompt_details.cache_read"] = self.cache_read
+        if self.cache_write:
+            attrs["llm.token_count.prompt_details.cache_write"] = self.cache_write
+        return attrs
+
+
 def _scan_transcript_for_usage(
     transcript: Path,
     start_line: int,
-) -> "tuple[str, int, int, str]":
+) -> "tuple[str, _TokenUsage, str]":
     """Walk the transcript JSONL from *start_line* forward and return:
-    (combined_text, in_tokens, out_tokens, model_name)
+    (combined_text, usage, model_name)
     """
     output = ""
-    in_tokens = 0
-    out_tokens = 0
+    usage_totals = _TokenUsage()
     model = ""
 
     with open(transcript) as f:
@@ -387,16 +430,22 @@ def _scan_transcript_for_usage(
 
             model = msg.get("model", "") or model
 
+            # Anthropic reports input_tokens (uncached), cache_read_input_tokens,
+            # and cache_creation_input_tokens as disjoint buckets. The prompt
+            # total is their sum (the OpenInference total), while the two cache
+            # buckets are tracked separately and surfaced as prompt_details so
+            # downstream cost pricing can apply the cheaper cache-read /
+            # cache-write rates instead of the full input rate.
             usage = msg.get("usage", {})
-            for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
-                val = usage.get(key, 0)
-                if isinstance(val, int):
-                    in_tokens += val
-            val = usage.get("output_tokens", 0)
-            if isinstance(val, int):
-                out_tokens += val
+            uncached = _usage_int(usage, "input_tokens")
+            cache_read = _usage_int(usage, "cache_read_input_tokens")
+            cache_write = _usage_int(usage, "cache_creation_input_tokens")
+            usage_totals.prompt += uncached + cache_read + cache_write
+            usage_totals.cache_read += cache_read
+            usage_totals.cache_write += cache_write
+            usage_totals.completion += _usage_int(usage, "output_tokens")
 
-    return output, in_tokens, out_tokens, model
+    return output, usage_totals, model
 
 
 def _handle_stop(input_json: dict) -> None:
@@ -419,22 +468,19 @@ def _handle_stop(input_json: dict) -> None:
     last_msg = input_json.get("last_assistant_message", "") or ""
     output = last_msg
 
-    in_tokens = 0
-    out_tokens = 0
+    usage = _TokenUsage()
     model = ""
 
     transcript = resolve_transcript_path(input_json, session_id)
     if transcript is not None:
         start_line = int(state.get("trace_start_line") or "0")
-        scanned_output, in_tokens, out_tokens, scanned_model = _scan_transcript_for_usage(transcript, start_line)
+        scanned_output, usage, scanned_model = _scan_transcript_for_usage(transcript, start_line)
         if not output:
             output = scanned_output
         model = scanned_model
 
     if not output:
         output = "(No response)"
-
-    total_tokens = in_tokens + out_tokens
 
     # Build and send LLM span. Redact at emit time, not at state-write time.
     redacted_prompt = redact_content(env.log_prompts, user_prompt)
@@ -446,9 +492,7 @@ def _handle_stop(input_json: dict) -> None:
         "project.name": project_name,
         "openinference.span.kind": "LLM",
         "llm.model_name": model,
-        "llm.token_count.prompt": in_tokens,
-        "llm.token_count.completion": out_tokens,
-        "llm.token_count.total": total_tokens,
+        **usage.token_count_attrs(),
         "input.value": redacted_prompt,
         "output.value": redacted_output,
         "llm.output_messages": json.dumps(output_messages),
@@ -539,8 +583,7 @@ def _handle_subagent_stop(input_json: dict) -> None:
     output = last_msg
 
     model = ""
-    in_tokens = 0
-    out_tokens = 0
+    usage = _TokenUsage()
 
     # Prefer state-stored start time set by SubagentStart; fall back to transcript birth time.
     stored_start = state.get(f"subagent_{agent_id}_start_time")
@@ -557,7 +600,7 @@ def _handle_subagent_stop(input_json: dict) -> None:
             birth = getattr(st, "st_birthtime", st.st_ctime)
             start_time = str(int(birth * 1000))
 
-        scanned_output, in_tokens, out_tokens, scanned_model = _scan_transcript_for_usage(transcript, 0)
+        scanned_output, usage, scanned_model = _scan_transcript_for_usage(transcript, 0)
         if not output:
             output = scanned_output
         model = scanned_model
@@ -568,8 +611,6 @@ def _handle_subagent_stop(input_json: dict) -> None:
     # Subagent output is a tool-like result — redact unless opted in.
     output = redact_content(env.log_tool_content, output)
 
-    total_tokens = in_tokens + out_tokens
-
     # Build attributes
     attrs = {
         "session.id": session_id,
@@ -577,9 +618,7 @@ def _handle_subagent_stop(input_json: dict) -> None:
         "subagent.id": agent_id,
         "subagent.type": agent_type,
         "llm.model_name": model,
-        "llm.token_count.prompt": in_tokens,
-        "llm.token_count.completion": out_tokens,
-        "llm.token_count.total": total_tokens,
+        **usage.token_count_attrs(),
         "output.value": output,
     }
     stored_prompt = state.get(f"subagent_{agent_id}_prompt") or ""
