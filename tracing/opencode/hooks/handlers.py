@@ -79,6 +79,7 @@ def _send_span_async(span_dict: dict) -> None:
         try:
             os.waitpid(pid, 0)
         except OSError:
+            # Best-effort detach: failure to reap here must not impact host flow.
             pass
         return
 
