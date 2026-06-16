@@ -1593,11 +1593,13 @@ class TestHandleStopTokenCounts:
         assert len(captured_spans) == 1
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
-        assert attrs["llm.token_count.prompt"]["intValue"] == 85919
+        # OpenInference: prompt is the total (input 85919 + cache_read 68000 +
+        # cache_write 0 = 153919); cache split is reported via prompt_details.*.
+        assert attrs["llm.token_count.prompt"]["intValue"] == 153919
         assert attrs["llm.token_count.completion"]["intValue"] == 1523
-        assert attrs["llm.token_count.cache_read"]["intValue"] == 68000
-        assert attrs["llm.token_count.cache_write"]["intValue"] == 0
-        assert attrs["llm.token_count.total"]["intValue"] == 87442
+        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 68000
+        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 0
+        assert attrs["llm.token_count.total"]["intValue"] == 155442
         assert attrs["llm.model_name"]["stringValue"] == "claude-sonnet-4.5"
 
     def test_stop_omits_token_attrs_when_payload_has_none(self, captured_spans, monkeypatch):
@@ -1620,8 +1622,8 @@ class TestHandleStopTokenCounts:
         attr_keys = {a["key"] for a in captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]}
         assert "llm.token_count.prompt" not in attr_keys
         assert "llm.token_count.completion" not in attr_keys
-        assert "llm.token_count.cache_read" not in attr_keys
-        assert "llm.token_count.cache_write" not in attr_keys
+        assert "llm.token_count.prompt_details.cache_read" not in attr_keys
+        assert "llm.token_count.prompt_details.cache_write" not in attr_keys
         assert "llm.token_count.total" not in attr_keys
         assert "llm.model_name" not in attr_keys
 
@@ -1650,7 +1652,7 @@ class TestHandleStopTokenCounts:
         }
         assert attrs["llm.token_count.prompt"]["intValue"] == 100
         assert "llm.token_count.completion" not in attrs
-        assert "llm.token_count.cache_read" not in attrs
+        assert "llm.token_count.prompt_details.cache_read" not in attrs
         assert "llm.token_count.total" not in attrs
 
 
@@ -1987,11 +1989,12 @@ class TestDeferredLlmSpan:
 
         llm_attrs = _attrs(spans["Agent Response"][0])
         assert llm_attrs["openinference.span.kind"]["stringValue"] == "LLM"
-        assert llm_attrs["llm.token_count.prompt"]["intValue"] == 85919
+        # prompt = input 85919 + cache_read 68000 + cache_write 0 = 153919
+        assert llm_attrs["llm.token_count.prompt"]["intValue"] == 153919
         assert llm_attrs["llm.token_count.completion"]["intValue"] == 1523
-        assert llm_attrs["llm.token_count.cache_read"]["intValue"] == 68000
-        assert llm_attrs["llm.token_count.cache_write"]["intValue"] == 0
-        assert llm_attrs["llm.token_count.total"]["intValue"] == 87442
+        assert llm_attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 68000
+        assert llm_attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.total"]["intValue"] == 155442
         assert llm_attrs["llm.model_name"]["stringValue"] == "claude-sonnet-4.5"
 
         stop_attrs = _attrs(spans["Agent Stop"][0])
@@ -1999,8 +2002,8 @@ class TestDeferredLlmSpan:
         for k in (
             "llm.token_count.prompt",
             "llm.token_count.completion",
-            "llm.token_count.cache_read",
-            "llm.token_count.cache_write",
+            "llm.token_count.prompt_details.cache_read",
+            "llm.token_count.prompt_details.cache_write",
             "llm.token_count.total",
         ):
             assert k not in stop_attrs, f"{k} should not be on Agent Stop CHAIN span"
@@ -2062,11 +2065,12 @@ class TestDeferredLlmSpan:
         assert names == ["Agent Stop"]
         stop_attrs = _attrs(captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
         assert stop_attrs["openinference.span.kind"]["stringValue"] == "CHAIN"
-        assert stop_attrs["llm.token_count.prompt"]["intValue"] == 100
+        # prompt = input 100 + cache_read 25 + cache_write 5 = 130
+        assert stop_attrs["llm.token_count.prompt"]["intValue"] == 130
         assert stop_attrs["llm.token_count.completion"]["intValue"] == 50
-        assert stop_attrs["llm.token_count.cache_read"]["intValue"] == 25
-        assert stop_attrs["llm.token_count.cache_write"]["intValue"] == 5
-        assert stop_attrs["llm.token_count.total"]["intValue"] == 150
+        assert stop_attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 25
+        assert stop_attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
+        assert stop_attrs["llm.token_count.total"]["intValue"] == 180
         assert stop_attrs["llm.model_name"]["stringValue"] == "claude-sonnet-4.5"
 
     def test_deferred_llm_dropped_when_stop_never_fires(self, captured_spans, monkeypatch):
@@ -2124,8 +2128,8 @@ class TestDeferredLlmSpan:
         for k in (
             "llm.token_count.prompt",
             "llm.token_count.completion",
-            "llm.token_count.cache_read",
-            "llm.token_count.cache_write",
+            "llm.token_count.prompt_details.cache_read",
+            "llm.token_count.prompt_details.cache_write",
             "llm.token_count.total",
         ):
             assert k not in llm_attrs
@@ -2158,8 +2162,8 @@ class TestDeferredLlmSpan:
         llm_attrs = _attrs(spans["Agent Response"][0])
         assert llm_attrs["llm.token_count.prompt"]["intValue"] == 0
         assert llm_attrs["llm.token_count.completion"]["intValue"] == 0
-        assert llm_attrs["llm.token_count.cache_read"]["intValue"] == 0
-        assert llm_attrs["llm.token_count.cache_write"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 0
+        assert llm_attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 0
         assert llm_attrs["llm.token_count.total"]["intValue"] == 0
 
     def test_session_end_token_routing_unchanged(self, captured_spans, monkeypatch):

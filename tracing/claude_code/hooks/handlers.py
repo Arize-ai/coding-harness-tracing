@@ -349,13 +349,21 @@ def _handle_user_prompt_submit(input_json: dict) -> None:
 def _scan_transcript_for_usage(
     transcript: Path,
     start_line: int,
-) -> "tuple[str, int, int, str]":
+) -> "tuple[str, int, int, int, int, str]":
     """Walk the transcript JSONL from *start_line* forward and return:
-    (combined_text, in_tokens, out_tokens, model_name)
+    (combined_text, in_tokens, out_tokens, cache_read, cache_write, model_name)
+
+    ``in_tokens`` is the uncached prompt (Anthropic's ``input_tokens``) only;
+    cache reads and cache writes are returned separately. Callers report the
+    cache buckets via the OpenInference ``llm.token_count.prompt_details.*``
+    attributes so a cost model can price cache reads (~0.1x) and cache writes
+    (~1.25x) at their own rates instead of the full input rate.
     """
     output = ""
     in_tokens = 0
     out_tokens = 0
+    cache_read = 0
+    cache_write = 0
     model = ""
 
     with open(transcript) as f:
@@ -388,15 +396,25 @@ def _scan_transcript_for_usage(
             model = msg.get("model", "") or model
 
             usage = msg.get("usage", {})
-            for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            for key, accum in (
+                ("input_tokens", "in"),
+                ("cache_read_input_tokens", "cr"),
+                ("cache_creation_input_tokens", "cw"),
+                ("output_tokens", "out"),
+            ):
                 val = usage.get(key, 0)
-                if isinstance(val, int):
+                if not isinstance(val, int):
+                    continue
+                if accum == "in":
                     in_tokens += val
-            val = usage.get("output_tokens", 0)
-            if isinstance(val, int):
-                out_tokens += val
+                elif accum == "cr":
+                    cache_read += val
+                elif accum == "cw":
+                    cache_write += val
+                else:
+                    out_tokens += val
 
-    return output, in_tokens, out_tokens, model
+    return output, in_tokens, out_tokens, cache_read, cache_write, model
 
 
 def _handle_stop(input_json: dict) -> None:
@@ -421,12 +439,16 @@ def _handle_stop(input_json: dict) -> None:
 
     in_tokens = 0
     out_tokens = 0
+    cache_read = 0
+    cache_write = 0
     model = ""
 
     transcript = resolve_transcript_path(input_json, session_id)
     if transcript is not None:
         start_line = int(state.get("trace_start_line") or "0")
-        scanned_output, in_tokens, out_tokens, scanned_model = _scan_transcript_for_usage(transcript, start_line)
+        scanned_output, in_tokens, out_tokens, cache_read, cache_write, scanned_model = _scan_transcript_for_usage(
+            transcript, start_line
+        )
         if not output:
             output = scanned_output
         model = scanned_model
@@ -434,7 +456,12 @@ def _handle_stop(input_json: dict) -> None:
     if not output:
         output = "(No response)"
 
-    total_tokens = in_tokens + out_tokens
+    # OpenInference: ``prompt`` is the total prompt (Anthropic's ``input_tokens``
+    # is the uncached remainder, so the full prompt = input + cache_read + cache
+    # creation), and the cache split is reported via ``prompt_details.*`` subsets
+    # so a cost model can price cache reads/writes at their own rates.
+    prompt_tokens = in_tokens + cache_read + cache_write
+    total_tokens = prompt_tokens + out_tokens
 
     # Build and send LLM span. Redact at emit time, not at state-write time.
     redacted_prompt = redact_content(env.log_prompts, user_prompt)
@@ -446,7 +473,9 @@ def _handle_stop(input_json: dict) -> None:
         "project.name": project_name,
         "openinference.span.kind": "LLM",
         "llm.model_name": model,
-        "llm.token_count.prompt": in_tokens,
+        "llm.token_count.prompt": prompt_tokens,
+        "llm.token_count.prompt_details.cache_read": cache_read,
+        "llm.token_count.prompt_details.cache_write": cache_write,
         "llm.token_count.completion": out_tokens,
         "llm.token_count.total": total_tokens,
         "input.value": redacted_prompt,
@@ -541,6 +570,8 @@ def _handle_subagent_stop(input_json: dict) -> None:
     model = ""
     in_tokens = 0
     out_tokens = 0
+    cache_read = 0
+    cache_write = 0
 
     # Prefer state-stored start time set by SubagentStart; fall back to transcript birth time.
     stored_start = state.get(f"subagent_{agent_id}_start_time")
@@ -557,7 +588,9 @@ def _handle_subagent_stop(input_json: dict) -> None:
             birth = getattr(st, "st_birthtime", st.st_ctime)
             start_time = str(int(birth * 1000))
 
-        scanned_output, in_tokens, out_tokens, scanned_model = _scan_transcript_for_usage(transcript, 0)
+        scanned_output, in_tokens, out_tokens, cache_read, cache_write, scanned_model = _scan_transcript_for_usage(
+            transcript, 0
+        )
         if not output:
             output = scanned_output
         model = scanned_model
@@ -568,16 +601,20 @@ def _handle_subagent_stop(input_json: dict) -> None:
     # Subagent output is a tool-like result — redact unless opted in.
     output = redact_content(env.log_tool_content, output)
 
-    total_tokens = in_tokens + out_tokens
+    # OpenInference: ``prompt`` is the total prompt; the cache split is reported
+    # via ``prompt_details.*`` subsets so each is priced at its own rate.
+    prompt_tokens = in_tokens + cache_read + cache_write
+    total_tokens = prompt_tokens + out_tokens
 
-    # Build attributes
     attrs = {
         "session.id": session_id,
         "openinference.span.kind": "CHAIN",
         "subagent.id": agent_id,
         "subagent.type": agent_type,
         "llm.model_name": model,
-        "llm.token_count.prompt": in_tokens,
+        "llm.token_count.prompt": prompt_tokens,
+        "llm.token_count.prompt_details.cache_read": cache_read,
+        "llm.token_count.prompt_details.cache_write": cache_write,
         "llm.token_count.completion": out_tokens,
         "llm.token_count.total": total_tokens,
         "output.value": output,
