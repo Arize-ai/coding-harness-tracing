@@ -611,6 +611,7 @@ def _handle_subagent_stop(input_json: dict) -> None:
     # Subagent output is a tool-like result — redact unless opted in.
     output = redact_content(env.log_tool_content, output)
 
+    # Build attributes
     attrs = {
         "session.id": session_id,
         "openinference.span.kind": "CHAIN",

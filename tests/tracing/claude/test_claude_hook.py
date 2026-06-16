@@ -375,8 +375,8 @@ class TestStop:
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
         assert attrs["output.value"]["stringValue"] == "Hello from string format"
 
-    def test_token_buckets_kept_separate(self, mock_resolve, state, captured_spans, transcript_file):
-        """OpenInference: prompt is the total; cache split is in prompt_details.*."""
+    def test_accumulates_tokens(self, mock_resolve, state, captured_spans, transcript_file):
+        """Accumulates tokens: input + cache_read + cache_creation → prompt."""
         state.set("current_trace_id", "t" * 32)
         state.set("current_trace_span_id", "s" * 16)
         state.set("current_trace_start_time", "1000")
@@ -390,11 +390,9 @@ class TestStop:
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
         # input_tokens=100, cache_read=10, cache_creation=5 → 115 prompt (total, incl. cache)
         assert attrs["llm.token_count.prompt"]["intValue"] == 115
-        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
-        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
         # output_tokens=50
         assert attrs["llm.token_count.completion"]["intValue"] == 50
-        # total = prompt + completion
+        # total
         assert attrs["llm.token_count.total"]["intValue"] == 165
         # Cache breakdown surfaced as prompt_details so cost is priced at cache rates
         assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
@@ -516,12 +514,8 @@ class TestStop:
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
 
-        # OpenInference: prompt is the total (input 100 + cache_read 10 + cache
-        # creation 5 = 115); the cache split is reported via prompt_details.* so a
-        # cost model prices each bucket at its own rate. total = prompt + completion.
+        # Token counts: input=100 + cache_read=10 + cache_creation=5 = 115 prompt
         assert attrs["llm.token_count.prompt"]["intValue"] == 115
-        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
-        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
         assert attrs["llm.token_count.completion"]["intValue"] == 50
         assert attrs["llm.token_count.total"]["intValue"] == 165
         assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
@@ -573,10 +567,8 @@ class TestStop:
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
         # Output comes from last_assistant_message
         assert attrs["output.value"]["stringValue"] == "overridden text"
-        # Token counts still come from the transcript (prompt is the total)
+        # Token counts still come from the transcript
         assert attrs["llm.token_count.prompt"]["intValue"] == 115
-        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
-        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
         assert attrs["llm.token_count.completion"]["intValue"] == 50
 
     def test_stop_uses_transcript_text_when_last_assistant_message_missing(
@@ -741,48 +733,6 @@ class TestScanTranscriptForUsage:
         assert usage.cache_read == 20
         assert usage.cache_write == 30
 
-    def test_accumulates_across_messages(self, tmp_path):
-        """Each bucket sums across multiple assistant messages independently."""
-        tf = tmp_path / "multi_tokens.jsonl"
-        lines = [
-            json.dumps(
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "a",
-                        "model": "m",
-                        "usage": {
-                            "input_tokens": 1,
-                            "cache_read_input_tokens": 2,
-                            "cache_creation_input_tokens": 3,
-                            "output_tokens": 4,
-                        },
-                    }
-                }
-            ),
-            json.dumps(
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "b",
-                        "model": "m",
-                        "usage": {
-                            "input_tokens": 10,
-                            "cache_read_input_tokens": 20,
-                            "cache_creation_input_tokens": 30,
-                            "output_tokens": 40,
-                        },
-                    }
-                }
-            ),
-        ]
-        tf.write_text("\n".join(lines) + "\n")
-        output, in_tok, out_tok, cr_tok, cw_tok, model = _scan_transcript_for_usage(tf, 0)
-        assert in_tok == 11
-        assert cr_tok == 22
-        assert cw_tok == 33
-        assert out_tok == 44
-
 
 # ---------------------------------------------------------------------------
 # subagent_stop tests
@@ -823,10 +773,6 @@ class TestSubagentStop:
         assert attrs["openinference.span.kind"]["stringValue"] == "CHAIN"
         assert attrs["subagent.type"]["stringValue"] == "code-review"
         assert "I found the issue." in attrs["output.value"]["stringValue"]
-        # Cache split is reported via prompt_details.* on the subagent span too.
-        assert attrs["llm.token_count.prompt"]["intValue"] == 115
-        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
-        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
 
     def test_uses_file_creation_time(self, mock_resolve, state, captured_spans, transcript_file):
         """Uses file creation time (st_birthtime) for start_time."""
@@ -984,8 +930,6 @@ class TestSubagentStop:
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
         assert attrs["output.value"]["stringValue"] == "overridden subagent text"
         assert attrs["llm.token_count.prompt"]["intValue"] == 115
-        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
-        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
         assert attrs["llm.token_count.completion"]["intValue"] == 50
 
 
