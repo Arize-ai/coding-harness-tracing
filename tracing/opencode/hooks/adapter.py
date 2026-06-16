@@ -116,19 +116,19 @@ def gc_stale_state_files() -> None:
 
             try:
                 f.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as e:
+                log(f"GC: failed to remove stale state file {f}: {e}")
 
             lock_path = STATE_DIR / f".lock_{key}"
             if lock_path.is_dir():
                 try:
                     lock_path.rmdir()
-                except OSError:
-                    pass
+                except OSError as e:
+                    log(f"GC: failed to remove stale lock directory {lock_path}: {e}")
             elif lock_path.is_file():
                 try:
                     lock_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-        except OSError:
-            pass
+                except OSError as e:
+                    log(f"GC: failed to remove stale lock file {lock_path}: {e}")
+        except OSError as e:
+            log(f"GC: failed to inspect stale state candidate {f}: {e}")
