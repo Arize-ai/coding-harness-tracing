@@ -198,9 +198,11 @@ class TestReconcileBasic:
         attrs = _get_attrs(llm)
         assert attrs["llm.model_name"]["stringValue"] == "claude-sonnet-4"
         assert attrs["llm.provider"]["stringValue"] == "anthropic"
-        assert attrs["llm.token_count.prompt"]["intValue"] == 100
+        # OpenInference: prompt is the total (uncached input 100 + cache_read 30
+        # + cache_write 5 = 135); cache split reported via prompt_details.* subsets.
+        assert attrs["llm.token_count.prompt"]["intValue"] == 135
         assert attrs["llm.token_count.completion"]["intValue"] == 50
-        assert attrs["llm.token_count.total"]["intValue"] == 150
+        assert attrs["llm.token_count.total"]["intValue"] == 185
         assert attrs["llm.token_count.completion_details.reasoning"]["intValue"] == 7
         assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 30
         assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5

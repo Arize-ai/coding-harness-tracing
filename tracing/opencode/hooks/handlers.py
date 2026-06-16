@@ -313,15 +313,22 @@ def _emit_llm_span(state: StateManager, info: dict, parts: list) -> None:
     prompt = state.get("current_trace_prompt") or ""
     output_text = _text_of(parts)
 
+    # OpenInference: ``prompt`` is the total prompt and the cache buckets are
+    # reported as ``prompt_details.*`` subsets of it. OpenCode's ``tokens.input``
+    # is the fresh/uncached input only (cache reads/writes are tracked as separate
+    # disjoint buckets — see OpenCode's own cost formula), so the total prompt is
+    # input + cache_read + cache_write.
+    prompt_tokens = input_tokens + cache_read + cache_write
+
     attrs: dict[str, Any] = {
         "session.id": session_id,
         "project.name": project_name,
         "openinference.span.kind": "LLM",
         "llm.model_name": model_id,
         "llm.provider": provider_id,
-        "llm.token_count.prompt": input_tokens,
+        "llm.token_count.prompt": prompt_tokens,
         "llm.token_count.completion": output_tokens,
-        "llm.token_count.total": input_tokens + output_tokens,
+        "llm.token_count.total": prompt_tokens + output_tokens,
         "input.value": redact_content(env.log_prompts, prompt),
         "output.value": redact_content(env.log_prompts, output_text),
     }
