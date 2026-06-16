@@ -102,7 +102,9 @@ def _send_span_async(span_dict: dict) -> None:
         pass
     try:
         send_span(span_dict)
-    except Exception:
+    except Exception as _exc:
+        # Intentionally suppress all errors in the detached child process:
+        # span export is best-effort and must never impact the host process.
         pass
     os._exit(0)
 
