@@ -45,15 +45,15 @@ _HEADER_MARKER = "// Arize opencode tracing plugin (shim)."
 
 
 def _plugin_dir():
-    import tracing.opencode.constants as _c
+    from tracing.opencode.constants import PLUGIN_DIR
 
-    return _c.PLUGIN_DIR
+    return PLUGIN_DIR
 
 
 def _plugin_file():
-    import tracing.opencode.constants as _c
+    from tracing.opencode.constants import PLUGIN_FILE
 
-    return _c.PLUGIN_FILE
+    return PLUGIN_FILE
 
 
 def _plugin_source():
