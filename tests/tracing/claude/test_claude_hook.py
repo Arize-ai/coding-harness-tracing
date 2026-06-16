@@ -388,12 +388,40 @@ class TestStop:
             _handle_stop({})
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
-        # input_tokens=100, cache_read=10, cache_creation=5 → 115 prompt
+        # input_tokens=100, cache_read=10, cache_creation=5 → 115 prompt (total, incl. cache)
         assert attrs["llm.token_count.prompt"]["intValue"] == 115
         # output_tokens=50
         assert attrs["llm.token_count.completion"]["intValue"] == 50
         # total
         assert attrs["llm.token_count.total"]["intValue"] == 165
+        # Cache breakdown surfaced as prompt_details so cost is priced at cache rates
+        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
+        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
+
+    def test_omits_cache_details_when_uncached(self, mock_resolve, state, captured_spans, tmp_path):
+        """No prompt_details.cache_* attributes when there are no cache tokens."""
+        tf = tmp_path / "uncached.jsonl"
+        entry = {
+            "message": {
+                "role": "assistant",
+                "content": "no caching here",
+                "model": "claude-test",
+                "usage": {"input_tokens": 42, "output_tokens": 7},
+            }
+        }
+        tf.write_text(json.dumps(entry) + "\n")
+        state.set("current_trace_id", "t" * 32)
+        state.set("current_trace_span_id", "s" * 16)
+        state.set("current_trace_start_time", "1000")
+        state.set("current_trace_prompt", "test")
+        state.set("trace_start_line", "0")
+        with mock.patch("tracing.claude_code.hooks.handlers.resolve_transcript_path", return_value=tf):
+            _handle_stop({})
+        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert attrs["llm.token_count.prompt"]["intValue"] == 42
+        assert "llm.token_count.prompt_details.cache_read" not in attrs
+        assert "llm.token_count.prompt_details.cache_write" not in attrs
 
     def test_skips_lines_before_trace_start_line(self, mock_resolve, state, captured_spans, transcript_file):
         """Skips lines before trace_start_line."""
@@ -490,6 +518,8 @@ class TestStop:
         assert attrs["llm.token_count.prompt"]["intValue"] == 115
         assert attrs["llm.token_count.completion"]["intValue"] == 50
         assert attrs["llm.token_count.total"]["intValue"] == 165
+        assert attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 10
+        assert attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 5
         # Output text
         assert attrs["output.value"]["stringValue"] == "I found the issue."
         # Model
@@ -568,18 +598,22 @@ class TestScanTranscriptForUsage:
 
     def test_basic_extraction(self, transcript_file):
         """Extracts text, tokens, and model from standard transcript."""
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(Path(transcript_file), 0)
+        output, usage, model = _scan_transcript_for_usage(Path(transcript_file), 0)
         assert output == "I found the issue."
-        assert in_tok == 115  # 100 + 10 + 5
-        assert out_tok == 50
+        assert usage.prompt == 115  # 100 + 10 + 5
+        assert usage.completion == 50
+        assert usage.cache_read == 10
+        assert usage.cache_write == 5
         assert model == "claude-sonnet-4-20250514"
 
     def test_skips_lines_before_start(self, transcript_file):
         """Lines before start_line are skipped entirely."""
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(Path(transcript_file), 3)
+        output, usage, model = _scan_transcript_for_usage(Path(transcript_file), 3)
         assert output == ""
-        assert in_tok == 0
-        assert out_tok == 0
+        assert usage.prompt == 0
+        assert usage.completion == 0
+        assert usage.cache_read == 0
+        assert usage.cache_write == 0
         assert model == ""
 
     def test_handles_string_content(self, tmp_path):
@@ -594,10 +628,10 @@ class TestScanTranscriptForUsage:
             }
         }
         tf.write_text(json.dumps(entry) + "\n")
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(tf, 0)
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
         assert output == "plain text"
-        assert in_tok == 1
-        assert out_tok == 2
+        assert usage.prompt == 1
+        assert usage.completion == 2
         assert model == "m1"
 
     def test_handles_malformed_lines(self, tmp_path):
@@ -612,9 +646,9 @@ class TestScanTranscriptForUsage:
             "{invalid json",
         ]
         tf.write_text("\n".join(lines) + "\n")
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(tf, 0)
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
         assert output == "good"
-        assert out_tok == 5
+        assert usage.completion == 5
 
     def test_skips_non_assistant_messages(self, tmp_path):
         """Only processes assistant messages, skips user/system."""
@@ -634,9 +668,9 @@ class TestScanTranscriptForUsage:
             json.dumps({"message": {"role": "system", "content": "system msg"}}),
         ]
         tf.write_text("\n".join(lines) + "\n")
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(tf, 0)
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
         assert output == "assistant msg"
-        assert out_tok == 3
+        assert usage.completion == 3
 
     def test_concatenates_multiple_assistant_messages(self, tmp_path):
         """Multiple assistant messages are concatenated with newlines."""
@@ -650,9 +684,9 @@ class TestScanTranscriptForUsage:
             ),
         ]
         tf.write_text("\n".join(lines) + "\n")
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(tf, 0)
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
         assert output == "first\nsecond"
-        assert out_tok == 3
+        assert usage.completion == 3
         # Model should be the last non-empty one
         assert model == "m2"
 
@@ -672,12 +706,12 @@ class TestScanTranscriptForUsage:
             ),
         ]
         tf.write_text("\n".join(lines) + "\n")
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(tf, 0)
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
         assert output == ""
-        assert out_tok == 1
+        assert usage.completion == 1
 
     def test_accumulates_all_token_types(self, tmp_path):
-        """Sums input_tokens, cache_read, and cache_creation for in_tokens."""
+        """Prompt total sums input + cache_read + cache_creation; cache buckets tracked separately."""
         tf = tmp_path / "tokens.jsonl"
         entry = {
             "message": {
@@ -693,9 +727,11 @@ class TestScanTranscriptForUsage:
             }
         }
         tf.write_text(json.dumps(entry) + "\n")
-        output, in_tok, out_tok, model = _scan_transcript_for_usage(tf, 0)
-        assert in_tok == 60  # 10 + 20 + 30
-        assert out_tok == 40
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert usage.prompt == 60  # 10 + 20 + 30
+        assert usage.completion == 40
+        assert usage.cache_read == 20
+        assert usage.cache_write == 30
 
 
 # ---------------------------------------------------------------------------
