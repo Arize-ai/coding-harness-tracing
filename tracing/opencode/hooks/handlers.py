@@ -98,6 +98,7 @@ def _send_span_async(span_dict: dict) -> None:
                 pass
         os.close(devnull)
     except OSError:
+        # Best-effort stdio detachment; if this fails, continue and still emit the span.
         pass
     try:
         send_span(span_dict)
