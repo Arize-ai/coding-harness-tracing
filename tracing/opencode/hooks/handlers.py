@@ -94,6 +94,7 @@ def _send_span_async(span_dict: dict) -> None:
             try:
                 os.dup2(devnull, fd)
             except OSError:
+                # Best-effort stdio redirection in detached child; continue if remap fails.
                 pass
         os.close(devnull)
     except OSError:
