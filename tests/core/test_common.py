@@ -1379,7 +1379,7 @@ class TestResolveBackend:
     @pytest.fixture(autouse=True)
     def _fresh_env(self, monkeypatch):
         # Clear any inherited backend env vars so each test starts clean.
-        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "PHOENIX_ENDPOINT", "ARIZE_PROJECT_NAME"):
+        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "PHOENIX_ENDPOINT", "PHOENIX_API_KEY", "ARIZE_PROJECT_NAME"):
             monkeypatch.delenv(key, raising=False)
 
     def _make_span(self, service_name=""):
@@ -1464,6 +1464,44 @@ class TestResolveBackend:
         assert result["target"] == "phoenix"
         assert result["endpoint"] == "http://env:6006"
         assert result["project_name"] == "claude-code"
+
+    def test_phoenix_api_key_from_phoenix_env(self, monkeypatch):
+        """PHOENIX_API_KEY supplies the Phoenix bearer token (env-only install)."""
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setenv("PHOENIX_API_KEY", "ph-env-key")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("opencode"))
+        assert result["target"] == "phoenix"
+        assert result["api_key"] == "ph-env-key"
+
+    def test_phoenix_api_key_env_overrides_yaml(self, monkeypatch):
+        """PHOENIX_API_KEY env takes precedence over a YAML-configured api_key."""
+        monkeypatch.setenv("PHOENIX_API_KEY", "ph-env-key")
+        cfg = {
+            "harnesses": {
+                "opencode": {
+                    "target": "phoenix",
+                    "endpoint": "http://localhost:6006",
+                    "api_key": "ph-yaml-key",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("opencode"))
+        assert result["target"] == "phoenix"
+        assert result["api_key"] == "ph-env-key"
+
+    def test_phoenix_api_key_falls_back_to_arize_api_key(self, monkeypatch):
+        """ARIZE_API_KEY still works as the Phoenix token when PHOENIX_API_KEY is unset."""
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("opencode"))
+        assert result["target"] == "phoenix"
+        assert result["api_key"] == "ak-env"
 
     def test_project_name_env_override(self, monkeypatch):
         """ARIZE_PROJECT_NAME overrides YAML project_name."""

@@ -110,8 +110,13 @@ harnesses:
     project_name: opencode
     target: phoenix
     endpoint: <endpoint>
-    api_key: ""
+    api_key: ""   # set when the Phoenix instance requires auth (Phoenix Cloud)
 ```
+
+If Phoenix requires authentication (e.g. Phoenix Cloud), set the API key here under
+`api_key`, or export `PHOENIX_API_KEY` in the environment — it is sent as a
+`Authorization: Bearer <key>` header. The env var takes precedence over the YAML value.
+Leave `api_key: ""` for an unauthenticated local Phoenix.
 
 **Arize AX:**
 ```yaml
