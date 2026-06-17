@@ -103,11 +103,13 @@ def gc_stale_state_files() -> None:
                 try:
                     lock_path.rmdir()
                 except OSError:
+                    # Best-effort cleanup: ignore lock-dir removal failures.
                     pass
             elif lock_path.is_file():
                 try:
                     lock_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                except OSError as e:
+                    log(f"Failed to remove stale lock file {lock_path}: {e}")
         except OSError:
+            # Best-effort GC: ignore per-file stat/access errors and continue scanning.
             pass

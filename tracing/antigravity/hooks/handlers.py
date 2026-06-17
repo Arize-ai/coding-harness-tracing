@@ -98,6 +98,7 @@ def _send_span_async(span_dict: dict) -> None:
         try:
             os.waitpid(pid, 0)
         except OSError:
+            # Best-effort reap: if the child is already gone/reaped, continue.
             pass
         return
 
@@ -113,14 +114,17 @@ def _send_span_async(span_dict: dict) -> None:
             try:
                 os.dup2(devnull, fd)
             except OSError:
+                # Best-effort stdio redirection in detached child; continue even if one fd cannot be remapped.
                 pass
         os.close(devnull)
     except OSError:
+        # Best-effort stdio detachment; continue even if /dev/null setup fails.
         pass
     try:
         send_span(span_dict)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Detached grandchild must never raise into the hook path; log and exit.
+        error(f"[hooks] async span send failed in detached child: {exc}")
     os._exit(0)
 
 

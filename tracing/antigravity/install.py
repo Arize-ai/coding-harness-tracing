@@ -34,7 +34,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
-from tracing.antigravity.constants import EVENTS, HARNESS_NAME, HOOK_NAME, HOOK_TIMEOUT_SECONDS
+import tracing.antigravity.constants as _c
 
 # ---------------------------------------------------------------------------
 # JSON helpers
@@ -43,15 +43,11 @@ from tracing.antigravity.constants import EVENTS, HARNESS_NAME, HOOK_NAME, HOOK_
 
 def _settings_file():
     """Return the current SETTINGS_FILE path (re-read each call for testability)."""
-    import tracing.antigravity.constants as _c
-
     return _c.SETTINGS_FILE
 
 
 def _settings_dir():
     """Return the current SETTINGS_DIR path (re-read each call for testability)."""
-    import tracing.antigravity.constants as _c
-
     return _c.SETTINGS_DIR
 
 
@@ -108,15 +104,15 @@ def _install_hooks() -> None:
         return
 
     data = _read_settings()
-    data[HOOK_NAME] = {
+    data[_c.HOOK_NAME] = {
         event: [
             {
                 "type": "command",
                 "command": str(venv_bin(entry_point)),
-                "timeout": HOOK_TIMEOUT_SECONDS,
+                "timeout": _c.HOOK_TIMEOUT_SECONDS,
             }
         ]
-        for event, entry_point in EVENTS.items()
+        for event, entry_point in _c.EVENTS.items()
     }
 
     _write_settings(data)
