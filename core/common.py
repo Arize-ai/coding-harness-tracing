@@ -131,6 +131,21 @@ class _Env:
         except Exception:
             return {}
 
+    # cached_property attributes that read config.yaml once per process. Kept in
+    # one place so invalidate_caches() stays correct if a new cached read is added.
+    _CACHED_CONFIG_PROPERTIES = ("_top_level_config", "_logging_config")
+
+    def invalidate_caches(self) -> None:
+        """Drop cached config reads so the next access reloads from disk.
+
+        ``functools.cached_property`` stores its result in the instance
+        ``__dict__``; popping the key forces recomputation. Used by tests (and
+        any code that mutates config.yaml at runtime) to avoid serving stale
+        config. Safe to call when nothing is cached.
+        """
+        for name in self._CACHED_CONFIG_PROPERTIES:
+            self.__dict__.pop(name, None)
+
     def _resolve_log_flag(self, env_key: str, config_key: str, default: bool) -> bool:
         """env var > config.yaml `logging.<key>` > default."""
         raw = os.environ.get(env_key)

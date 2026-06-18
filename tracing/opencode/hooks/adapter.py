@@ -92,10 +92,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     state.set("project_name", project_name)
     state.set("trace_count", "0")
     state.set("tool_count", "0")
-
-    user_id = env.get_user_id(SERVICE_NAME)
-    if user_id:
-        state.set("user_id", user_id)
+    state.set("user_id", env.get_user_id(SERVICE_NAME))
 
     log(f"Session initialized: {session_id}")
 
