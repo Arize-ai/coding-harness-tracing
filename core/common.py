@@ -95,6 +95,13 @@ class _Env:
         return os.environ.get("PHOENIX_ENDPOINT", "")
 
     @property
+    def phoenix_api_key(self) -> str:
+        # Phoenix auth token. Prefer the dedicated PHOENIX_API_KEY (written by the
+        # installers and documented in the README); fall back to ARIZE_API_KEY for
+        # backward compatibility with configs that reused the Arize key.
+        return os.environ.get("PHOENIX_API_KEY", "") or os.environ.get("ARIZE_API_KEY", "")
+
+    @property
     def api_key(self) -> str:
         return os.environ.get("ARIZE_API_KEY", "")
 
@@ -446,7 +453,7 @@ def resolve_backend(span_dict: dict) -> dict:
         return {
             "target": "phoenix",
             "endpoint": endpoint,
-            "api_key": env.api_key or harness_cfg.get("api_key", ""),
+            "api_key": env.phoenix_api_key or harness_cfg.get("api_key", ""),
             "project_name": project_name,
         }
 
@@ -1087,6 +1094,8 @@ def build_span(
     attrs: "dict | None" = None,
     service_name: str = "coding-harness-tracing",
     scope_name: str = "coding-harness-tracing",
+    status_code: int = 1,
+    status_message: str = "",
 ) -> dict:
     """Build an OTLP JSON span payload.
 
@@ -1108,6 +1117,10 @@ def build_span(
 
     kind_value = _resolve_kind(kind or "")
 
+    status: dict = {"code": status_code}
+    if status_message:
+        status["message"] = status_message
+
     span_obj = {
         "traceId": trace_id,
         "spanId": span_id,
@@ -1116,7 +1129,7 @@ def build_span(
         "startTimeUnixNano": f"{start}000000",
         "endTimeUnixNano": f"{end}000000",
         "attributes": _attrs_to_otlp(attrs),
-        "status": {"code": 1},
+        "status": status,
     }
 
     # parentSpanId only included if non-empty (matches bash conditional)
