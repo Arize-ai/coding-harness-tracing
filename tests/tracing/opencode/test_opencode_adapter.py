@@ -36,7 +36,12 @@ def opencode_state_dir(tmp_harness_dir, monkeypatch):
 
 @pytest.fixture
 def disable_env_vars(monkeypatch):
-    """Clear env vars that could influence session resolution."""
+    """Clear env vars that could influence session resolution.
+
+    On-disk config.yaml is isolated globally by the autouse ``reset_env_caches``
+    fixture combined with ``tmp_harness_dir``'s ``CONFIG_FILE`` redirect, so this
+    only needs to clear the env-var inputs.
+    """
     monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
     monkeypatch.delenv("ARIZE_USER_ID", raising=False)
     monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
@@ -155,8 +160,11 @@ class TestEnsureSessionInitialized:
         sm.init_state()
         return sm
 
-    def test_sets_all_keys(self, opencode_state_dir, disable_env_vars):
+    def test_sets_all_keys(self, opencode_state_dir, disable_env_vars, monkeypatch):
         """First call sets all expected keys."""
+        # Source user_id from env so the assertion is hermetic, not leaked from
+        # the developer's on-disk config.yaml.
+        monkeypatch.setenv("ARIZE_USER_ID", "test-user-all-keys")
         sm = self._make_state(opencode_state_dir, "all-keys")
         adapter.ensure_session_initialized(sm, {"sessionID": "ses_all"})
         assert sm.get("session_id") is not None
@@ -164,7 +172,7 @@ class TestEnsureSessionInitialized:
         assert sm.get("project_name") is not None
         assert sm.get("trace_count") == "0"
         assert sm.get("tool_count") == "0"
-        assert sm.get("user_id") is not None
+        assert sm.get("user_id") == "test-user-all-keys"
 
     def test_session_id_matches_session_id_field(self, opencode_state_dir, disable_env_vars):
         """session_id stored in state == the opencode sessionID from payload."""

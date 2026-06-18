@@ -128,7 +128,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
                              else basename(getcwd())
       trace_count         -- "0"
       tool_count          -- "0"
-      user_id             -- env.user_id (Copilot does not pass user_id in payload)
+      user_id             -- env.get_user_id(SERVICE_NAME) (Copilot does not pass user_id in payload)
     """
     if state.get("session_id") is not None:
         return
@@ -145,7 +145,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     state.set("project_name", project_name)
     state.set("trace_count", "0")
     state.set("tool_count", "0")
-    state.set("user_id", env.user_id)
+    state.set("user_id", env.get_user_id(SERVICE_NAME))
 
     log(f"Session initialized: {session_id}")
 

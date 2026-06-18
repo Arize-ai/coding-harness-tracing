@@ -60,13 +60,14 @@ def _jq_str(input_json: dict, *keys, default: str = "") -> str:
 
 
 def _resolve_user_id(input_json: dict) -> str:
-    """env.user_id (env var > config.yaml `user_id`) > payload `user_email` > "".
+    """env.get_user_id(SERVICE_NAME) (global config < harnesses.cursor.user_id < ARIZE_USER_ID env)
+    > payload `user_email` > "".
 
     Cursor has no per-session state for user_id, so each handler resolves it
     inline. Configured user_id wins over the implicit `user_email` payload field
     so an explicitly set user takes precedence on shared workstations.
     """
-    return env.user_id or _jq_str(input_json, "user_email")
+    return env.get_user_id(SERVICE_NAME) or _jq_str(input_json, "user_email")
 
 
 def _to_int(v):
