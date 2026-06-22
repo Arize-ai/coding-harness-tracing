@@ -1,0 +1,87 @@
+{
+  "type": "reconcile",
+  "sessionID": "ses_basic",
+  "messages": [
+    {
+      "info": {
+        "id": "msg_user_1",
+        "sessionID": "ses_basic",
+        "role": "user",
+        "time": { "created": 1000 },
+        "agent": "build",
+        "model": { "providerID": "anthropic", "modelID": "claude-sonnet-4" }
+      },
+      "parts": [
+        {
+          "id": "prt_u_1",
+          "sessionID": "ses_basic",
+          "messageID": "msg_user_1",
+          "type": "text",
+          "text": "list files and edit main.py"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "msg_assist_1",
+        "sessionID": "ses_basic",
+        "role": "assistant",
+        "time": { "created": 2000, "completed": 5000 },
+        "parentID": "msg_user_1",
+        "modelID": "claude-sonnet-4",
+        "providerID": "anthropic",
+        "mode": "build",
+        "path": { "cwd": "/home/user/myproj", "root": "/home/user" },
+        "cost": 0.0125,
+        "tokens": {
+          "input": 100,
+          "output": 50,
+          "reasoning": 7,
+          "cache": { "read": 30, "write": 5 }
+        },
+        "finish": "stop"
+      },
+      "parts": [
+        {
+          "id": "prt_t_1",
+          "sessionID": "ses_basic",
+          "messageID": "msg_assist_1",
+          "type": "text",
+          "text": "I'll list files then edit."
+        },
+        {
+          "id": "prt_tool_1",
+          "sessionID": "ses_basic",
+          "messageID": "msg_assist_1",
+          "type": "tool",
+          "callID": "call_bash_1",
+          "tool": "bash",
+          "state": {
+            "status": "completed",
+            "input": { "command": "ls -la" },
+            "output": "total 4\nfile.py",
+            "title": "ls -la",
+            "metadata": {},
+            "time": { "start": 2100, "end": 2400 }
+          }
+        },
+        {
+          "id": "prt_tool_2",
+          "sessionID": "ses_basic",
+          "messageID": "msg_assist_1",
+          "type": "tool",
+          "callID": "call_edit_1",
+          "tool": "edit",
+          "state": {
+            "status": "completed",
+            "input": { "filePath": "/home/user/myproj/main.py", "find": "x", "replace": "y" },
+            "output": "edited main.py",
+            "title": "main.py",
+            "metadata": {},
+            "time": { "start": 3000, "end": 3500 }
+          }
+        }
+      ]
+    }
+  ]
+}

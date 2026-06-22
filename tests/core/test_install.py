@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 INSTALL_SH = REPO_ROOT / "install.sh"
 INSTALL_BAT = REPO_ROOT / "install.bat"
 
-ALL_HARNESSES = ["claude", "codex", "copilot", "cursor"]
+ALL_HARNESSES = ["claude", "codex", "copilot", "cursor", "opencode"]
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +151,7 @@ def test_install_sh_harness_dir_mapping():
     assert "tracing/codex" in text
     assert "tracing/copilot" in text
     assert "tracing/cursor" in text
+    assert "tracing/opencode" in text
 
 
 def test_install_bat_harness_dir_mapping():
@@ -160,6 +161,7 @@ def test_install_bat_harness_dir_mapping():
     assert "tracing\\codex" in text
     assert "tracing\\copilot" in text
     assert "tracing\\cursor" in text
+    assert "tracing\\opencode" in text
 
 
 # ---------------------------------------------------------------------------

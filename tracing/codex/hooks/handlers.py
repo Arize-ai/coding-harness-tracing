@@ -337,7 +337,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
     """Assemble the LLM + TOOL spans from an extracted turn and ship them."""
     project_name = env.project_name or "codex"
-    user_id = env.user_id or ""
+    user_id = env.get_user_id(SERVICE_NAME) or ""
 
     trace_id = generate_trace_id()
     parent_span_id = generate_span_id()
@@ -502,8 +502,9 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
         "codex.turn_id": turn_id,
         "codex.notify_fallback": "true",
     }
-    if env.user_id:
-        attrs["user.id"] = env.user_id
+    user_id = env.get_user_id(SERVICE_NAME)
+    if user_id:
+        attrs["user.id"] = user_id
     if assistant_output:
         attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
 
