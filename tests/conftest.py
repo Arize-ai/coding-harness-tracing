@@ -14,6 +14,31 @@ REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def isolate_config(tmp_path, monkeypatch):
+    """Isolate every test from the developer's real ~/.arize/harness/config.yaml.
+
+    Two independent leaks are closed here:
+
+    1. ``core.config.load_config`` binds its path via ``from core.constants
+       import CONFIG_FILE``, so patching ``core.constants.CONFIG_FILE`` (as
+       ``tmp_harness_dir`` does) does NOT redirect it — the name ``load_config``
+       actually reads is ``core.config.CONFIG_FILE``. Point that at a
+       nonexistent path so config defaults to ``{}`` unless a test opts in
+       (tests that need real config, like ``test_config.py``, re-patch it).
+    2. ``core.common.env`` is a module-level singleton whose ``cached_property``
+       config reads survive across tests. Clear them before and after each test
+       so the next access re-reads the isolated config rather than a stale value
+       cached from a sibling test.
+    """
+    from core.common import env
+
+    monkeypatch.setattr("core.config.CONFIG_FILE", tmp_path / "no-such-config.yaml")
+    env.invalidate_caches()
+    yield
+    env.invalidate_caches()
+
+
 @pytest.fixture
 def tmp_harness_dir(tmp_path, monkeypatch):
     """Create the full ~/.arize/harness directory tree in a temp location.

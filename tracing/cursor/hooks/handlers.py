@@ -60,13 +60,14 @@ def _jq_str(input_json: dict, *keys, default: str = "") -> str:
 
 
 def _resolve_user_id(input_json: dict) -> str:
-    """env.user_id (env var > config.yaml `user_id`) > payload `user_email` > "".
+    """env.get_user_id(SERVICE_NAME) (global config < harnesses.cursor.user_id < ARIZE_USER_ID env)
+    > payload `user_email` > "".
 
     Cursor has no per-session state for user_id, so each handler resolves it
     inline. Configured user_id wins over the implicit `user_email` payload field
     so an explicitly set user takes precedence on shared workstations.
     """
-    return env.user_id or _jq_str(input_json, "user_email")
+    return env.get_user_id(SERVICE_NAME) or _jq_str(input_json, "user_email")
 
 
 def _to_int(v):
@@ -690,17 +691,24 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
     _dur = input_json.get("duration_ms")
     duration_ms = _to_int(_dur if _dur is not None else input_json.get("durationMs"))
 
+    # OpenInference: ``prompt`` is the total prompt. Cursor's ``input_tokens`` is
+    # the uncached remainder (mirrors Anthropic), so the cache buckets are added
+    # back in to form the total; they are also reported via ``prompt_details.*``
+    # subsets so a cost model prices cache reads (~0.1x) and writes (~1.25x) at
+    # their own rates instead of the full input rate.
     token_attrs = {}
+    prompt_total = None
     if prompt_tokens is not None:
-        token_attrs["llm.token_count.prompt"] = prompt_tokens
+        prompt_total = prompt_tokens + (cache_read or 0) + (cache_write or 0)
+        token_attrs["llm.token_count.prompt"] = prompt_total
     if completion_tokens is not None:
         token_attrs["llm.token_count.completion"] = completion_tokens
     if cache_read is not None:
-        token_attrs["llm.token_count.cache_read"] = cache_read
+        token_attrs["llm.token_count.prompt_details.cache_read"] = cache_read
     if cache_write is not None:
-        token_attrs["llm.token_count.cache_write"] = cache_write
-    if prompt_tokens is not None and completion_tokens is not None:
-        token_attrs["llm.token_count.total"] = prompt_tokens + completion_tokens
+        token_attrs["llm.token_count.prompt_details.cache_write"] = cache_write
+    if prompt_total is not None and completion_tokens is not None:
+        token_attrs["llm.token_count.total"] = prompt_total + completion_tokens
     if model:
         token_attrs["llm.model_name"] = model
 
@@ -860,17 +868,29 @@ def _handle_session_end(input_json, conversation_id, gen_id, trace_id, now_ms):
     if reason:
         attrs["cursor.session.reason"] = reason
 
-    # Token fields can also appear on sessionEnd
+    # Token fields can also appear on sessionEnd. Same OpenInference convention
+    # as _handle_stop: ``prompt`` is the total (uncached input + cache buckets),
+    # cache split reported via ``prompt_details.*`` subsets.
     _inp_tok = input_json.get("input_tokens")
     prompt_tokens = _to_int(_inp_tok if _inp_tok is not None else input_json.get("inputTokens"))
     _out_tok = input_json.get("output_tokens")
     completion_tokens = _to_int(_out_tok if _out_tok is not None else input_json.get("outputTokens"))
+    _cr_tok = input_json.get("cache_read_tokens")
+    cache_read = _to_int(_cr_tok if _cr_tok is not None else input_json.get("cacheReadTokens"))
+    _cw_tok = input_json.get("cache_write_tokens")
+    cache_write = _to_int(_cw_tok if _cw_tok is not None else input_json.get("cacheWriteTokens"))
+    prompt_total = None
     if prompt_tokens is not None:
-        attrs["llm.token_count.prompt"] = prompt_tokens
+        prompt_total = prompt_tokens + (cache_read or 0) + (cache_write or 0)
+        attrs["llm.token_count.prompt"] = prompt_total
     if completion_tokens is not None:
         attrs["llm.token_count.completion"] = completion_tokens
-    if prompt_tokens is not None and completion_tokens is not None:
-        attrs["llm.token_count.total"] = prompt_tokens + completion_tokens
+    if cache_read is not None:
+        attrs["llm.token_count.prompt_details.cache_read"] = cache_read
+    if cache_write is not None:
+        attrs["llm.token_count.prompt_details.cache_write"] = cache_write
+    if prompt_total is not None and completion_tokens is not None:
+        attrs["llm.token_count.total"] = prompt_total + completion_tokens
 
     span = build_span(
         "Session End",

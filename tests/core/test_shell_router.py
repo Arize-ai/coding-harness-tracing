@@ -136,6 +136,9 @@ class TestHarnessMapping:
     def test_cursor_maps_to_tracing_cursor(self):
         assert 'cursor)  echo "tracing/cursor"' in self.text
 
+    def test_opencode_maps_to_tracing_opencode(self):
+        assert "opencode)" in self.text and '"tracing/opencode"' in self.text
+
 
 # ---------------------------------------------------------------------------
 # Usage output tests
@@ -154,7 +157,7 @@ class TestUsageOutput:
 
     @pytest.mark.parametrize(
         "cmd",
-        ["claude", "codex", "copilot", "cursor", "update", "uninstall"],
+        ["claude", "codex", "copilot", "cursor", "opencode", "update", "uninstall"],
     )
     def test_command_listed(self, cmd):
         assert cmd in self.text
@@ -235,8 +238,8 @@ class TestDispatchLogic:
         self.text = _read_install_sh()
 
     def test_dispatches_harness_commands(self):
-        """claude|codex|copilot|cursor|gemini|kiro should be dispatched."""
-        assert "claude|codex|copilot|cursor|gemini|kiro)" in self.text
+        """claude|codex|copilot|cursor|gemini|kiro|opencode should be dispatched."""
+        assert "claude|codex|copilot|cursor|gemini|kiro|opencode)" in self.text
 
     def test_install_harness_called(self):
         """install_harness function should be called for harness commands."""
