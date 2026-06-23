@@ -1540,8 +1540,13 @@ class TestResolveBackend:
         assert result["target"] == "arize"
         assert result["api_key"] == "ak-env"
 
-    def test_env_api_key_overrides_yaml(self, monkeypatch):
-        """ARIZE_API_KEY env overrides YAML api_key while keeping YAML target/endpoint/space_id."""
+    def test_yaml_api_key_overrides_env(self, monkeypatch):
+        """Per-harness YAML api_key takes precedence over ARIZE_API_KEY env var.
+
+        When a harness has its own credentials in config.yaml, a globally-exported
+        ARIZE_API_KEY (e.g. from ~/.zshrc for a different harness) must not hijack
+        this harness's traces and send them to the wrong Arize space.
+        """
         monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         cfg = {
             "harnesses": {
@@ -1556,8 +1561,30 @@ class TestResolveBackend:
         monkeypatch.setattr("core.config.load_config", lambda: cfg)
 
         result = resolve_backend(self._make_span("claude-code"))
-        assert result["api_key"] == "ak-env"
+        assert result["api_key"] == "ak-yaml"
         assert result["space_id"] == "sp-yaml"
+
+    def test_env_api_key_used_when_yaml_has_no_credentials(self, monkeypatch):
+        """ARIZE_API_KEY + ARIZE_SPACE_ID env vars are used when YAML has no credentials.
+
+        Harnesses that rely solely on env vars (no api_key/space_id in config.yaml)
+        should still work via the global env var fallback.
+        """
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "sp-env")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "arize",
+                    "endpoint": "otlp.arize.com:443",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["api_key"] == "ak-env"
+        assert result["space_id"] == "sp-env"
 
     # ── error paths ────────────────────────────────────────────────────────
 
