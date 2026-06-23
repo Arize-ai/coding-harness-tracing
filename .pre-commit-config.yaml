@@ -56,3 +56,7 @@ repos:
         name: mypy (tracing/kiro)
         files: ^tracing/kiro/
         additional_dependencies: [types-PyYAML]
+      - id: mypy
+        name: mypy (tracing/opencode)
+        files: ^tracing/opencode/
+        additional_dependencies: [types-PyYAML]

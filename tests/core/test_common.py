@@ -664,6 +664,144 @@ class TestBuildSpan:
         assert result == golden_span
 
 
+# ── build_span status tests ───────────────────────────────────────────────
+
+
+class TestBuildSpanStatus:
+    """``build_span`` accepts optional ``status_code`` / ``status_message`` kwargs.
+
+    OTLP status codes: 0=UNSET, 1=OK (default), 2=ERROR.
+    Backwards-compatible: with no kwargs, output must be byte-for-byte identical
+    to the prior behavior (``status == {"code": 1}``, no ``message`` key).
+    """
+
+    def _span(self, result):
+        return result["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+
+    def test_default_status_is_ok_with_no_message(self):
+        """No status kwargs → status is {"code": 1} with no ``message`` key."""
+        result = build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+        )
+        assert self._span(result)["status"] == {"code": 1}
+
+    def test_error_status_with_message(self):
+        """status_code=2 + status_message='x' → {"code": 2, "message": "x"}."""
+        result = build_span(
+            name="t",
+            kind="TOOL",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            status_code=2,
+            status_message="x",
+        )
+        assert self._span(result)["status"] == {"code": 2, "message": "x"}
+
+    def test_error_status_empty_message_omits_message_key(self):
+        """status_code=2 + empty status_message → {"code": 2} (no ``message`` key)."""
+        result = build_span(
+            name="t",
+            kind="TOOL",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            status_code=2,
+            status_message="",
+        )
+        assert self._span(result)["status"] == {"code": 2}
+
+    def test_default_status_message_is_empty(self):
+        """status_code=2 with no status_message kwarg → no ``message`` key."""
+        result = build_span(
+            name="t",
+            kind="TOOL",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            status_code=2,
+        )
+        assert self._span(result)["status"] == {"code": 2}
+
+    def test_unset_status_code(self):
+        """status_code=0 (UNSET) is honored."""
+        result = build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            status_code=0,
+        )
+        assert self._span(result)["status"] == {"code": 0}
+
+    def test_ok_status_with_message_includes_message(self):
+        """status_code=1 + non-empty status_message → {"code": 1, "message": ...}.
+
+        Behavior is uniform across codes: a non-empty message is included regardless of code.
+        """
+        result = build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            status_code=1,
+            status_message="all good",
+        )
+        assert self._span(result)["status"] == {"code": 1, "message": "all good"}
+
+    def test_status_kwargs_must_be_keyword_only(self):
+        """``status_code`` / ``status_message`` are last-positioned; positional callers
+        with the current 9-arg signature must continue to work and yield OK status.
+
+        Calls build_span with all current positional args and asserts the resulting
+        status is the default OK status with no message. This guards against an
+        implementation that accidentally reorders or renames params.
+        """
+        result = build_span(
+            "t",  # name
+            "LLM",  # kind
+            "aa",  # span_id
+            "bb",  # trace_id
+            "",  # parent_span_id
+            1000,  # start_ms
+            2000,  # end_ms
+            {"k": "v"},  # attrs
+            "svc",  # service_name
+            "scope",  # scope_name
+        )
+        assert self._span(result)["status"] == {"code": 1}
+
+    def test_existing_callers_unaffected_byte_for_byte(self, golden_span):
+        """Calling build_span without status kwargs produces identical output
+        to today's build (golden fixture has ``status == {"code": 1}``).
+        """
+        result = build_span(
+            name="Turn 1",
+            kind="LLM",
+            span_id="abcdef1234567890",
+            trace_id="0123456789abcdef0123456789abcdef",
+            parent_span_id="",
+            start_ms=1711987200000,
+            end_ms=1711987201000,
+            attrs={"session.id": "sess-1", "input.value": "hello"},
+            service_name="test-service",
+            scope_name="test-scope",
+        )
+        assert result == golden_span
+
+
 # ── build_multi_span tests ────────────────────────────────────────────────
 
 
@@ -850,14 +988,13 @@ class TestLoggingFlagPrecedence:
 
     def _patch_config(self, monkeypatch, block):
         """Patch core.config.load_config so _Env._logging_config returns *block*."""
-        import core.common
 
         monkeypatch.setattr(
             "core.config.load_config",
             lambda config_path=None: {"logging": block} if block is not None else {},
         )
         # Drop the cached value so the next access re-reads.
-        core.common.env.__dict__.pop("_logging_config", None)
+        env.__dict__.pop("_logging_config", None)
 
     def test_default_true_when_nothing_set(self, monkeypatch):
         self._patch_config(monkeypatch, None)
@@ -1241,7 +1378,7 @@ class TestResolveBackend:
     @pytest.fixture(autouse=True)
     def _fresh_env(self, monkeypatch):
         # Clear any inherited backend env vars so each test starts clean.
-        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "PHOENIX_ENDPOINT", "ARIZE_PROJECT_NAME"):
+        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "PHOENIX_ENDPOINT", "PHOENIX_API_KEY", "ARIZE_PROJECT_NAME"):
             monkeypatch.delenv(key, raising=False)
 
     def _make_span(self, service_name=""):
@@ -1326,6 +1463,44 @@ class TestResolveBackend:
         assert result["target"] == "phoenix"
         assert result["endpoint"] == "http://env:6006"
         assert result["project_name"] == "claude-code"
+
+    def test_phoenix_api_key_from_phoenix_env(self, monkeypatch):
+        """PHOENIX_API_KEY supplies the Phoenix bearer token (env-only install)."""
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setenv("PHOENIX_API_KEY", "ph-env-key")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("opencode"))
+        assert result["target"] == "phoenix"
+        assert result["api_key"] == "ph-env-key"
+
+    def test_phoenix_api_key_env_overrides_yaml(self, monkeypatch):
+        """PHOENIX_API_KEY env takes precedence over a YAML-configured api_key."""
+        monkeypatch.setenv("PHOENIX_API_KEY", "ph-env-key")
+        cfg = {
+            "harnesses": {
+                "opencode": {
+                    "target": "phoenix",
+                    "endpoint": "http://localhost:6006",
+                    "api_key": "ph-yaml-key",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("opencode"))
+        assert result["target"] == "phoenix"
+        assert result["api_key"] == "ph-env-key"
+
+    def test_phoenix_api_key_falls_back_to_arize_api_key(self, monkeypatch):
+        """ARIZE_API_KEY still works as the Phoenix token when PHOENIX_API_KEY is unset."""
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("opencode"))
+        assert result["target"] == "phoenix"
+        assert result["api_key"] == "ak-env"
 
     def test_project_name_env_override(self, monkeypatch):
         """ARIZE_PROJECT_NAME overrides YAML project_name."""
@@ -1594,3 +1769,276 @@ class TestFileLockMkdir:
             assert lock_path.is_dir()
 
         assert not lock_path.exists()
+
+
+# ── Custom attributes tests ──────────────────────────────────────────────
+
+
+class TestCustomAttributes:
+    """env.custom_attributes(service_name) layering: global < per-harness < env."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
+        from core.common import env as _env
+
+        _env.__dict__.pop("_top_level_config", None)
+        yield
+        _env.__dict__.pop("_top_level_config", None)
+
+    def _patch_config(self, monkeypatch, cfg):
+        monkeypatch.setattr("core.config.load_config", lambda config_path=None: cfg or {})
+        env.__dict__.pop("_top_level_config", None)
+
+    def test_nothing_set_returns_empty(self, monkeypatch):
+        self._patch_config(monkeypatch, {})
+        assert env.custom_attributes() == {}
+        assert env.custom_attributes("claude-code") == {}
+
+    def test_global_only_returned_for_any_service(self, monkeypatch):
+        self._patch_config(monkeypatch, {"attributes": {"team": "payments", "env": "prod"}})
+        assert env.custom_attributes("claude-code") == {"team": "payments", "env": "prod"}
+        assert env.custom_attributes("codex") == {"team": "payments", "env": "prod"}
+        assert env.custom_attributes("") == {"team": "payments", "env": "prod"}
+
+    def test_per_harness_only_isolated_to_that_harness(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {"harnesses": {"claude-code": {"attributes": {"environment": "prod-claude"}}}},
+        )
+        assert env.custom_attributes("claude-code") == {"environment": "prod-claude"}
+        # Different harness must NOT see the claude-code per-harness block.
+        assert env.custom_attributes("codex") == {}
+
+    def test_per_harness_overrides_global_shared_key(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {
+                "attributes": {"team": "payments", "environment": "prod"},
+                "harnesses": {"claude-code": {"attributes": {"environment": "prod-claude"}}},
+            },
+        )
+        # Shared key (environment) overridden; non-shared keys from both layers survive.
+        result = env.custom_attributes("claude-code")
+        assert result == {"team": "payments", "environment": "prod-claude"}
+
+    def test_env_only_no_config(self, monkeypatch):
+        self._patch_config(monkeypatch, {})
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team=payments,region=us-east-1")
+        assert env.custom_attributes() == {"team": "payments", "region": "us-east-1"}
+
+    def test_env_wins_over_per_harness_and_global(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {
+                "attributes": {"environment": "prod-global"},
+                "harnesses": {"claude-code": {"attributes": {"environment": "prod-claude"}}},
+            },
+        )
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "environment=staging")
+        assert env.custom_attributes("claude-code") == {"environment": "staging"}
+
+    def test_malformed_env_skipped(self, monkeypatch):
+        self._patch_config(monkeypatch, {})
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team=a,garbage,=b,env=c")
+        assert env.custom_attributes() == {"team": "a", "env": "c"}
+
+    def test_typed_config_values_preserved(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {"attributes": {"cost_center": 4021, "enabled": True, "ratio": 0.5}},
+        )
+        result = env.custom_attributes()
+        assert result["cost_center"] == 4021
+        assert isinstance(result["cost_center"], int) and not isinstance(result["cost_center"], bool)
+        assert result["enabled"] is True
+        assert result["ratio"] == 0.5
+        assert isinstance(result["ratio"], float)
+
+    def test_malformed_global_attributes_block_ignored(self, monkeypatch):
+        # attributes: set to a string (not a dict) — must not crash.
+        self._patch_config(monkeypatch, {"attributes": "not-a-dict"})
+        assert env.custom_attributes("claude-code") == {}
+
+    def test_malformed_per_harness_attributes_block_ignored(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {"harnesses": {"claude-code": {"attributes": ["bad", "list"]}}},
+        )
+        assert env.custom_attributes("claude-code") == {}
+
+    def test_returns_fresh_dict_each_call(self, monkeypatch):
+        self._patch_config(monkeypatch, {"attributes": {"team": "payments"}})
+        a = env.custom_attributes()
+        b = env.custom_attributes()
+        a["mutated"] = "x"
+        assert "mutated" not in b
+
+
+# ── build_span × custom_attributes injection tests ───────────────────────
+
+
+class TestBuildSpanCustomAttributes:
+    """build_span() merges env.custom_attributes() into per-span attrs via setdefault."""
+
+    def _attrs_dict(self, span_payload):
+        attrs = span_payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+        return {a["key"]: a["value"] for a in attrs}
+
+    def test_custom_attrs_appear_in_built_span(self, monkeypatch):
+        monkeypatch.setattr(
+            env,
+            "custom_attributes",
+            lambda service_name="": {"team": "payments", "cost_center": 4021},
+        )
+        result = build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+        )
+        attrs = self._attrs_dict(result)
+        assert attrs["team"] == {"stringValue": "payments"}
+        assert attrs["cost_center"] == {"intValue": 4021}
+
+    def test_handler_set_attr_not_overwritten(self, monkeypatch):
+
+        monkeypatch.setattr(
+            env,
+            "custom_attributes",
+            lambda service_name="": {"project.name": "from-custom"},
+        )
+        result = build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            attrs={"project.name": "from-handler"},
+        )
+        attrs = self._attrs_dict(result)
+        assert attrs["project.name"] == {"stringValue": "from-handler"}
+
+    def test_empty_resolver_is_noop(self, monkeypatch):
+        monkeypatch.setattr(env, "custom_attributes", lambda service_name="": {})
+        result = build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            attrs={"project.name": "p", "user.id": "u"},
+        )
+        attrs = self._attrs_dict(result)
+        assert set(attrs.keys()) == {"project.name", "user.id"}
+
+    def test_caller_attrs_dict_not_mutated(self, monkeypatch):
+
+        monkeypatch.setattr(
+            env,
+            "custom_attributes",
+            lambda service_name="": {"team": "payments"},
+        )
+        caller_attrs = {"project.name": "p"}
+        build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            attrs=caller_attrs,
+        )
+        assert caller_attrs == {"project.name": "p"}
+
+    def test_resolver_receives_service_name(self, monkeypatch):
+
+        seen = {}
+
+        def fake(service_name=""):
+            seen["service_name"] = service_name
+            return {}
+
+        monkeypatch.setattr(env, "custom_attributes", fake)
+        build_span(
+            name="t",
+            kind="LLM",
+            span_id="aa",
+            trace_id="bb",
+            start_ms=1000,
+            end_ms=2000,
+            service_name="claude-code",
+        )
+        assert seen["service_name"] == "claude-code"
+
+
+# ── env.get_user_id ladder tests ────────────────────────────────────────
+
+
+class TestGetUserId:
+    """env.get_user_id(service_name) layering: global < per-harness < env."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.delenv("ARIZE_USER_ID", raising=False)
+        from core.common import env as _env
+
+        _env.__dict__.pop("_top_level_config", None)
+        yield
+        _env.__dict__.pop("_top_level_config", None)
+
+    def _patch_config(self, monkeypatch, cfg):
+        monkeypatch.setattr("core.config.load_config", lambda config_path=None: cfg or {})
+        env.__dict__.pop("_top_level_config", None)
+
+    def test_nothing_set_returns_empty(self, monkeypatch):
+        self._patch_config(monkeypatch, {})
+        assert env.get_user_id() == ""
+        assert env.get_user_id("claude-code") == ""
+
+    def test_global_config_returned_for_any_service(self, monkeypatch):
+        self._patch_config(monkeypatch, {"user_id": "alice"})
+        assert env.get_user_id() == "alice"
+        assert env.get_user_id("claude-code") == "alice"
+        assert env.get_user_id("codex") == "alice"
+
+    def test_per_harness_overrides_global(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {"user_id": "alice", "harnesses": {"claude-code": {"user_id": "bob"}}},
+        )
+        # Per-harness wins for claude-code; other harness still gets global.
+        assert env.get_user_id("claude-code") == "bob"
+        assert env.get_user_id("codex") == "alice"
+
+    def test_env_beats_both_config_layers(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {"user_id": "alice", "harnesses": {"claude-code": {"user_id": "bob"}}},
+        )
+        monkeypatch.setenv("ARIZE_USER_ID", "carol")
+        assert env.get_user_id("claude-code") == "carol"
+        assert env.get_user_id("codex") == "carol"
+
+    def test_explicit_empty_env_blanks_result(self, monkeypatch):
+        self._patch_config(
+            monkeypatch,
+            {"user_id": "alice", "harnesses": {"claude-code": {"user_id": "bob"}}},
+        )
+        monkeypatch.setenv("ARIZE_USER_ID", "")
+        assert env.get_user_id("claude-code") == ""
+
+    def test_user_id_property_regression(self, monkeypatch):
+        """env.user_id (property) still returns the global+env result, unchanged."""
+        self._patch_config(
+            monkeypatch,
+            {"user_id": "alice", "harnesses": {"claude-code": {"user_id": "bob"}}},
+        )
+        # Property doesn't take a service_name → only global + env apply.
+        assert env.user_id == "alice"
+        monkeypatch.setenv("ARIZE_USER_ID", "carol")
+        assert env.user_id == "carol"

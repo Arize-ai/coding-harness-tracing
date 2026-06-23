@@ -13,7 +13,7 @@ import time
 import pytest
 import yaml
 
-from core.common import StateManager
+from core.common import StateManager, env
 
 # ---------------------------------------------------------------------------
 # We import the adapter module itself so we can monkeypatch its module-level
@@ -216,6 +216,28 @@ class TestEnsureSessionInitialized:
         sm = self._make_state(gemini_state_dir, "user-env")
         adapter.ensure_session_initialized(sm, {})
         assert sm.get("user_id") == "test-user-123"
+
+    def test_user_id_per_harness_override(self, gemini_state_dir, monkeypatch):
+        """harnesses.gemini.user_id in config overrides the global user_id."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.delenv("ARIZE_USER_ID", raising=False)
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
+
+        monkeypatch.setattr(
+            "core.config.load_config",
+            lambda config_path=None: {
+                "user_id": "global@x",
+                "harnesses": {adapter.SERVICE_NAME: {"user_id": "scoped@x"}},
+            },
+        )
+        env.__dict__.pop("_top_level_config", None)
+        try:
+            sm = self._make_state(gemini_state_dir, "user-scoped")
+            adapter.ensure_session_initialized(sm, {})
+            assert sm.get("user_id") == "scoped@x"
+        finally:
+            env.__dict__.pop("_top_level_config", None)
 
 
 # ── gc_stale_state_files tests ───────────────────────────────────────────────

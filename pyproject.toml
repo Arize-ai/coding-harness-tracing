@@ -59,6 +59,8 @@ arize-hook-gemini-after-tool = "tracing.gemini.hooks.handlers:after_tool"
 arize-hook-cursor = "tracing.cursor.hooks.handlers:main"
 # Kiro hook
 arize-hook-kiro = "tracing.kiro.hooks.handlers:main"
+# opencode hook
+arize-hook-opencode = "tracing.opencode.hooks.handlers:main"
 # Setup wizards
 arize-setup-claude = "core.setup.claude:main"
 arize-setup-codex = "core.setup.codex:main"
@@ -66,6 +68,7 @@ arize-setup-copilot = "core.setup.copilot:main"
 arize-setup-cursor = "core.setup.cursor:main"
 arize-setup-gemini = "core.setup.gemini:main"
 arize-setup-kiro = "core.setup.kiro:main"
+arize-setup-opencode = "core.setup.opencode:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
