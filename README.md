@@ -13,6 +13,7 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `install.sh` / `install.bat` | `copilot` |
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
+| [Opencode CLI](tracing/opencode/README.md) | `install.sh` / `install.bat` | `opencode` |
 
 Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and configuration — one install covers both.
 
@@ -29,7 +30,7 @@ Access and run the install script remotely to setup coding harness tracing in yo
 ```bash
 INSTALL_URL="https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh"
 
-# claude | codex | gemini | cursor | copilot | kiro
+# claude | codex | gemini | cursor | copilot | kiro | opencode
 HARNESS="claude"
 
 # setup tracing for a harness
@@ -47,7 +48,7 @@ curl -sSL "$INSTALL_URL" | bash -s -- uninstall
 ```powershell
 $INSTALL_URL = "https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat"
 
-# claude | codex | gemini | cursor | copilot | kiro
+# claude | codex | gemini | cursor | copilot | kiro | opencode
 $HARNESS = "claude"
 
 iwr -useb $INSTALL_URL -OutFile $env:TEMP\install.bat
@@ -73,7 +74,7 @@ cd coding-harness-tracing
 
 **macOS / Linux**
 ```bash
-# claude | codex | gemini | cursor | copilot | kiro
+# claude | codex | gemini | cursor | copilot | kiro | opencode
 HARNESS="claude"
 
 # setup tracing for a harness
@@ -88,7 +89,7 @@ HARNESS="claude"
 
 **Windows**
 ```powershell
-# claude | codex | gemini | cursor | copilot | kiro
+# claude | codex | gemini | cursor | copilot | kiro | opencode
 $HARNESS = "claude"
 
 # setup tracing for a harness
@@ -180,7 +181,35 @@ All configuration lives in `~/.arize/harness/config.yaml`, written by the instal
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `user_id` | No | — | User identifier added to all spans as `user.id` |
+| `user_id` | No | — | User identifier added to all spans as `user.id` (global default; can be overridden per-harness) |
+| `harnesses.<name>.user_id` | No | — | Per-harness user identifier; overrides the global `user_id` for that harness's spans |
+
+**Custom span attributes** (optional)
+
+Attach arbitrary key/value attributes to every emitted span — useful for grouping or filtering by
+custom dimensions (`team`, `environment`, etc.) in Arize or Phoenix. Define a global `attributes:`
+block, a per-harness `harnesses.<name>.attributes:` block, or both:
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `attributes` | No | — | Map of key/value attributes added to every span across all harnesses |
+| `harnesses.<name>.attributes` | No | — | Per-harness attributes; override the global block on key collision |
+
+Values keep their YAML type (`cost_center: 4021` lands as an integer). Custom attributes never
+overwrite attributes the harness sets itself (e.g. `project.name`, `user.id`).
+
+Example:
+
+```yaml
+attributes:                 # all harnesses
+  team: payments
+  environment: prod
+harnesses:
+  claude-code:
+    attributes:             # claude-code only; overrides global on shared keys
+      environment: prod-claude
+      surface: ide
+```
 
 Each harness owns its full backend configuration directly — there is no shared global backend block. This allows different harnesses to use different backends or credentials.
 
@@ -197,6 +226,7 @@ Most settings live in `config.yaml`, but a small set of env vars affect runtime 
 | `ARIZE_PROJECT_NAME` | per-harness | Overrides `harnesses.<name>.project_name` from `config.yaml` for a single session. |
 | `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. |
 | `ARIZE_TRACE_DEBUG` | `false` | Dump raw hook payloads as YAML under `~/.arize/harness/state/<harness>/debug/`. Codex hooks use this for span-tree inspection. |
+| `OTEL_RESOURCE_ATTRIBUTES` | — | Standard OTel attribute string (`team=payments,environment=prod`) added to every span. Overrides config-file `attributes`/`harnesses.<name>.attributes` on key collision; set per-harness by placing it in that harness's settings env block. |
 
 **Backend overrides** (set if you want env to take priority over `config.yaml` for a single run):
 

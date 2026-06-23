@@ -122,7 +122,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     - project_name: from ARIZE_PROJECT_NAME env, or basename of input_json["cwd"], or cwd
     - trace_count: "0"
     - tool_count: "0"
-    - user_id: from env.user_id, then input_json["user_id"], then ""
+    - user_id: from env.get_user_id(SERVICE_NAME), then input_json["user_id"], then ""
     """
     # Skip if already initialized
     existing = state.get("session_id")
@@ -147,7 +147,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     state.set("tool_count", "0")
 
     # user_id priority: env var, then hook input
-    user_id = env.user_id
+    user_id = env.get_user_id(SERVICE_NAME)
     if not user_id:
         user_id = input_json.get("user_id", "")
     state.set("user_id", user_id)

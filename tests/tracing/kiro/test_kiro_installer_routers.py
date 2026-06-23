@@ -49,7 +49,7 @@ def test_install_sh_main_dispatch_includes_kiro():
     """The first case in main() must include kiro in the harness list."""
     text = INSTALL_SH.read_text()
     # The dispatch line looks like: claude|codex|copilot|cursor|gemini|kiro)
-    assert "gemini|kiro)" in text, "main() case dispatch must include 'kiro' after 'gemini'"
+    assert "gemini|kiro" in text, "main() case dispatch must include 'kiro' after 'gemini'"
 
 
 # ---------------------------------------------------------------------------

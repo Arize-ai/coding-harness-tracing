@@ -1,0 +1,69 @@
+{
+  "type": "close",
+  "sessionID": "ses_err",
+  "messages": [
+    {
+      "info": {
+        "id": "msg_user_e",
+        "sessionID": "ses_err",
+        "role": "user",
+        "time": { "created": 1000 },
+        "agent": "build",
+        "model": { "providerID": "anthropic", "modelID": "claude-sonnet-4" }
+      },
+      "parts": [
+        {
+          "id": "prt_u_e",
+          "sessionID": "ses_err",
+          "messageID": "msg_user_e",
+          "type": "text",
+          "text": "read missing file"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "msg_assist_e",
+        "sessionID": "ses_err",
+        "role": "assistant",
+        "time": { "created": 2000, "completed": 4000 },
+        "parentID": "msg_user_e",
+        "modelID": "claude-sonnet-4",
+        "providerID": "anthropic",
+        "mode": "build",
+        "path": { "cwd": "/home/user/myproj", "root": "/home/user" },
+        "cost": 0.0021,
+        "tokens": {
+          "input": 20,
+          "output": 10,
+          "reasoning": 0,
+          "cache": { "read": 0, "write": 0 }
+        },
+        "finish": "stop"
+      },
+      "parts": [
+        {
+          "id": "prt_t_e",
+          "sessionID": "ses_err",
+          "messageID": "msg_assist_e",
+          "type": "text",
+          "text": "Failed to read the file."
+        },
+        {
+          "id": "prt_tool_e",
+          "sessionID": "ses_err",
+          "messageID": "msg_assist_e",
+          "type": "tool",
+          "callID": "call_read_err",
+          "tool": "read",
+          "state": {
+            "status": "error",
+            "input": { "filePath": "/missing.txt" },
+            "error": "ENOENT: no such file or directory",
+            "time": { "start": 2100, "end": 2200 }
+          }
+        }
+      ]
+    }
+  ]
+}

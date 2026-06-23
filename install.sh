@@ -203,6 +203,7 @@ harness_dir() {
         cursor)  echo "tracing/cursor" ;;
         gemini)  echo "tracing/gemini" ;;
         kiro)    echo "tracing/kiro" ;;
+        opencode) echo "tracing/opencode" ;;
         *)       return 1 ;;
     esac
 }
@@ -240,6 +241,7 @@ Commands:
   cursor      Install and configure tracing for Cursor IDE
   gemini      Install and configure tracing for Gemini CLI
   kiro        Install and configure tracing for Kiro CLI
+  opencode    Install and configure tracing for opencode
   update      Update the installed coding-harness-tracing and re-register all harnesses
   uninstall <harness>   Tear down one harness
   uninstall             Full wipe: venv + repo + shared config
@@ -270,7 +272,7 @@ main() {
     done
 
     case "$cmd" in
-        claude|codex|copilot|cursor|gemini|kiro)
+        claude|codex|copilot|cursor|gemini|kiro|opencode)
             install_harness "$cmd" "$with_skills"
             ;;
         uninstall)

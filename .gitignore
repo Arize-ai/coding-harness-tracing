@@ -51,3 +51,4 @@ run/
 */node_modules/
 wheel.json
 docs/superpowers/*
+.serena/*
