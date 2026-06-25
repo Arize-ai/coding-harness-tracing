@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Arize Documentation
+    url: https://docs.arize.com
+    about: Read the docs before filing an issue.
+  - name: Arize Community
+    url: https://arize.com/community
+    about: Ask questions and discuss with the community.

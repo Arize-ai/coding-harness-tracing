@@ -35,7 +35,8 @@ Thumbs.db
 
 # Project-specific
 .workbench/
-.agents/
+.agents/*
+!.agents/skills/
 .claude/
 mempalace.yaml
 entities.json
