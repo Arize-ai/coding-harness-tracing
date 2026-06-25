@@ -441,9 +441,14 @@ def resolve_backend(span_dict: dict) -> dict:
     # Resolve project_name: env > YAML > service_name
     project_name = env.project_name or harness_cfg.get("project_name", "") or service_name
 
-    # Resolve target: env-derived backend takes precedence over YAML target
+    # Resolve target: harness-specific config credentials take precedence over
+    # global env vars (ARIZE_API_KEY / ARIZE_SPACE_ID) so that a harness with
+    # its own api_key+space_id in config.yaml is not hijacked by a different
+    # harness's credentials exported in the shell environment.
     if env.phoenix_endpoint:
         target = "phoenix"
+    elif harness_cfg.get("api_key") and harness_cfg.get("space_id"):
+        target = "arize"
     elif env.api_key and env.space_id:
         target = "arize"
     else:
@@ -474,8 +479,8 @@ def resolve_backend(span_dict: dict) -> dict:
 
     if target == "arize":
         endpoint = harness_cfg.get("endpoint", "") or "otlp.arize.com:443"
-        api_key = env.api_key or harness_cfg.get("api_key", "")
-        space_id = env.space_id or harness_cfg.get("space_id", "")
+        api_key = harness_cfg.get("api_key", "") or env.api_key
+        space_id = harness_cfg.get("space_id", "") or env.space_id
 
         missing = []
         if not api_key:
