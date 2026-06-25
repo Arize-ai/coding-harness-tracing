@@ -1,0 +1,32 @@
+name: Feature Request
+description: Suggest an enhancement
+title: "[FEATURE]: "
+labels: [enhancement, triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem does this solve? Who is affected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: Describe the change you'd like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you've considered and why you discarded them.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Links, screenshots, prior art, related issues, etc.
