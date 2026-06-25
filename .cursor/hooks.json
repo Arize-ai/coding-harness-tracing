@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "afterAgentThought": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "stop": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "beforeTabFileRead": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "afterTabFileEdit": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "bash .cursor/hooks/arize-hook-cursor.sh"
+      }
+    ]
+  }
+}

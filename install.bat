@@ -21,12 +21,15 @@ REM --- Parse arguments ---
 set "COMMAND="
 set "UNINSTALL_HARNESS="
 set "WITH_SKILLS="
+set "CURSOR_FLAGS="
 :parse_args
 if "%~1"=="" goto :done_args
 if /i "%~1"=="-h"        goto :usage
 if /i "%~1"=="--help"    goto :usage
 if /i "%~1"=="help"      goto :usage
 if /i "%~1"=="--with-skills" ( set "WITH_SKILLS=--with-skills" & shift & goto :parse_args )
+if /i "%~1"=="--project-hooks" ( set "CURSOR_FLAGS=%CURSOR_FLAGS% --project-hooks" & shift & goto :parse_args )
+if /i "%~1"=="--cloud-agent" ( set "CURSOR_FLAGS=%CURSOR_FLAGS% --cloud-agent" & shift & goto :parse_args )
 if /i "%~1"=="--branch" ( set "INSTALL_BRANCH=%~2" & set "TARBALL_URL=https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/%~2.tar.gz" & shift & shift & goto :parse_args )
 for %%C in (claude codex copilot cursor gemini kiro opencode) do if /i "%~1"=="%%C" ( set "COMMAND=%%C" & shift & goto :parse_args )
 if /i "%~1"=="update" ( set "COMMAND=update" & shift & goto :parse_args )
@@ -48,6 +51,10 @@ if "%COMMAND%"=="update"    goto :cmd_update
 if "%COMMAND%"=="uninstall" goto :cmd_uninstall
 
 REM --- Install a harness ---
+if /i not "%COMMAND%"=="cursor" if not "%CURSOR_FLAGS%"=="" (
+  echo [arize] --project-hooks and --cloud-agent are only supported for cursor >&2
+  exit /b 1
+)
 call :find_python
 if "%FOUND_PYTHON%"=="" ( echo [arize] Error: Python 3.9+ is required >&2 & exit /b 1 )
 echo [arize] Found Python: %FOUND_PYTHON%
@@ -59,7 +66,7 @@ call :resolve_dir "%COMMAND%"
 set "_PY=%INSTALL_DIR%\%HARNESS_DIR%\install.py"
 if not exist "%_PY%" ( echo [arize] install.py not found at %_PY% >&2 & exit /b 1 )
 echo [arize] Running %COMMAND% install...
-"%VENV_PYTHON%" "%_PY%" install %WITH_SKILLS%
+"%VENV_PYTHON%" "%_PY%" install %WITH_SKILLS% %CURSOR_FLAGS%
 exit /b %ERRORLEVEL%
 
 REM --- cmd_update ---
@@ -230,6 +237,8 @@ echo     uninstall [harness] Remove one harness or full wipe
 echo.
 echo   Flags:
 echo     --with-skills   Symlink harness skills into .agents\skills\
+echo     --project-hooks Cursor only: write repo-local .cursor\hooks.json
+echo     --cloud-agent   Cursor only: project hooks plus Cloud Agent bootstrap
 echo     --branch NAME   Install from a specific git branch (default: main)
 echo.
 echo   Examples:

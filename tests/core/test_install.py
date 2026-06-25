@@ -112,6 +112,17 @@ def test_install_bat_has_all_commands():
         assert cmd.lower() in text.lower(), f"Missing command: {cmd}"
 
 
+def test_install_routers_include_cursor_cloud_flags():
+    """Both routers expose Cursor project-hook / Cloud Agent install flags."""
+    sh_text = INSTALL_SH.read_text()
+    bat_text = INSTALL_BAT.read_text()
+    for flag in ("--project-hooks", "--cloud-agent"):
+        assert flag in sh_text
+        assert flag in bat_text
+    assert "only supported for cursor" in sh_text
+    assert "only supported for cursor" in bat_text
+
+
 @pytest.mark.skipif(os.name == "nt", reason="bash not available on Windows")
 def test_install_sh_help_output_names_every_harness():
     """--help output must mention every supported harness."""

@@ -152,6 +152,29 @@ Create `.cursor/hooks.json` in the user's project (or merge into it if it alread
 
 If the user already has a `.cursor/hooks.json` with other hooks, merge the Arize entries into the existing arrays for each event.
 
+### Cursor Cloud / Background Agents
+
+Cloud Agents run in a separate remote VM. Local `~/.cursor/hooks.json`, `~/.arize/harness/venv`, and `~/.arize/harness/config.yaml` do not exist there. Each repo that should trace Cloud Agent work needs repo-local Cursor files committed with the project. Use the Cloud install mode from the repo:
+
+```bash
+./install.sh cursor --cloud-agent
+```
+
+This writes repo-local `.cursor/hooks.json`, `.cursor/hooks/arize-hook-cursor.sh`, `.cursor/hooks/arize-cursor-cloud-setup.sh`, `.cursor/hooks/arize-cloud-env.example`, and `.cursor/environment.json`. The generated environment install command surfaces `ARIZE_API_KEY`, `ARIZE_SPACE_ID`, `PHOENIX_ENDPOINT`, `ARIZE_PROJECT_NAME`, `ARIZE_INSTALL_BRANCH`, and `ARIZE_INSTALL_URL` without committing secret values.
+
+Do not copy local credentials from `~/.arize/harness/config.yaml` into `.cursor/environment.json`; that file is normally committed. Tell users to commit the generated `.cursor/` bootstrap files and configure real values as Cursor Cloud environment secrets.
+
+Required Cursor Cloud secrets:
+
+```bash
+ARIZE_API_KEY=...
+ARIZE_SPACE_ID=...
+ARIZE_PROJECT_NAME=cursor
+```
+
+For Phoenix, configure `PHOENIX_ENDPOINT` instead.
+`ARIZE_INSTALL_BRANCH` is optional; set it only to pin Cloud Agents to an unmerged branch or non-main installer. The generated bootstrap installs missing `python3-venv` support on apt-based Cloud images before running the harness installer.
+
 ### Validate
 
 1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials.
@@ -258,6 +281,7 @@ Common issues and fixes:
 | Config missing | Run the installer or create `~/.arize/harness/config.yaml` manually (include `harnesses.cursor` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Hooks not firing | Verify `.cursor/hooks.json` exists in the project root and paths are correct (use absolute paths) |
+| Local Cursor kickoff appears but Cloud Agent work is missing | Run `./install.sh cursor --cloud-agent`, commit the generated `.cursor/` bootstrap files, and configure Arize/Phoenix credentials as Cursor Cloud environment secrets |
 | Shell/MCP spans missing input | State push failed -- check that `~/.arize/harness/state/cursor/` is writable |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Cursor |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching Cursor |

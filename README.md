@@ -10,12 +10,11 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | `Claude Plugin (see below)`| `claude-code-tracing` |
 | [OpenAI Codex CLI](tracing/codex/README.md) | `install.sh` / `install.bat` | `codex` |
 | [Cursor IDE / CLI](tracing/cursor/README.md) | `install.sh` / `install.bat` | `cursor` |
+| [Cursor Cloud / Background Agents](tracing/cursor/README.md#cursor-cloud-agents) | `install.sh` / `install.bat` + `--cloud-agent` | `cursor` |
 | [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | `install.sh` / `install.bat` | `copilot` |
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
 | [Opencode CLI](tracing/opencode/README.md) | `install.sh` / `install.bat` | `opencode` |
-
-Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and configuration — one install covers both.
 
 ## Install
 
@@ -161,13 +160,6 @@ All configuration lives in `~/.arize/harness/config.yaml`, written by the instal
 | `harnesses.<name>.endpoint` | Yes | — | Phoenix server URL or Arize OTLP gRPC endpoint |
 | `harnesses.<name>.api_key` | Arize: Yes | — | Arize AX API key (or optional Phoenix API key) |
 | `harnesses.<name>.space_id` | Arize: Yes | — | Arize AX space ID |
-
-**Codex-only** (under `harnesses.codex.collector`)
-
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `harnesses.codex.collector.host` | No | `127.0.0.1` | Codex buffer service listen address |
-| `harnesses.codex.collector.port` | No | `4318` | Codex buffer service listen port |
 
 **Content logging** (under top-level `logging`, applies to all harnesses)
 

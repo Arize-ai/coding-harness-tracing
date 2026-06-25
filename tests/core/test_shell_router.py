@@ -168,6 +168,11 @@ class TestUsageOutput:
     def test_branch_flag(self):
         assert "--branch NAME" in self.text
 
+    def test_cursor_cloud_flags(self):
+        assert "--project-hooks" in self.text
+        assert "--cloud-agent" in self.text
+        assert "only supported for cursor" in self.text
+
 
 # ---------------------------------------------------------------------------
 # Smoke tests (subprocess execution)
@@ -245,6 +250,10 @@ class TestDispatchLogic:
         """install_harness function should be called for harness commands."""
         assert 'install_harness "$cmd"' in self.text
 
+    def test_install_harness_receives_passthrough_flags(self):
+        assert 'install_harness "$cmd" "$with_skills" "${passthrough[@]}"' in self.text
+        assert 'install_harness "$cmd" "$with_skills"\n' in self.text
+
     def test_install_harness_defined(self):
         """install_harness must be defined if it's called."""
         # This is a critical check: the function is called but must exist
@@ -294,6 +303,10 @@ class TestDispatchLogic:
 
     def test_update_calls_pip_install(self):
         assert "pip" in self.text and "install" in self.text
+
+    def test_setup_venv_recreates_incomplete_venv(self):
+        assert "Existing venv is missing pip" in self.text
+        assert 'rm -rf "$VENV_DIR"' in self.text
 
     def test_update_lists_installed_harnesses(self):
         assert "list_installed_harnesses" in self.text
