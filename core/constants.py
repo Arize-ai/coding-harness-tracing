@@ -75,4 +75,11 @@ HARNESSES: dict[str, HarnessMetadata] = {
         "state_subdir": "opencode",
         "default_log_file": LOG_DIR / "opencode.log",
     },
+    "omp": {
+        "service_name": "omp",
+        "scope_name": "arize-omp-plugin",
+        "default_project_name": "omp",
+        "state_subdir": "omp",
+        "default_log_file": LOG_DIR / "omp.log",
+    },
 }
