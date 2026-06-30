@@ -85,8 +85,10 @@ def _send_span_async(span_dict: dict) -> None:
                 # Best-effort stdio detachment in child process; ignore per-fd dup failures.
                 pass
         os.close(devnull)
-    except OSError:
-        pass
+    except OSError as exc:
+        # Best-effort stdio detachment in forked child; ignore failures to avoid
+        # impacting host execution, but emit debug context for diagnostics.
+        debug_dump({"event": "omp_stdio_detach_failed", "error": str(exc)})
 
     try:
         send_span(span_dict)
