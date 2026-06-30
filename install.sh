@@ -204,6 +204,7 @@ harness_dir() {
         gemini)  echo "tracing/gemini" ;;
         kiro)    echo "tracing/kiro" ;;
         opencode) echo "tracing/opencode" ;;
+        omp)     echo "tracing/omp" ;;
         *)       return 1 ;;
     esac
 }
@@ -242,6 +243,7 @@ Commands:
   gemini      Install and configure tracing for Gemini CLI
   kiro        Install and configure tracing for Kiro CLI
   opencode    Install and configure tracing for opencode
+  omp         Install and configure tracing for Oh My Pi (omp)
   update      Update the installed coding-harness-tracing and re-register all harnesses
   uninstall <harness>   Tear down one harness
   uninstall             Full wipe: venv + repo + shared config
@@ -272,7 +274,7 @@ main() {
     done
 
     case "$cmd" in
-        claude|codex|copilot|cursor|gemini|kiro|opencode)
+        claude|codex|copilot|cursor|gemini|kiro|opencode|omp)
             install_harness "$cmd" "$with_skills"
             ;;
         uninstall)

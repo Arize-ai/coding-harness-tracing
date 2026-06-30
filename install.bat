@@ -28,11 +28,11 @@ if /i "%~1"=="--help"    goto :usage
 if /i "%~1"=="help"      goto :usage
 if /i "%~1"=="--with-skills" ( set "WITH_SKILLS=--with-skills" & shift & goto :parse_args )
 if /i "%~1"=="--branch" ( set "INSTALL_BRANCH=%~2" & set "TARBALL_URL=https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/%~2.tar.gz" & shift & shift & goto :parse_args )
-for %%C in (claude codex copilot cursor gemini kiro opencode) do if /i "%~1"=="%%C" ( set "COMMAND=%%C" & shift & goto :parse_args )
+for %%C in (claude codex copilot cursor gemini kiro opencode omp) do if /i "%~1"=="%%C" ( set "COMMAND=%%C" & shift & goto :parse_args )
 if /i "%~1"=="update" ( set "COMMAND=update" & shift & goto :parse_args )
 if /i "%~1"=="uninstall" (
     set "COMMAND=uninstall" & shift
-    for %%C in (claude codex copilot cursor gemini kiro opencode) do if /i "%~1"=="%%C" ( set "UNINSTALL_HARNESS=%%C" & shift )
+    for %%C in (claude codex copilot cursor gemini kiro opencode omp) do if /i "%~1"=="%%C" ( set "UNINSTALL_HARNESS=%%C" & shift )
     goto :parse_args
 )
 echo [arize] Unknown argument: %~1 >&2
@@ -41,7 +41,7 @@ goto :usage
 if "%COMMAND%"=="" ( echo [arize] No command specified >&2 & goto :usage )
 
 REM --- Harness name -> directory mapping ---
-REM claude->tracing\claude_code  codex->tracing\codex  copilot->tracing\copilot  cursor->tracing\cursor  gemini->tracing\gemini  kiro->tracing\kiro  opencode->tracing\opencode
+REM claude->tracing\claude_code  codex->tracing\codex  copilot->tracing\copilot  cursor->tracing\cursor  gemini->tracing\gemini  kiro->tracing\kiro  opencode->tracing\opencode  omp->tracing\omp
 
 REM --- Dispatch ---
 if "%COMMAND%"=="update"    goto :cmd_update
@@ -207,6 +207,7 @@ if /i "%~1"=="cursor"      set "HARNESS_DIR=tracing\cursor"
 if /i "%~1"=="gemini"      set "HARNESS_DIR=tracing\gemini"
 if /i "%~1"=="kiro"        set "HARNESS_DIR=tracing\kiro"
 if /i "%~1"=="opencode"    set "HARNESS_DIR=tracing\opencode"
+if /i "%~1"=="omp"         set "HARNESS_DIR=tracing\omp"
 if "%HARNESS_DIR%"=="" ( echo [arize] Unknown harness: %~1 >&2 & exit /b 1 )
 goto :eof
 
@@ -225,6 +226,7 @@ echo     cursor              Install tracing for Cursor IDE
 echo     gemini              Install tracing for Gemini CLI
 echo     kiro                Install tracing for Kiro CLI
 echo     opencode            Install tracing for opencode
+echo     omp                 Install tracing for Oh My Pi (omp)
 echo     update              Update to latest and reinstall all harnesses
 echo     uninstall [harness] Remove one harness or full wipe
 echo.
