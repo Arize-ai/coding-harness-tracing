@@ -597,8 +597,9 @@ class TestAgentEnd:
         _handle_agent_end(_load_fixture("agent_end.json"))
         attrs = _get_attrs(_by_kind(captured_spans, "CHAIN")[0])
         assert attrs["input.value"]["stringValue"] == "list files and edit main.py"
-        # output = current_final_output (last turn's text), NOT the agent_end messages.
-        assert attrs["output.value"]["stringValue"] == "I'll list files then edit."
+        # output = the last assistant text in agent_end.messages (authoritative
+        # and race-free), NOT the racing current_final_output accumulator.
+        assert attrs["output.value"]["stringValue"] == "fallback final answer"
 
     def test_chain_start_time_from_trace_start(self, mock_resolve, mock_ensure, state, captured_spans):
         _handle_before_agent_start(_load_fixture("before_agent_start.json"))
@@ -608,14 +609,36 @@ class TestAgentEnd:
         chain = _by_kind(captured_spans, "CHAIN")[0]
         assert _get_span(chain)["startTimeUnixNano"] == f"{int(start_time)}000000"
 
-    def test_output_fallback_to_messages_when_no_turn_end(self, mock_resolve, mock_ensure, state, captured_spans):
-        """If current_final_output is empty (no turn_end ran), the Turn output
-        falls back to the last text of agent_end.messages."""
+    def test_output_prefers_messages_over_stale_accumulator(self, mock_resolve, mock_ensure, state, captured_spans):
+        """The final answer fires its own turn_end AND lands in agent_end.messages.
+        Because each event runs in a separate detached process racing on shared
+        state, agent_end must read its own messages payload, not the accumulator."""
         _handle_before_agent_start(_load_fixture("before_agent_start.json"))
+        # Simulate a stale accumulator: a prior turn's text is what a racing
+        # turn_end would have left behind when agent_end's process reads state.
+        state.set("current_final_output", "intermediate turn text")
         _handle_agent_end(_load_fixture("agent_end.json"))
-        chain = _by_kind(captured_spans, "CHAIN")[0]
-        attrs = _get_attrs(chain)
+        attrs = _get_attrs(_by_kind(captured_spans, "CHAIN")[0])
         assert attrs["output.value"]["stringValue"] == "fallback final answer"
+
+    def test_output_fallback_to_accumulator_when_messages_lack_assistant_text(
+        self, mock_resolve, mock_ensure, state, captured_spans
+    ):
+        """When agent_end.messages carries no assistant text (e.g. only a tool
+        result), the Turn output falls back to current_final_output."""
+        _handle_before_agent_start(_load_fixture("before_agent_start.json"))
+        state.set("current_final_output", "accumulated final text")
+        _handle_agent_end(
+            {
+                "type": "agent_end",
+                "sessionId": "omp_sess_1",
+                "messages": [
+                    {"role": "toolResult", "content": [{"type": "text", "text": "tool output"}]},
+                ],
+            }
+        )
+        attrs = _get_attrs(_by_kind(captured_spans, "CHAIN")[0])
+        assert attrs["output.value"]["stringValue"] == "accumulated final text"
 
     def test_clears_current_trace_state(self, mock_resolve, mock_ensure, state, captured_spans):
         _run_basic_turn(state)

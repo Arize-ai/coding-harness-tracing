@@ -409,15 +409,24 @@ def _handle_agent_end(input_json: dict) -> None:
     if not state.get("current_trace_id") or not state.get("current_trace_span_id"):
         return
 
-    final_output = state.get("current_final_output") or ""
-    if not final_output:
-        messages = input_json.get("messages") or []
-        if isinstance(messages, list):
-            for message in reversed(messages):
+    # Prefer the final assistant text from agent_end's OWN payload. Each omp
+    # lifecycle event is forwarded to a separate, detached Python process, so
+    # the final turn_end and this agent_end race on the shared state file:
+    # current_final_output may still hold a prior turn's text when this process
+    # reads it. agent_end.messages is self-contained and authoritative — the
+    # last assistant message is the run's final answer. Fall back to the state
+    # accumulator only when the payload carries no assistant text.
+    final_output = ""
+    messages = input_json.get("messages") or []
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            if isinstance(message, dict) and message.get("role") == "assistant":
                 text = _assistant_text(message)
                 if text:
                     final_output = text
                     break
+    if not final_output:
+        final_output = state.get("current_final_output") or ""
 
     _emit_turn_root(state, redact_content(env.log_prompts, final_output))
 

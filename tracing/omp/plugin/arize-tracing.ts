@@ -15,7 +15,7 @@
 //   - a hook default-exports a factory `function (pi: HookAPI)`;
 //   - handlers register via `pi.on(eventName, (event, ctx) => ...)`;
 //   - `session_shutdown` fires with an empty event, so the session id is read
-//     from the hook context (ctx.sessionManager / ctx.session), not the event.
+//     from the hook context via ctx.sessionManager.getSessionId(), not the event.
 // `import type` is erasable, so Bun runs this file directly with no npm deps.
 //
 // Forwarded payload contract (do not change top-level type/sessionId without
@@ -25,7 +25,7 @@
 import { spawn } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent";
+import type { HookAPI, HookContext } from "@oh-my-pi/pi-coding-agent";
 
 function binaryPath(): string {
   const base = join(homedir(), ".arize", "harness", "venv");
@@ -51,42 +51,48 @@ function forward(payload: unknown): void {
 
 // Resolve the omp session id from the hook context. session_shutdown's event
 // payload is empty, so every payload is stamped with the id read from ctx.
-function sessionIdOf(ctx: any): string {
-  return ctx?.sessionManager?.sessionId ?? ctx?.session?.id ?? ctx?.sessionId ?? "";
+// ReadonlySessionManager exposes getSessionId() (a method) — verified against
+// packages/coding-agent/src/session/session-manager.ts.
+function sessionIdOf(ctx: HookContext): string {
+  try {
+    return ctx.sessionManager.getSessionId() || "";
+  } catch {
+    return "";
+  }
 }
 
 export default function (pi: HookAPI): void {
-  pi.on("before_agent_start", async (event: any, ctx: any) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     try {
-      forward({ type: "before_agent_start", sessionId: sessionIdOf(ctx), prompt: event?.prompt });
+      forward({ type: "before_agent_start", sessionId: sessionIdOf(ctx), prompt: event.prompt });
     } catch {
       /* fail-soft */
     }
   });
 
-  pi.on("turn_end", async (event: any, ctx: any) => {
+  pi.on("turn_end", async (event, ctx) => {
     try {
       forward({
         type: "turn_end",
         sessionId: sessionIdOf(ctx),
-        turnIndex: event?.turnIndex,
-        message: event?.message,
-        toolResults: event?.toolResults,
+        turnIndex: event.turnIndex,
+        message: event.message,
+        toolResults: event.toolResults,
       });
     } catch {
       /* fail-soft */
     }
   });
 
-  pi.on("agent_end", async (event: any, ctx: any) => {
+  pi.on("agent_end", async (event, ctx) => {
     try {
-      forward({ type: "agent_end", sessionId: sessionIdOf(ctx), messages: event?.messages });
+      forward({ type: "agent_end", sessionId: sessionIdOf(ctx), messages: event.messages });
     } catch {
       /* fail-soft */
     }
   });
 
-  pi.on("session_shutdown", async (_event: any, ctx: any) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     try {
       forward({ type: "session_shutdown", sessionId: sessionIdOf(ctx) });
     } catch {
