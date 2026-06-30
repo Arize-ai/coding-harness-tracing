@@ -14,6 +14,7 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 | [Gemini CLI](tracing/gemini/README.md) | `install.sh` / `install.bat` | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | `install.sh` / `install.bat` | `kiro` |
 | [Opencode CLI](tracing/opencode/README.md) | `install.sh` / `install.bat` | `opencode` |
+| [Oh My Pi (omp) CLI](tracing/omp/README.md) | `install.sh` / `install.bat` | `omp` |
 
 Claude Code CLI and the Claude Agent SDK share the same plugin, hooks, and configuration — one install covers both.
 
@@ -30,7 +31,7 @@ Access and run the install script remotely to setup coding harness tracing in yo
 ```bash
 INSTALL_URL="https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh"
 
-# claude | codex | gemini | cursor | copilot | kiro | opencode
+# claude | codex | gemini | cursor | copilot | kiro | opencode | omp
 HARNESS="claude"
 
 # setup tracing for a harness
@@ -48,7 +49,7 @@ curl -sSL "$INSTALL_URL" | bash -s -- uninstall
 ```powershell
 $INSTALL_URL = "https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat"
 
-# claude | codex | gemini | cursor | copilot | kiro | opencode
+# claude | codex | gemini | cursor | copilot | kiro | opencode | omp
 $HARNESS = "claude"
 
 iwr -useb $INSTALL_URL -OutFile $env:TEMP\install.bat
@@ -74,7 +75,7 @@ cd coding-harness-tracing
 
 **macOS / Linux**
 ```bash
-# claude | codex | gemini | cursor | copilot | kiro | opencode
+# claude | codex | gemini | cursor | copilot | kiro | opencode | omp
 HARNESS="claude"
 
 # setup tracing for a harness
@@ -89,7 +90,7 @@ HARNESS="claude"
 
 **Windows**
 ```powershell
-# claude | codex | gemini | cursor | copilot | kiro | opencode
+# claude | codex | gemini | cursor | copilot | kiro | opencode | omp
 $HARNESS = "claude"
 
 # setup tracing for a harness
