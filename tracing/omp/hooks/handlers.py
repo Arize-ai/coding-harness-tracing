@@ -93,6 +93,7 @@ def _send_span_async(span_dict: dict) -> None:
     try:
         send_span(span_dict)
     except Exception:
+        # Best-effort tracing in detached child: never propagate failures.
         pass
     os._exit(0)
 
