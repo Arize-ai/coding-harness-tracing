@@ -88,7 +88,7 @@ def _send_span_async(span_dict: dict) -> None:
     except OSError as exc:
         # Best-effort stdio detachment in forked child; ignore failures to avoid
         # impacting host execution, but emit debug context for diagnostics.
-        debug_dump({"event": "omp_stdio_detach_failed", "error": str(exc)})
+        debug_dump("send_span", {"event": "omp_stdio_detach_failed", "error": str(exc)})
 
     try:
         send_span(span_dict)
@@ -118,7 +118,7 @@ def _user_prompt(prompt_field: Any) -> str:
 
 def _tool_calls(message: Any) -> dict:
     """Map ToolCall.id to its name and arguments."""
-    calls = {}
+    calls: dict = {}
     if not isinstance(message, dict):
         return calls
     for item in message.get("content") or []:
@@ -171,7 +171,7 @@ def _timestamp_or_now(value: Any) -> int:
 
 def _per_tool_attrs(tool_name: str, tool_input: Any) -> dict:
     """Return raw specialized tool attrs for known omp tools."""
-    attrs = {}
+    attrs: dict = {}
     if not isinstance(tool_input, dict):
         return attrs
     if tool_name == "bash":

@@ -60,3 +60,7 @@ repos:
         name: mypy (tracing/opencode)
         files: ^tracing/opencode/
         additional_dependencies: [types-PyYAML]
+      - id: mypy
+        name: mypy (tracing/omp)
+        files: ^tracing/omp/
+        additional_dependencies: [types-PyYAML]
