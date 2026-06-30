@@ -82,6 +82,7 @@ def _send_span_async(span_dict: dict) -> None:
             try:
                 os.dup2(devnull, fd)
             except OSError:
+                # Best-effort stdio detachment in child process; ignore per-fd dup failures.
                 pass
         os.close(devnull)
     except OSError:
