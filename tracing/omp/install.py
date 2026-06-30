@@ -39,7 +39,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
-from tracing.omp.constants import HARNESS_NAME
+import tracing.omp.constants as _c
 
 # Header-marker the installer writes into the shim and checks on uninstall so
 # we never delete a user's own extension file.
@@ -52,26 +52,18 @@ _HEADER_MARKER = "// Arize omp tracing hook (shim)."
 
 
 def _extensions_dir():
-    import tracing.omp.constants as _c
-
     return _c.EXTENSIONS_DIR
 
 
 def _plugin_file():
-    import tracing.omp.constants as _c
-
     return _c.PLUGIN_FILE
 
 
 def _settings_dir():
-    import tracing.omp.constants as _c
-
     return _c.SETTINGS_DIR
 
 
 def _settings_file():
-    import tracing.omp.constants as _c
-
     return _c.SETTINGS_FILE
 
 
