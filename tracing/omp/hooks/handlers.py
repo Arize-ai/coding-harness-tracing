@@ -66,6 +66,7 @@ def _send_span_async(span_dict: dict) -> None:
         try:
             os.waitpid(pid, 0)
         except OSError:
+            # Best-effort reap: failure here should not interrupt the caller.
             pass
         return
 
