@@ -98,4 +98,4 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for develop
 
 ## License
 
-MIT
+[Apache 2.0](LICENSE)
