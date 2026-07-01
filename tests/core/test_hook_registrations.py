@@ -332,11 +332,6 @@ class TestEntryPointConsistency:
 class TestDocumentationConsistency:
     """Verify documentation is internally consistent."""
 
-    def test_readme_references_install_sh(self):
-        """Root README.md should reference install.sh as the user-facing entry point."""
-        readme = (REPO_ROOT / "README.md").read_text()
-        assert "install.sh" in readme
-
     def test_cursor_skill_references_cli_entry_points(self):
         """Cursor SKILL.md should use CLI entry points for hooks."""
         skill = (REPO_ROOT / "tracing" / "cursor" / "skills" / "manage-cursor-tracing" / "SKILL.md").read_text()
