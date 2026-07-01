@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "sessionStart": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "sessionEnd": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "beforeSubmitPrompt": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "afterAgentResponse": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "afterAgentThought": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "beforeShellExecution": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "afterShellExecution": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "beforeMCPExecution": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "afterMCPExecution": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "beforeReadFile": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "afterFileEdit": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "beforeTabFileRead": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "afterTabFileEdit": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "stop": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }],
+    "postToolUse": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run-hook" }]
+  }
+}

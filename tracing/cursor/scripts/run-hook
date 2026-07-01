@@ -1,0 +1,28 @@
+#!/bin/sh
+# Arize tracing hook dispatcher for the Cursor plugin.
+#
+# Thin wrapper over the shared bootstrap-venv script (reached via the plugin's
+# core symlink). hooks.json invokes this as "${CURSOR_PLUGIN_ROOT}/scripts/run-hook"
+# because Cursor runs plugin hook commands from the opened project folder, not
+# the plugin dir. Even so, PLUGIN_ROOT is re-resolved here from the script's
+# own location ($0) so dispatch is correct however the script is launched.
+#
+# Cursor exposes no per-plugin *data* dir env var, so the venv lives at a
+# fixed, plugin-dedicated path under ~/.arize/harness (its own subdir, kept
+# isolated from the install.sh-managed venv). Cursor passes the hook payload
+# on stdin; stdout is reserved for Cursor's control JSON. Any failure exits 0
+# so tracing never blocks Cursor.
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_DIR="$HOME/.arize/harness/cursor-plugin/venv"
+ENTRY_POINT="arize-hook-cursor"
+BOOTSTRAP="$PLUGIN_ROOT/core/scripts/bootstrap-venv"
+
+if [ ! -x "$BOOTSTRAP" ]; then
+    echo "[arize] shared bootstrap script not found at $BOOTSTRAP" >&2
+    exit 0
+fi
+
+exec "$BOOTSTRAP" "$PLUGIN_ROOT" "$VENV_DIR" "$ENTRY_POINT"
