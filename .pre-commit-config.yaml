@@ -32,6 +32,10 @@ repos:
         name: mypy (core)
         files: ^core/
       - id: mypy
+        name: mypy (tracing/antigravity)
+        files: ^tracing/antigravity/
+        additional_dependencies: [types-PyYAML]
+      - id: mypy
         name: mypy (tracing/claude_code)
         files: ^tracing/claude_code/
       - id: mypy

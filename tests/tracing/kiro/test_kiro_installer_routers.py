@@ -41,18 +41,6 @@ def test_install_sh_harness_dir_kiro_after_gemini():
 
 
 # ---------------------------------------------------------------------------
-# install.sh — main() case dispatch
-# ---------------------------------------------------------------------------
-
-
-def test_install_sh_main_dispatch_includes_kiro():
-    """The first case in main() must include kiro in the harness list."""
-    text = INSTALL_SH.read_text()
-    # The dispatch line looks like: claude|codex|copilot|cursor|gemini|kiro)
-    assert "gemini|kiro" in text, "main() case dispatch must include 'kiro' after 'gemini'"
-
-
-# ---------------------------------------------------------------------------
 # install.sh — usage() help text
 # ---------------------------------------------------------------------------
 

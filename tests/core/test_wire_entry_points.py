@@ -65,6 +65,9 @@ EXPECTED_HARNESS_ENTRY_POINTS = {
     "arize-hook-cursor": "tracing.cursor.hooks.handlers:main",
     # Kiro hook
     "arize-hook-kiro": "tracing.kiro.hooks.handlers:main",
+    # Antigravity hooks
+    "arize-hook-antigravity-pre-invocation": "tracing.antigravity.hooks.handlers:pre_invocation",
+    "arize-hook-antigravity-stop": "tracing.antigravity.hooks.handlers:stop",
     # opencode hook
     "arize-hook-opencode": "tracing.opencode.hooks.handlers:main",
 }

@@ -238,8 +238,11 @@ class TestDispatchLogic:
         self.text = _read_install_sh()
 
     def test_dispatches_harness_commands(self):
-        """claude|codex|copilot|cursor|gemini|kiro|opencode should be dispatched."""
-        assert "claude|codex|copilot|cursor|gemini|kiro|opencode)" in self.text
+        """claude|codex|copilot|cursor|gemini|kiro (+ any later additions) should be dispatched."""
+        # Match the alternation prefix and any tail of extra harnesses (e.g. ``|antigravity|opencode``).
+        assert re.search(
+            r"claude\|codex\|copilot\|cursor\|gemini\|kiro(\)|\|[a-z|]+\))", self.text
+        ), "main() case dispatch must include the core six harnesses in order"
 
     def test_install_harness_called(self):
         """install_harness function should be called for harness commands."""
