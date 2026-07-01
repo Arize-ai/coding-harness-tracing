@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 import tracing.cursor.constants
 import tracing.cursor.install
@@ -35,7 +34,7 @@ def fake_home(tmp_path, monkeypatch):
 
     install_dir = tmp_path / ".arize" / "harness"
     venv_dir = install_dir / "venv"
-    config_file = install_dir / "config.yaml"
+    config_file = install_dir / "config.json"
 
     monkeypatch.setattr(setup_mod, "INSTALL_DIR", install_dir)
     monkeypatch.setattr(setup_mod, "VENV_DIR", venv_dir)
@@ -129,10 +128,10 @@ class TestFreshInstall:
 
         cursor_install.install(with_skills=False)
 
-        # Check config.yaml was written with flat schema
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        # Check config.json was written with flat schema
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         assert config_file.exists()
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
 
         # Flat entry under harnesses.cursor
         entry = config["harnesses"]["cursor"]
@@ -190,7 +189,7 @@ class TestCopyFrom:
         cursor_install = _load_cursor_module("install")
 
         # Pre-seed config with an existing claude-code harness entry
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         existing_config = {
             "harnesses": {
@@ -203,7 +202,7 @@ class TestCopyFrom:
                 },
             },
         }
-        config_file.write_text(yaml.dump(existing_config))
+        config_file.write_text(json.dumps(existing_config, indent=2))
 
         # Track what prompt_backend receives
         received_harnesses = {}
@@ -230,7 +229,7 @@ class TestCopyFrom:
         assert received_harnesses["value"]["claude-code"]["target"] == "arize"
 
         # Both harnesses should exist in config
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         assert "claude-code" in config["harnesses"]
         assert "cursor" in config["harnesses"]
 
@@ -243,7 +242,7 @@ class TestExistingEntry:
         cursor_install = _load_cursor_module("install")
 
         # Pre-seed config with an existing cursor entry
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         existing_config = {
             "harnesses": {
@@ -255,7 +254,7 @@ class TestExistingEntry:
                 },
             },
         }
-        config_file.write_text(yaml.dump(existing_config))
+        config_file.write_text(json.dumps(existing_config, indent=2))
 
         # prompt_backend should NOT be called
         prompt_backend_called = {"called": False}
@@ -281,7 +280,7 @@ class TestExistingEntry:
         assert not prompt_backend_called["called"]
 
         # project_name should be updated, other fields preserved
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         entry = config["harnesses"]["cursor"]
         assert entry["project_name"] == "my-cursor"
         assert entry["target"] == "phoenix"
@@ -314,7 +313,7 @@ class TestUninstall:
     """Uninstall removes hooks and harness entry."""
 
     def test_uninstall_removes_harness_entry(self, fake_home, monkeypatch):
-        """Uninstall removes hooks and harness entry from config.yaml."""
+        """Uninstall removes hooks and harness entry from config.json."""
         cursor_install = _load_cursor_module("install")
 
         _mock_prompts(monkeypatch)
@@ -327,9 +326,9 @@ class TestUninstall:
         hooks_data = json.loads(hooks_file.read_text())
         assert hooks_data.get("hooks", {}) == {}
 
-        # config.yaml should have no cursor entry
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        # config.json should have no cursor entry
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         harnesses = config.get("harnesses", {})
         assert "cursor" not in harnesses
 
@@ -427,9 +426,9 @@ class TestUninstall:
         # Second uninstall should not raise
         cursor_install.uninstall()
 
-        # config.yaml should still have no cursor entry
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        # config.json should still have no cursor entry
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         harnesses = config.get("harnesses", {})
         assert "cursor" not in harnesses
 
@@ -449,5 +448,5 @@ class TestDryRun:
         hooks_file = fake_home / ".cursor" / "hooks.json"
         assert not hooks_file.exists()
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         assert not config_file.exists()

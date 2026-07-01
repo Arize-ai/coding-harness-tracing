@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 
 @pytest.fixture()
@@ -23,7 +22,7 @@ def fake_home(tmp_path, monkeypatch):
 
     install_dir = tmp_path / ".arize" / "harness"
     venv_dir = install_dir / "venv"
-    config_file = install_dir / "config.yaml"
+    config_file = install_dir / "config.json"
 
     monkeypatch.setattr(setup_mod, "INSTALL_DIR", install_dir)
     monkeypatch.setattr(setup_mod, "VENV_DIR", venv_dir)
@@ -108,17 +107,17 @@ class TestFreshInstall:
         ids=["phoenix", "arize"],
     )
     def test_fresh_install_creates_config_and_hooks(self, fake_home, monkeypatch, backend, expected_target):
-        """With no existing config, install() prompts and writes config.yaml + settings.json."""
+        """With no existing config, install() prompts and writes config.json + settings.json."""
         import tracing.claude_code.install as claude_install
 
         _mock_prompts(monkeypatch, backend=backend)
 
         claude_install.install(with_skills=False)
 
-        # Check config.yaml was written
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        # Check config.json was written
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         assert config_file.exists()
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         assert config["harnesses"]["claude-code"]["target"] == expected_target
         assert config["harnesses"]["claude-code"]["project_name"] == "claude-code"
 
@@ -145,8 +144,8 @@ class TestFreshInstall:
 
         claude_install.install(with_skills=False)
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         entry = config["harnesses"]["claude-code"]
 
         # All fields at the same level — no nested backend block
@@ -195,7 +194,7 @@ class TestExistingEntry:
         _mock_prompts(monkeypatch, backend=ARIZE_BACKEND)
 
         # Pre-populate config with an existing claude-code entry
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         original_entry = {
             "project_name": "old-name",
@@ -204,14 +203,14 @@ class TestExistingEntry:
             "api_key": "original-key",
             "space_id": "original-space",
         }
-        config_file.write_text(yaml.dump({"harnesses": {"claude-code": original_entry}}))
+        config_file.write_text(json.dumps({"harnesses": {"claude-code": original_entry}}, indent=2))
 
         # Mock prompt_project_name to return a new name
         monkeypatch.setattr(claude_install, "prompt_project_name", lambda default: "new-project-name")
 
         claude_install.install(with_skills=False)
 
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         entry = config["harnesses"]["claude-code"]
 
         # project_name updated
@@ -231,7 +230,7 @@ class TestCopyFrom:
         import tracing.claude_code.install as claude_install
 
         # Pre-populate config with a codex entry using arize
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         codex_entry = {
             "project_name": "codex",
@@ -240,7 +239,7 @@ class TestCopyFrom:
             "api_key": "codex-key",
             "space_id": "codex-space",
         }
-        config_file.write_text(yaml.dump({"harnesses": {"codex": codex_entry}}))
+        config_file.write_text(json.dumps({"harnesses": {"codex": codex_entry}}, indent=2))
 
         # Mock prompt_backend to return arize target with codex's credentials (simulating copy-from)
         copied_creds = {
@@ -265,7 +264,7 @@ class TestCopyFrom:
 
         claude_install.install(with_skills=False)
 
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         entry = config["harnesses"]["claude-code"]
 
         # claude-code got codex's credentials
@@ -283,7 +282,7 @@ class TestUninstall:
     """Uninstall removes hooks and harness entry."""
 
     def test_uninstall_removes_hooks_and_config(self, fake_home, monkeypatch):
-        """Uninstall removes hooks, plugin, and harness entry from config.yaml."""
+        """Uninstall removes hooks, plugin, and harness entry from config.json."""
         import tracing.claude_code.install as claude_install
 
         _mock_prompts(monkeypatch)
@@ -297,9 +296,9 @@ class TestUninstall:
         assert "hooks" not in settings
         assert "plugins" not in settings
 
-        # config.yaml should have no claude-code entry
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        # config.json should have no claude-code entry
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         harnesses = config.get("harnesses", {})
         assert "claude-code" not in harnesses
 
@@ -313,8 +312,8 @@ class TestUninstall:
         claude_install.install(with_skills=False)
 
         # Add another harness entry to config
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         config["harnesses"]["copilot"] = {
             "project_name": "copilot",
             "target": "arize",
@@ -322,11 +321,11 @@ class TestUninstall:
             "api_key": "copilot-key",
             "space_id": "copilot-space",
         }
-        config_file.write_text(yaml.dump(config))
+        config_file.write_text(json.dumps(config, indent=2))
 
         claude_install.uninstall()
 
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         assert "claude-code" not in config["harnesses"]
         assert config["harnesses"]["copilot"]["api_key"] == "copilot-key"
 
@@ -448,5 +447,5 @@ class TestDryRun:
         settings_file = fake_home / ".claude" / "settings.json"
         assert not settings_file.exists()
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         assert not config_file.exists()

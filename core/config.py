@@ -2,14 +2,14 @@
 """
 Config helper for Arize Coding Harness Tracing.
 
-Reads and writes ~/.arize/harness/config.yaml.
+Reads and writes ~/.arize/harness/config.json.
 Used by shell scripts (via CLI subcommands) and Python modules (via import).
 
 CLI usage:
     python3 core/config.py get <dotted.key>
     python3 core/config.py set <dotted.key> <value>
     python3 core/config.py delete <dotted.key>
-    python3 core/config.py write          # reads YAML from stdin
+    python3 core/config.py write          # reads JSON from stdin
     python3 core/config.py dump
     python3 core/config.py exists
 """
@@ -18,37 +18,32 @@ import json
 import os
 import sys
 
-try:
-    import yaml
-except ImportError:
-    # When running from venv, yaml should be available.
-    # Provide a clear error if not.
-    sys.stderr.write("error: PyYAML not installed. Install it in the collector venv.\n")
-    sys.exit(1)
-
 from core.constants import CONFIG_FILE
 
 # --- Python API ---
 
 
 def load_config(config_path=None):
-    """Load and return the config dict from the YAML file.
+    """Load and return the config dict from the JSON file.
 
     Returns an empty dict if the file does not exist.
-    Raises ValueError on malformed YAML or non-mapping content.
+    Raises ValueError on malformed JSON or non-mapping content.
     """
     path = config_path or CONFIG_FILE
     if not os.path.isfile(path):
         return {}
     with open(path, "r") as f:
-        try:
-            data = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            raise ValueError(f"Malformed YAML in {path}: {e}")
+        text = f.read()
+    if not text.strip():
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Malformed JSON in {path}: {e}")
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError(f"Config file is not a YAML mapping: {path}")
+        raise ValueError(f"Config file is not a JSON mapping: {path}")
     return data
 
 
@@ -100,12 +95,12 @@ def delete_value(config, dotted_key):
 
 
 def save_config(config, config_path=None):
-    """Write config dict to the YAML file with chmod 600."""
+    """Write config dict to the JSON file with chmod 600."""
     path = config_path or CONFIG_FILE
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        json.dump(config, f, indent=2)
 
 
 # --- CLI helpers ---
@@ -197,15 +192,19 @@ def main():
         sys.exit(0)
 
     if command == "write":
+        text = sys.stdin.read()
+        if not text.strip():
+            save_config({})
+            sys.exit(0)
         try:
-            data = yaml.safe_load(sys.stdin)
-        except yaml.YAMLError as e:
-            sys.stderr.write(f"error: invalid YAML on stdin: {e}\n")
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"error: invalid JSON on stdin: {e}\n")
             sys.exit(1)
         if data is None:
             data = {}
         if not isinstance(data, dict):
-            sys.stderr.write("error: stdin YAML must be a mapping\n")
+            sys.stderr.write("error: stdin JSON must be a mapping\n")
             sys.exit(1)
         save_config(data)
         sys.exit(0)
@@ -216,7 +215,7 @@ def main():
         except ValueError as e:
             sys.stderr.write(f"error: {e}\n")
             sys.exit(1)
-        print(yaml.safe_dump(config, default_flow_style=False, sort_keys=False), end="")
+        print(json.dumps(config, indent=2))
         sys.exit(0)
 
     sys.stderr.write(f"error: unknown command '{command}'\n")

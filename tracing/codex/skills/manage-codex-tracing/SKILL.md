@@ -14,7 +14,7 @@ Codex tracing uses real Codex CLI lifecycle hooks plus the legacy `notify` hook 
 1. **Direct send** (`core/common.py`) — spans are sent directly to Phoenix (REST) or Arize AX (gRPC) from the hook handlers via `send_span()`. Per-harness backend credentials are read from `harnesses.codex.*` in config.
 
 2. **Real Codex hooks** — `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, and `Stop` events are dispatched to three entry points:
-   - `arize-hook-codex-session` (`SessionStart`, `UserPromptSubmit`) — mutates per-thread state file at `~/.arize/harness/state/codex/state_<thread_id>.yaml`.
+   - `arize-hook-codex-session` (`SessionStart`, `UserPromptSubmit`) — mutates per-thread state file at `~/.arize/harness/state/codex/state_<thread_id>.json`.
    - `arize-hook-codex-tool` (`PreToolUse`, `PostToolUse`, `PermissionRequest`) — appends rows to `~/.arize/harness/state/codex/spans_<thread_id>.jsonl`.
    - `arize-hook-codex-stop` (`Stop`) — reads state + JSONL, builds the parent LLM span plus TOOL child spans, sends the multi-span payload, then clears turn-scoped state and deletes the JSONL.
 
@@ -24,13 +24,13 @@ Codex tracing uses real Codex CLI lifecycle hooks plus the legacy `notify` hook 
 Codex CLI
   |
   |-- SessionStart / UserPromptSubmit --> arize-hook-codex-session
-  |     |--> updates state_<thread_id>.yaml
+  |     |--> updates state_<thread_id>.json
   |
   |-- PreToolUse / PostToolUse / PermissionRequest --> arize-hook-codex-tool
   |     |--> appends row to spans_<thread_id>.jsonl
   |
   |-- agent-turn-complete (notify) --> arize-hook-codex-notify
-  |     |--> writes token_usage into state_<thread_id>.yaml
+  |     |--> writes token_usage into state_<thread_id>.json
   |
   |-- Stop --> arize-hook-codex-stop
         |--> reads state + spans JSONL
@@ -126,7 +126,7 @@ Then proceed to [Configure Codex](#configure-codex).
 ## Configure Codex
 
 This section configures:
-1. **Backend config** at `~/.arize/harness/config.yaml`
+1. **Backend config** at `~/.arize/harness/config.json`
 2. **Environment variables** in `~/.codex/arize-env.sh`
 3. **Hook entries** in `~/.codex/config.toml` (real Codex hooks + `notify` token-usage backstop)
 4. **Trust prompt** inside Codex (`/hooks`) — required before non-managed hooks fire
@@ -143,9 +143,9 @@ Store this as `INTEGRATION_PATH` for the hook config.
 
 ### Step 1: Write the backend config
 
-Write `~/.arize/harness/config.yaml` with the backend credentials. The config file is the single source of truth for backend and harness settings.
+Write `~/.arize/harness/config.json` with the backend credentials. The config file is the single source of truth for backend and harness settings.
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, add or update the `harnesses.codex` entry, and preserve existing backend credentials. Only prompt the user for backend credentials if there is no existing config.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, add or update the `harnesses.codex` entry, and preserve existing backend credentials. Only prompt the user for backend credentials if there is no existing config.
 
 **Phoenix:**
 ```bash
@@ -155,13 +155,17 @@ arize-config set harnesses.codex.project_name codex
 ```
 
 If no config exists yet, create it:
-```yaml
-harnesses:
-  codex:
-    project_name: codex
-    target: phoenix
-    endpoint: http://localhost:6006
-    api_key: ""
+```json
+{
+  "harnesses": {
+    "codex": {
+      "project_name": "codex",
+      "target": "phoenix",
+      "endpoint": "http://localhost:6006",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 **Arize AX:**
@@ -171,19 +175,23 @@ arize-config set harnesses.codex.project_name codex
 ```
 
 If no config exists yet, create it:
-```yaml
-harnesses:
-  codex:
-    project_name: codex
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <space-id>
+```json
+{
+  "harnesses": {
+    "codex": {
+      "project_name": "codex",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<space-id>"
+    }
+  }
+}
 ```
 
 ### Step 2: Write the environment file (optional)
 
-Environment variables are optional overrides — all backend credentials are in `~/.arize/harness/config.yaml`. If the user needs env-var overrides, create `~/.codex/arize-env.sh`:
+Environment variables are optional overrides — all backend credentials are in `~/.arize/harness/config.json`. If the user needs env-var overrides, create `~/.codex/arize-env.sh`:
 
 ```bash
 cat > ~/.codex/arize-env.sh << 'EOF'
@@ -269,7 +277,7 @@ Should print: `[arize] DRY RUN:` followed by the span name.
 ### Confirm
 
 Tell the user:
-- Configuration saved to `~/.codex/config.toml`, `~/.codex/arize-env.sh`, and `~/.arize/harness/config.yaml`
+- Configuration saved to `~/.codex/config.toml`, `~/.codex/arize-env.sh`, and `~/.arize/harness/config.json`
 - Spans are sent directly to the backend from the `Stop` hook
 - The real Codex hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`) build rich span trees with TOOL children per tool call
 - The `notify` hook is now a token-usage backstop — it writes exact token counts into the per-thread state file so they appear on the parent LLM span
@@ -310,6 +318,6 @@ Common issues and fixes:
 | Want verbose logging | Set `ARIZE_VERBOSE=true` in env or `export ARIZE_VERBOSE=true` |
 | Wrong project name | Set `ARIZE_PROJECT_NAME` in `~/.codex/arize-env.sh` (default: `codex`) |
 | Existing `notify` hook | Codex supports only one `notify` — create a wrapper script that calls both |
-| Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.yaml ~/.arize/harness/state/codex/spans_*.jsonl` |
+| Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.json ~/.arize/harness/state/codex/spans_*.jsonl` |
 | Flat spans only (no children) | The real hooks haven't been trusted yet. Run `codex` → `/hooks` and approve each `arize-hook-codex-*` entry. |
 | User ID not appearing on spans | Set `ARIZE_USER_ID` in `~/.codex/arize-env.sh` or export before running Codex |

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Arize Codex Tracing Plugin - Interactive Setup.
 
-Writes config.yaml, ~/.codex/arize-env.sh, and ~/.codex/config.toml.
+Writes config.json, ~/.codex/arize-env.sh, and ~/.codex/config.toml.
 
 The ``arize-setup-codex`` entry point calls ``main()`` here, which runs the
 legacy interactive wizard.  The new ``tracing/codex/install.py`` module
@@ -120,7 +120,7 @@ def _run() -> None:
     if existing_entry:
         target = existing_entry.get("target", "")
         print_color(
-            f"Existing config found: target={target} in ~/.arize/harness/config.yaml",
+            f"Existing config found: target={target} in ~/.arize/harness/config.json",
             "yellow",
         )
         print("Skipping credential prompts — updating codex harness entry.")
@@ -154,9 +154,9 @@ def _run() -> None:
             f"Target: {'Phoenix at ' + credentials['endpoint'] if target == 'phoenix' else 'Arize AX (endpoint: ' + credentials['endpoint'] + ')'}"
         )
 
-        # Write config.yaml
+        # Write config.json
         write_config(target, credentials, "codex", project_name, collector=collector)
-        info("Wrote config to ~/.arize/harness/config.yaml")
+        info("Wrote config to ~/.arize/harness/config.json")
 
         # Write env file
         _write_env_file(env_file, target, credentials, project_name)
@@ -181,7 +181,7 @@ def _run() -> None:
     info("Setup complete!")
     print("")
     print("  Configuration:")
-    print("    Config file:  ~/.arize/harness/config.yaml")
+    print("    Config file:  ~/.arize/harness/config.json")
     print(f"    Env file:     {env_file}")
     print(f"    Codex config: {codex_config}")
     print("")

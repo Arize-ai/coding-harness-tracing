@@ -2,7 +2,7 @@
 name = "coding-harness-tracing"
 version = "0.1.0"
 requires-python = ">=3.9"
-dependencies = ["pyyaml"]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
@@ -14,7 +14,6 @@ dev = [
     "black",
     "isort",
     "mypy",
-    "types-PyYAML",
 ]
 
 [project.scripts]

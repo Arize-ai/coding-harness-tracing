@@ -65,7 +65,7 @@ def install(with_skills: bool = False) -> None:
                 user_id=user_id,
             )
         else:
-            info("would write config.yaml with harness entry")
+            info("would write config.json with harness entry")
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet —
     # subsequent harness installs reuse what the first wizard wrote.
@@ -73,7 +73,7 @@ def install(with_skills: bool = False) -> None:
         logging_block = prompt_content_logging()
         write_logging_config(logging_block)
     else:
-        info("Using existing logging settings from config.yaml")
+        info("Using existing logging settings from config.json")
 
     _register_claude_hooks(project_name)
     if with_skills:

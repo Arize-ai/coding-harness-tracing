@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Tests for tracing.copilot.hooks.adapter — single-mode session resolution, init, GC, requirements."""
+import json
 import os
 import subprocess
 from unittest.mock import mock_open, patch
 
 import pytest
-import yaml
 
 from core.common import StateManager
 from tracing.copilot.hooks import adapter
@@ -37,26 +37,26 @@ class TestResolveSession:
     def test_snake_case_session_id_used_as_key(self, copilot_state_dir, disable_env_vars):
         """session_id from payload used as state file key."""
         sm = adapter.resolve_session({"session_id": "sess-42", "hook_event_name": "SessionStart"})
-        assert sm.state_file == copilot_state_dir / "state_sess-42.yaml"
+        assert sm.state_file == copilot_state_dir / "state_sess-42.json"
         assert sm.state_file.exists()
 
     def test_fallback_to_pid_when_no_session_id(self, copilot_state_dir, disable_env_vars, monkeypatch):
         """Falls back to PID-based key when session_id absent."""
         monkeypatch.setattr(adapter, "_get_grandparent_pid", lambda: "54321")
         sm = adapter.resolve_session({"cwd": "/tmp/project"})
-        assert sm.state_file == copilot_state_dir / "state_54321.yaml"
+        assert sm.state_file == copilot_state_dir / "state_54321.json"
 
     def test_fallback_to_pid_when_session_id_empty(self, copilot_state_dir, disable_env_vars, monkeypatch):
         """Falls back to PID-based key when session_id is empty string."""
         monkeypatch.setattr(adapter, "_get_grandparent_pid", lambda: "11111")
         sm = adapter.resolve_session({"session_id": "", "cwd": "/tmp/project"})
-        assert sm.state_file == copilot_state_dir / "state_11111.yaml"
+        assert sm.state_file == copilot_state_dir / "state_11111.json"
 
     def test_init_state_called(self, copilot_state_dir, disable_env_vars):
         """Returned StateManager has init_state() called (file exists with {})."""
         sm = adapter.resolve_session({"session_id": "test-init", "hook_event_name": "SessionStart"})
         assert sm.state_file.exists()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {}
 
     def test_same_input_same_file(self, copilot_state_dir, disable_env_vars):
@@ -70,7 +70,7 @@ class TestResolveSession:
         """UUID-style session_id (as seen in real payloads) works correctly."""
         uuid = "d4870649-2f69-472d-96a2-599e55ab13f0"
         sm = adapter.resolve_session({"session_id": uuid, "hook_event_name": "SessionStart"})
-        assert sm.state_file == copilot_state_dir / f"state_{uuid}.yaml"
+        assert sm.state_file == copilot_state_dir / f"state_{uuid}.json"
         assert sm.state_file.exists()
 
     def test_windows_fallback_uses_ppid(self, copilot_state_dir, disable_env_vars, monkeypatch):
@@ -78,14 +78,14 @@ class TestResolveSession:
         monkeypatch.setattr("platform.system", lambda: "Windows")
         monkeypatch.setattr(os, "getppid", lambda: 12345)
         sm = adapter.resolve_session({"cwd": "/tmp/project"})
-        assert sm.state_file == copilot_state_dir / "state_12345.yaml"
+        assert sm.state_file == copilot_state_dir / "state_12345.json"
 
     def test_camel_case_session_id_not_used(self, copilot_state_dir, disable_env_vars, monkeypatch):
         """Old camelCase sessionId is NOT recognized — triggers PID fallback."""
         monkeypatch.setattr(adapter, "_get_grandparent_pid", lambda: "77777")
         sm = adapter.resolve_session({"sessionId": "camel-case-id", "hookEventName": "SessionStart"})
         # Should NOT use "camel-case-id"; should fall back to PID
-        assert sm.state_file == copilot_state_dir / "state_77777.yaml"
+        assert sm.state_file == copilot_state_dir / "state_77777.json"
 
 
 # ── ensure_session_initialized tests ─────────────────────────────────────────
@@ -95,7 +95,7 @@ class TestEnsureSessionInitialized:
     def _make_state(self, copilot_state_dir, key="test"):
         sm = StateManager(
             state_dir=copilot_state_dir,
-            state_file=copilot_state_dir / f"state_{key}.yaml",
+            state_file=copilot_state_dir / f"state_{key}.json",
             lock_path=copilot_state_dir / f".lock_{key}",
         )
         sm.init_state()
@@ -215,7 +215,7 @@ class TestGcStaleStateFiles:
     def test_dead_pid_removed(self, copilot_state_dir, disable_env_vars, monkeypatch):
         """state file for a dead PID is removed."""
         dead_pid = 99999
-        state_file = copilot_state_dir / f"state_{dead_pid}.yaml"
+        state_file = copilot_state_dir / f"state_{dead_pid}.json"
         state_file.write_text("{}")
         monkeypatch.setattr(adapter, "_is_pid_alive", lambda pid: False)
         adapter.gc_stale_state_files()
@@ -224,7 +224,7 @@ class TestGcStaleStateFiles:
     def test_live_pid_kept(self, copilot_state_dir, disable_env_vars, monkeypatch):
         """state file for a live PID is kept."""
         live_pid = os.getpid()
-        state_file = copilot_state_dir / f"state_{live_pid}.yaml"
+        state_file = copilot_state_dir / f"state_{live_pid}.json"
         state_file.write_text("{}")
         monkeypatch.setattr(adapter, "_is_pid_alive", lambda pid: pid == live_pid)
         adapter.gc_stale_state_files()
@@ -232,7 +232,7 @@ class TestGcStaleStateFiles:
 
     def test_non_numeric_key_kept(self, copilot_state_dir, disable_env_vars):
         """state file with non-numeric key (UUID sessionId) is never GC'd."""
-        state_file = copilot_state_dir / "state_d4870649-2f69-472d-96a2-599e55ab13f0.yaml"
+        state_file = copilot_state_dir / "state_d4870649-2f69-472d-96a2-599e55ab13f0.json"
         state_file.write_text("{}")
         adapter.gc_stale_state_files()
         assert state_file.exists()
@@ -240,7 +240,7 @@ class TestGcStaleStateFiles:
     def test_lock_dir_removed(self, copilot_state_dir, disable_env_vars, monkeypatch):
         """Lock dir is removed when state file is removed."""
         dead_pid = 99998
-        state_file = copilot_state_dir / f"state_{dead_pid}.yaml"
+        state_file = copilot_state_dir / f"state_{dead_pid}.json"
         state_file.write_text("{}")
         lock_dir = copilot_state_dir / f".lock_{dead_pid}"
         lock_dir.mkdir()
@@ -252,7 +252,7 @@ class TestGcStaleStateFiles:
     def test_lock_file_removed(self, copilot_state_dir, disable_env_vars, monkeypatch):
         """Lock file (fcntl-style) is removed when state file is removed."""
         dead_pid = 99997
-        state_file = copilot_state_dir / f"state_{dead_pid}.yaml"
+        state_file = copilot_state_dir / f"state_{dead_pid}.json"
         state_file.write_text("{}")
         lock_file = copilot_state_dir / f".lock_{dead_pid}"
         lock_file.write_text("")  # fcntl creates lock as a regular file
@@ -263,7 +263,7 @@ class TestGcStaleStateFiles:
 
     def test_empty_dir_no_error(self, copilot_state_dir, disable_env_vars):
         """Empty STATE_DIR causes no errors."""
-        for f in copilot_state_dir.glob("state_*.yaml"):
+        for f in copilot_state_dir.glob("state_*.json"):
             f.unlink()
         adapter.gc_stale_state_files()  # should not raise
 

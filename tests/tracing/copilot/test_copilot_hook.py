@@ -53,7 +53,7 @@ def _get_span(span_payload):
 @pytest.fixture
 def state(tmp_path):
     """Create a StateManager with a temp state file, pre-initialized."""
-    sf = tmp_path / "state_test.yaml"
+    sf = tmp_path / "state_test.json"
     lp = tmp_path / ".lock_test"
     sm = StateManager(state_dir=tmp_path, state_file=sf, lock_path=lp)
     sm.init_state()

@@ -4,7 +4,7 @@
 Self-contained module that handles:
 - Writing ~/.codex/arize-env.sh (env file)
 - Updating ~/.codex/config.toml (notify + five hook entry points)
-- Managing the shared config.yaml harness entry
+- Managing the shared config.json harness entry
 - Symlinking skills
 - Migrating legacy v1 installs via tracing.codex.install_legacy
 """
@@ -238,13 +238,13 @@ def install(with_skills: bool = False) -> None:
                 user_id=user_id,
             )
         else:
-            info("would write config.yaml with backend credentials")
+            info("would write config.json with backend credentials")
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:
         write_logging_config(prompt_content_logging())
     else:
-        info("Using existing logging settings from config.yaml")
+        info("Using existing logging settings from config.json")
 
     # 3. Codex config dir + env file.
     if not dry_run():
@@ -290,7 +290,7 @@ def uninstall() -> None:
 
     # 4. Remove harness entry + unlink skills.
     remove_harness_entry(HARNESS_NAME)
-    info("Removed codex harness entry from config.yaml")
+    info("Removed codex harness entry from config.json")
     unlink_skills(HARNESS_NAME)
     info("Unlinked skills")
     info("Codex tracing uninstalled")

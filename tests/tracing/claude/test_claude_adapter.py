@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Tests for tracing.claude_code.hooks.adapter — session resolution, init, GC, requirements."""
+import json
 import os
 import subprocess
 from pathlib import Path
 from unittest.mock import mock_open, patch
 
 import pytest
-import yaml
 
 from core.common import StateManager
 from tracing.claude_code.hooks import adapter
@@ -40,27 +40,27 @@ class TestResolveSession:
     def test_session_id_from_input(self, claude_state_dir, disable_env_vars):
         """input with session_id -> state file uses that key."""
         sm = adapter.resolve_session({"session_id": "sess-abc"})
-        assert sm.state_file == claude_state_dir / "state_sess-abc.yaml"
+        assert sm.state_file == claude_state_dir / "state_sess-abc.json"
         assert sm.state_file.exists()
 
     def test_session_key_from_env(self, claude_state_dir, disable_env_vars, monkeypatch):
         """CLAUDE_SESSION_KEY env var is used when no session_id in input."""
         monkeypatch.setenv("CLAUDE_SESSION_KEY", "custom-key")
         sm = adapter.resolve_session({})
-        assert sm.state_file == claude_state_dir / "state_custom-key.yaml"
+        assert sm.state_file == claude_state_dir / "state_custom-key.json"
 
     def test_fallback_to_pid(self, claude_state_dir, disable_env_vars, monkeypatch):
         """Without session_id or env var, falls back to PID-based key."""
         # Mock _get_grandparent_pid to return a known value
         monkeypatch.setattr(adapter, "_get_grandparent_pid", lambda: "12345")
         sm = adapter.resolve_session({})
-        assert sm.state_file == claude_state_dir / "state_12345.yaml"
+        assert sm.state_file == claude_state_dir / "state_12345.json"
 
     def test_init_state_called(self, claude_state_dir, disable_env_vars):
         """Returned StateManager has init_state() called (file exists with {})."""
         sm = adapter.resolve_session({"session_id": "test-init"})
         assert sm.state_file.exists()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {}
 
     def test_same_input_same_file(self, claude_state_dir, disable_env_vars):
@@ -73,7 +73,7 @@ class TestResolveSession:
         """session_id in input takes priority over CLAUDE_SESSION_KEY."""
         monkeypatch.setenv("CLAUDE_SESSION_KEY", "env-key")
         sm = adapter.resolve_session({"session_id": "input-key"})
-        assert sm.state_file == claude_state_dir / "state_input-key.yaml"
+        assert sm.state_file == claude_state_dir / "state_input-key.json"
 
 
 # ── ensure_session_initialized tests ─────────────────────────────────────────
@@ -83,7 +83,7 @@ class TestEnsureSessionInitialized:
     def _make_state(self, claude_state_dir, key="test"):
         sm = StateManager(
             state_dir=claude_state_dir,
-            state_file=claude_state_dir / f"state_{key}.yaml",
+            state_file=claude_state_dir / f"state_{key}.json",
             lock_path=claude_state_dir / f".lock_{key}",
         )
         sm.init_state()
@@ -163,7 +163,7 @@ class TestGcStaleStateFiles:
     def test_dead_pid_removed(self, claude_state_dir, disable_env_vars, monkeypatch):
         """state file for a dead PID is removed."""
         dead_pid = 99999
-        state_file = claude_state_dir / f"state_{dead_pid}.yaml"
+        state_file = claude_state_dir / f"state_{dead_pid}.json"
         state_file.write_text("{}")
         monkeypatch.setattr(adapter, "_is_pid_alive", lambda pid: False)
         adapter.gc_stale_state_files()
@@ -172,7 +172,7 @@ class TestGcStaleStateFiles:
     def test_live_pid_kept(self, claude_state_dir, disable_env_vars, monkeypatch):
         """state file for a live PID is kept."""
         live_pid = os.getpid()
-        state_file = claude_state_dir / f"state_{live_pid}.yaml"
+        state_file = claude_state_dir / f"state_{live_pid}.json"
         state_file.write_text("{}")
         monkeypatch.setattr(adapter, "_is_pid_alive", lambda pid: pid == live_pid)
         adapter.gc_stale_state_files()
@@ -180,7 +180,7 @@ class TestGcStaleStateFiles:
 
     def test_non_numeric_key_kept(self, claude_state_dir, disable_env_vars):
         """state file with non-numeric key (session-id based) is never GC'd."""
-        state_file = claude_state_dir / "state_sess-abc123.yaml"
+        state_file = claude_state_dir / "state_sess-abc123.json"
         state_file.write_text("{}")
         adapter.gc_stale_state_files()
         assert state_file.exists()
@@ -188,7 +188,7 @@ class TestGcStaleStateFiles:
     def test_lock_dir_removed(self, claude_state_dir, disable_env_vars, monkeypatch):
         """Lock dir is removed when state file is removed."""
         dead_pid = 99998
-        state_file = claude_state_dir / f"state_{dead_pid}.yaml"
+        state_file = claude_state_dir / f"state_{dead_pid}.json"
         state_file.write_text("{}")
         lock_dir = claude_state_dir / f".lock_{dead_pid}"
         lock_dir.mkdir()
@@ -200,7 +200,7 @@ class TestGcStaleStateFiles:
     def test_empty_dir_no_error(self, claude_state_dir, disable_env_vars):
         """Empty STATE_DIR causes no errors."""
         # Remove any files that might exist
-        for f in claude_state_dir.glob("state_*.yaml"):
+        for f in claude_state_dir.glob("state_*.json"):
             f.unlink()
         adapter.gc_stale_state_files()  # should not raise
 

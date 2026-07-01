@@ -9,7 +9,6 @@ import urllib.error
 from unittest import mock
 
 import pytest
-import yaml
 
 from core.common import (
     FileLock,
@@ -59,15 +58,15 @@ class TestLogging:
         # no files should be created in debug dir
 
     def test_debug_dump_on(self, tmp_path, monkeypatch):
-        """debug_dump() writes YAML file when ARIZE_TRACE_DEBUG=true."""
+        """debug_dump() writes JSON file when ARIZE_TRACE_DEBUG=true."""
         monkeypatch.setenv("ARIZE_TRACE_DEBUG", "true")
         debug_dir = tmp_path / "debug"
         monkeypatch.setattr("core.constants.STATE_BASE_DIR", tmp_path)
         debug_dump("test_label", {"key": "val"})
         assert debug_dir.exists()
-        files = list(debug_dir.glob("test_label_*.yaml"))
+        files = list(debug_dir.glob("test_label_*.json"))
         assert len(files) == 1
-        data = yaml.safe_load(files[0].read_text())
+        data = json.loads(files[0].read_text())
         assert data == {"key": "val"}
 
 
@@ -255,35 +254,35 @@ class TestFileLock:
 class TestStateManager:
     def _make_sm(self, tmp_path, name="test"):
         state_dir = tmp_path / "state"
-        state_file = state_dir / f"state_{name}.yaml"
+        state_file = state_dir / f"state_{name}.json"
         lock_path = state_dir / f".lock_{name}"
         return StateManager(state_dir, state_file, lock_path)
 
     def test_init_creates_dir_and_file(self, tmp_path):
-        """init_state() creates directory and .yaml file containing {}."""
+        """init_state() creates directory and .json file containing {}."""
         sm = self._make_sm(tmp_path)
         sm.init_state()
         assert sm.state_dir.exists()
         assert sm.state_file.exists()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {}
 
     def test_init_recovers_corrupted(self, tmp_path):
         """init_state() recovers corrupted file."""
         sm = self._make_sm(tmp_path)
         sm.state_dir.mkdir(parents=True)
-        sm.state_file.write_text("{{garbage not yaml")
+        sm.state_file.write_text("{{garbage not json")
         sm.init_state()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {}
 
     def test_init_preserves_valid(self, tmp_path):
         """init_state() preserves valid existing file."""
         sm = self._make_sm(tmp_path)
         sm.state_dir.mkdir(parents=True)
-        sm.state_file.write_text(yaml.safe_dump({"key": "val"}))
+        sm.state_file.write_text(json.dumps({"key": "val"}, indent=2))
         sm.init_state()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {"key": "val"}
 
     def test_set_then_get(self, tmp_path):
@@ -415,8 +414,8 @@ class TestStateManager:
         # on a platform where the path resolution differs)
         val = sm.get("key")
         assert val in ("original", "corrupted")  # either is valid, but not corrupt
-        # Verify the file is valid YAML
-        data = yaml.safe_load(sm.state_file.read_text())
+        # Verify the file is valid JSON
+        data = json.loads(sm.state_file.read_text())
         assert isinstance(data, dict)
 
 
@@ -972,7 +971,7 @@ class TestEnvConfigProperties:
 
 
 class TestLoggingFlagPrecedence:
-    """env var > config.yaml `logging:` > default for log_prompts/tool_details/tool_content."""
+    """env var > config.json `logging` > default for log_prompts/tool_details/tool_content."""
 
     @pytest.fixture(autouse=True)
     def _fresh_env(self, monkeypatch):
@@ -1356,16 +1355,16 @@ class TestGetTarget:
 
 class TestDebugDump:
 
-    def test_writes_yaml_to_debug_dir(self, tmp_path, monkeypatch):
-        """debug_dump writes YAML file to STATE_BASE_DIR/debug/."""
+    def test_writes_json_to_debug_dir(self, tmp_path, monkeypatch):
+        """debug_dump writes JSON file to STATE_BASE_DIR/debug/."""
         monkeypatch.setenv("ARIZE_TRACE_DEBUG", "true")
         monkeypatch.setattr("core.constants.STATE_BASE_DIR", tmp_path)
         debug_dump("my_label", {"foo": "bar", "count": 42})
         debug_dir = tmp_path / "debug"
         assert debug_dir.exists()
-        files = list(debug_dir.glob("my_label_*.yaml"))
+        files = list(debug_dir.glob("my_label_*.json"))
         assert len(files) == 1
-        data = yaml.safe_load(files[0].read_text())
+        data = json.loads(files[0].read_text())
         assert data == {"foo": "bar", "count": 42}
 
 
@@ -1373,7 +1372,7 @@ class TestDebugDump:
 
 
 class TestResolveBackend:
-    """Tests for resolve_backend() — env vars take precedence over YAML config."""
+    """Tests for resolve_backend() — env vars take precedence over config file."""
 
     @pytest.fixture(autouse=True)
     def _fresh_env(self, monkeypatch):
@@ -1395,10 +1394,10 @@ class TestResolveBackend:
             ]
         }
 
-    # ── YAML-only paths ────────────────────────────────────────────────────
+    # ── Config-only paths ──────────────────────────────────────────────────
 
-    def test_phoenix_from_yaml(self, monkeypatch):
-        """YAML harness entry with phoenix target; resolver returns those fields."""
+    def test_phoenix_from_config(self, monkeypatch):
+        """Config harness entry with phoenix target; resolver returns those fields."""
         cfg = {
             "harnesses": {
                 "claude-code": {
@@ -1417,8 +1416,8 @@ class TestResolveBackend:
         assert result["api_key"] == "ph-key"
         assert result["project_name"] == "claude-code"
 
-    def test_arize_from_yaml(self, monkeypatch):
-        """YAML harness entry with arize target including space_id."""
+    def test_arize_from_config(self, monkeypatch):
+        """Config harness entry with arize target including space_id."""
         cfg = {
             "harnesses": {
                 "claude-code": {
@@ -1442,7 +1441,7 @@ class TestResolveBackend:
     # ── env-only paths (marketplace-install scenario) ──────────────────────
 
     def test_arize_from_env_only(self, monkeypatch):
-        """ARIZE_API_KEY + ARIZE_SPACE_ID with no YAML entry resolves to arize."""
+        """ARIZE_API_KEY + ARIZE_SPACE_ID with no config entry resolves to arize."""
         monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         monkeypatch.setenv("ARIZE_SPACE_ID", "space-env")
         monkeypatch.setattr("core.config.load_config", lambda: {})
@@ -1474,15 +1473,15 @@ class TestResolveBackend:
         assert result["target"] == "phoenix"
         assert result["api_key"] == "ph-env-key"
 
-    def test_phoenix_api_key_env_overrides_yaml(self, monkeypatch):
-        """PHOENIX_API_KEY env takes precedence over a YAML-configured api_key."""
+    def test_phoenix_api_key_env_overrides_config(self, monkeypatch):
+        """PHOENIX_API_KEY env takes precedence over a config-set api_key."""
         monkeypatch.setenv("PHOENIX_API_KEY", "ph-env-key")
         cfg = {
             "harnesses": {
                 "opencode": {
                     "target": "phoenix",
                     "endpoint": "http://localhost:6006",
-                    "api_key": "ph-yaml-key",
+                    "api_key": "ph-config-key",
                 },
             },
         }
@@ -1503,12 +1502,12 @@ class TestResolveBackend:
         assert result["api_key"] == "ak-env"
 
     def test_project_name_env_override(self, monkeypatch):
-        """ARIZE_PROJECT_NAME overrides YAML project_name."""
+        """ARIZE_PROJECT_NAME overrides config project_name."""
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "from-env")
         cfg = {
             "harnesses": {
                 "claude-code": {
-                    "project_name": "from-yaml",
+                    "project_name": "from-config",
                     "target": "arize",
                     "api_key": "ak",
                     "space_id": "sp",
@@ -1520,10 +1519,10 @@ class TestResolveBackend:
         result = resolve_backend(self._make_span("claude-code"))
         assert result["project_name"] == "from-env"
 
-    # ── env-overrides-YAML precedence ──────────────────────────────────────
+    # ── env-overrides-config precedence ────────────────────────────────────
 
-    def test_env_arize_overrides_yaml_phoenix(self, monkeypatch):
-        """Env-set arize creds win even when YAML configures phoenix."""
+    def test_env_arize_overrides_config_phoenix(self, monkeypatch):
+        """Env-set arize creds win even when config configures phoenix."""
         monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         monkeypatch.setenv("ARIZE_SPACE_ID", "space-env")
         cfg = {
@@ -1540,16 +1539,16 @@ class TestResolveBackend:
         assert result["target"] == "arize"
         assert result["api_key"] == "ak-env"
 
-    def test_env_api_key_overrides_yaml(self, monkeypatch):
-        """ARIZE_API_KEY env overrides YAML api_key while keeping YAML target/endpoint/space_id."""
+    def test_env_api_key_overrides_config(self, monkeypatch):
+        """ARIZE_API_KEY env overrides config api_key while keeping config target/endpoint/space_id."""
         monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         cfg = {
             "harnesses": {
                 "claude-code": {
                     "target": "arize",
                     "endpoint": "otlp.arize.com:443",
-                    "api_key": "ak-yaml",
-                    "space_id": "sp-yaml",
+                    "api_key": "ak-config",
+                    "space_id": "sp-config",
                 },
             },
         }
@@ -1557,12 +1556,12 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["api_key"] == "ak-env"
-        assert result["space_id"] == "sp-yaml"
+        assert result["space_id"] == "sp-config"
 
     # ── error paths ────────────────────────────────────────────────────────
 
     def test_no_backend_anywhere(self, capsys, monkeypatch):
-        """No env vars and no YAML entry → none with actionable error."""
+        """No env vars and no config entry → none with actionable error."""
         monkeypatch.setattr("core.config.load_config", lambda: {"harnesses": {}})
 
         result = resolve_backend(self._make_span("claude-code"))
@@ -1572,7 +1571,7 @@ class TestResolveBackend:
         assert "ARIZE_API_KEY" in stderr
 
     def test_arize_env_missing_space_id(self, capsys, monkeypatch):
-        """ARIZE_API_KEY set but not ARIZE_SPACE_ID and no YAML → none."""
+        """ARIZE_API_KEY set but not ARIZE_SPACE_ID and no config → none."""
         monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
         monkeypatch.setattr("core.config.load_config", lambda: {})
 
@@ -1582,14 +1581,14 @@ class TestResolveBackend:
         # Partial env doesn't switch target to arize; falls through to no-backend.
         assert "No backend configured" in stderr
 
-    def test_arize_yaml_missing_space_id(self, capsys, monkeypatch):
-        """YAML arize entry without space_id and no env fallback → none."""
+    def test_arize_config_missing_space_id(self, capsys, monkeypatch):
+        """Config arize entry without space_id and no env fallback → none."""
         cfg = {
             "harnesses": {
                 "claude-code": {
                     "target": "arize",
                     "endpoint": "otlp.arize.com:443",
-                    "api_key": "ak-yaml",
+                    "api_key": "ak-config",
                 },
             },
         }
@@ -1600,8 +1599,8 @@ class TestResolveBackend:
         stderr = capsys.readouterr().err
         assert "missing space_id" in stderr
 
-    def test_phoenix_yaml_missing_endpoint(self, capsys, monkeypatch):
-        """YAML phoenix entry without endpoint and no PHOENIX_ENDPOINT env → none."""
+    def test_phoenix_config_missing_endpoint(self, capsys, monkeypatch):
+        """Config phoenix entry without endpoint and no PHOENIX_ENDPOINT env → none."""
         cfg = {
             "harnesses": {
                 "claude-code": {
