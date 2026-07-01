@@ -252,8 +252,8 @@ class TestGitignoreUpdates:
     def test_has_state_dir(self):
         assert "state/" in self.lines
 
-    def test_has_config_yaml(self):
-        assert "config.yaml" in self.lines
+    def test_has_config_json(self):
+        assert "config.json" in self.lines
 
     def test_has_logs_dir(self):
         assert "logs/" in self.lines
@@ -275,11 +275,11 @@ class TestGitignoreUpdates:
         remaining = self.lines[comment_idx + 1 :]
         # Filter out blank lines
         entries = [line for line in remaining if line.strip()]
-        expected = {"state/", "config.yaml", "logs/", "run/"}
+        expected = {"state/", "config.json", "logs/", "run/"}
         assert expected.issubset(set(entries)), f"Expected entries {expected} under comment, got {entries}"
 
     def test_no_duplicate_entries(self):
         """Entries should not appear twice."""
-        for entry in ["state/", "config.yaml", "logs/", "run/"]:
+        for entry in ["state/", "config.json", "logs/", "run/"]:
             count = self.lines.count(entry)
             assert count == 1, f"{entry} appears {count} times in .gitignore"

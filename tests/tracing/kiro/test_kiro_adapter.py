@@ -107,26 +107,26 @@ class TestResolveSession:
     def test_uses_payload_session_id(self, kiro_state_dir, disable_env_vars):
         """Payload session_id is used as the state file key."""
         sm = adapter.resolve_session({"session_id": "abc-123"})
-        assert sm.state_file == kiro_state_dir / "state_abc-123.yaml"
+        assert sm.state_file == kiro_state_dir / "state_abc-123.json"
         assert sm.state_file.exists()
 
     def test_uses_env_var_when_payload_missing(self, kiro_state_dir, disable_env_vars, monkeypatch):
         """KIRO_SESSION_ID env var is used when payload has no session_id."""
         monkeypatch.setenv("KIRO_SESSION_ID", "env-456")
         sm = adapter.resolve_session({})
-        assert sm.state_file == kiro_state_dir / "state_env-456.yaml"
+        assert sm.state_file == kiro_state_dir / "state_env-456.json"
 
     def test_payload_takes_precedence_over_env(self, kiro_state_dir, disable_env_vars, monkeypatch):
         """Payload session_id wins over KIRO_SESSION_ID env var."""
         monkeypatch.setenv("KIRO_SESSION_ID", "from-env")
         sm = adapter.resolve_session({"session_id": "from-payload"})
-        assert sm.state_file == kiro_state_dir / "state_from-payload.yaml"
+        assert sm.state_file == kiro_state_dir / "state_from-payload.json"
 
     def test_unknown_fallback_when_both_missing(self, kiro_state_dir, disable_env_vars):
         """Falls back to unknown-<pid> when neither payload nor env has session_id."""
         adapter.resolve_session({})
         # State file should match the unknown-* pattern
-        assert list(kiro_state_dir.glob("state_unknown-*.yaml"))
+        assert list(kiro_state_dir.glob("state_unknown-*.json"))
 
 
 # ── ensure_session_initialized tests ────────────────────────────────────────
@@ -136,7 +136,7 @@ class TestEnsureSessionInitialized:
     def _make_state(self, kiro_state_dir, key="test"):
         sm = StateManager(
             state_dir=kiro_state_dir,
-            state_file=kiro_state_dir / f"state_{key}.yaml",
+            state_file=kiro_state_dir / f"state_{key}.json",
             lock_path=kiro_state_dir / f".lock_{key}",
         )
         sm.init_state()
@@ -209,7 +209,7 @@ class TestEnsureSessionInitialized:
 class TestGcStaleStateFiles:
     def test_removes_files_older_than_24h(self, kiro_state_dir, disable_env_vars):
         """State file older than 24h is removed."""
-        state_file = kiro_state_dir / "state_old.yaml"
+        state_file = kiro_state_dir / "state_old.json"
         state_file.write_text("{}")
         old_time = time.time() - 90000  # 25 hours
         os.utime(state_file, (old_time, old_time))
@@ -218,14 +218,14 @@ class TestGcStaleStateFiles:
 
     def test_keeps_recent_files(self, kiro_state_dir, disable_env_vars):
         """State file younger than 24h is kept."""
-        state_file = kiro_state_dir / "state_new.yaml"
+        state_file = kiro_state_dir / "state_new.json"
         state_file.write_text("{}")
         adapter.gc_stale_state_files()
         assert state_file.exists()
 
     def test_removes_matching_lock(self, kiro_state_dir, disable_env_vars):
         """Lock file is removed when corresponding state file is removed."""
-        state_file = kiro_state_dir / "state_old.yaml"
+        state_file = kiro_state_dir / "state_old.json"
         state_file.write_text("{}")
         lock_file = kiro_state_dir / ".lock_old"
         lock_file.write_text("")

@@ -8,8 +8,9 @@ uninstall deletes it (only when it's our file — header-marker guard).
 
 from __future__ import annotations
 
+import json
+
 import pytest
-import yaml
 
 import tracing.opencode.constants as _oc
 import tracing.opencode.install as _install
@@ -77,7 +78,7 @@ def cwd_tmp(tmp_path, monkeypatch):
 
     monkeypatch.setattr(setup_mod, "INSTALL_DIR", tmp_path / ".arize" / "harness")
     monkeypatch.setattr(setup_mod, "VENV_DIR", tmp_path / ".arize" / "harness" / "venv")
-    monkeypatch.setattr(setup_mod, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.yaml")
+    monkeypatch.setattr(setup_mod, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.json")
     monkeypatch.setattr(setup_mod, "BIN_DIR", tmp_path / ".arize" / "harness" / "bin")
     monkeypatch.setattr(setup_mod, "RUN_DIR", tmp_path / ".arize" / "harness" / "run")
     monkeypatch.setattr(setup_mod, "LOG_DIR", tmp_path / ".arize" / "harness" / "logs")
@@ -86,11 +87,11 @@ def cwd_tmp(tmp_path, monkeypatch):
     import core.constants as c
 
     monkeypatch.setattr(c, "BASE_DIR", tmp_path / ".arize" / "harness")
-    monkeypatch.setattr(c, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.yaml")
+    monkeypatch.setattr(c, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.json")
 
     import core.config as config_mod
 
-    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(tmp_path / ".arize" / "harness" / "config.yaml"))
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(tmp_path / ".arize" / "harness" / "config.json"))
 
     # Redirect opencode plugin paths into the temp tree (mirror gemini's SETTINGS_FILE redirect)
     plugin_dir = tmp_path / ".config" / "opencode" / "plugin"
@@ -119,7 +120,7 @@ def plugin_source_text(cwd_tmp):
 
 
 class TestInstallFreshWritesFlatHarnessEntry:
-    """Fresh install writes flat harness entry to config.yaml."""
+    """Fresh install writes flat harness entry to config.json."""
 
     @pytest.mark.parametrize(
         "backend,expected_target",
@@ -133,9 +134,9 @@ class TestInstallFreshWritesFlatHarnessEntry:
         _mock_prompts(monkeypatch, backend=backend)
         install()
 
-        config_path = cwd_tmp / ".arize" / "harness" / "config.yaml"
+        config_path = cwd_tmp / ".arize" / "harness" / "config.json"
         assert config_path.is_file()
-        config = yaml.safe_load(config_path.read_text())
+        config = json.loads(config_path.read_text())
         entry = config["harnesses"]["opencode"]
         assert entry["target"] == expected_target
         assert entry["project_name"] == "opencode"
@@ -224,7 +225,7 @@ class TestInstallSecondHarnessOffersCopyFrom:
         """Pre-seed a claude-code entry; opencode install should receive it in prompt_backend."""
         config_dir = cwd_tmp / ".arize" / "harness"
         config_dir.mkdir(parents=True, exist_ok=True)
-        config_path = config_dir / "config.yaml"
+        config_path = config_dir / "config.json"
 
         seed_config = {
             "harnesses": {
@@ -237,7 +238,7 @@ class TestInstallSecondHarnessOffersCopyFrom:
                 },
             },
         }
-        config_path.write_text(yaml.dump(seed_config))
+        config_path.write_text(json.dumps(seed_config, indent=2))
 
         captured = {}
 
@@ -262,7 +263,7 @@ class TestInstallSecondHarnessOffersCopyFrom:
         assert "claude-code" in captured["existing_harnesses"]
         assert captured["existing_harnesses"]["claude-code"]["target"] == "arize"
 
-        config = yaml.safe_load(config_path.read_text())
+        config = json.loads(config_path.read_text())
         entry = config["harnesses"]["opencode"]
         assert entry["target"] == "arize"
         assert entry["endpoint"] == ARIZE_BACKEND[1]["endpoint"]
@@ -282,7 +283,7 @@ class TestInstallExistingOpencodeEntryOnlyUpdatesProjectName:
     def test_existing_entry_preserves_target(self, cwd_tmp, monkeypatch):
         config_dir = cwd_tmp / ".arize" / "harness"
         config_dir.mkdir(parents=True, exist_ok=True)
-        config_path = config_dir / "config.yaml"
+        config_path = config_dir / "config.json"
 
         seed_config = {
             "harnesses": {
@@ -295,7 +296,7 @@ class TestInstallExistingOpencodeEntryOnlyUpdatesProjectName:
                 },
             },
         }
-        config_path.write_text(yaml.dump(seed_config))
+        config_path.write_text(json.dumps(seed_config, indent=2))
 
         monkeypatch.setattr(_install, "prompt_project_name", lambda default: "my-opencode")
         monkeypatch.setattr(
@@ -308,7 +309,7 @@ class TestInstallExistingOpencodeEntryOnlyUpdatesProjectName:
 
         install()
 
-        config = yaml.safe_load(config_path.read_text())
+        config = json.loads(config_path.read_text())
         entry = config["harnesses"]["opencode"]
         assert entry["project_name"] == "my-opencode"
         assert entry["target"] == "arize"
@@ -323,17 +324,17 @@ class TestInstallExistingOpencodeEntryOnlyUpdatesProjectName:
 
 
 class TestInstallExistingLoggingBlockSkipsPrompt:
-    """When config.yaml already has a logging block, skip the logging prompt."""
+    """When config.json already has a logging block, skip the logging prompt."""
 
     def test_existing_logging_not_reprompted(self, cwd_tmp, monkeypatch):
         config_dir = cwd_tmp / ".arize" / "harness"
         config_dir.mkdir(parents=True, exist_ok=True)
-        config_path = config_dir / "config.yaml"
+        config_path = config_dir / "config.json"
 
         seed_config = {
             "logging": {"prompts": False, "tool_details": True, "tool_content": False},
         }
-        config_path.write_text(yaml.dump(seed_config))
+        config_path.write_text(json.dumps(seed_config, indent=2))
 
         _mock_prompts(monkeypatch)
 
@@ -420,15 +421,15 @@ class TestInstallHandlesMissingPluginDir:
 
 
 class TestUninstallRemovesHarnessEntry:
-    """Uninstall removes harness entry from config.yaml."""
+    """Uninstall removes harness entry from config.json."""
 
     def test_config_entry_removed(self, cwd_tmp, monkeypatch):
         _mock_prompts(monkeypatch)
         install()
         uninstall()
-        config_path = cwd_tmp / ".arize" / "harness" / "config.yaml"
+        config_path = cwd_tmp / ".arize" / "harness" / "config.json"
         if config_path.is_file():
-            config = yaml.safe_load(config_path.read_text())
+            config = json.loads(config_path.read_text())
             harnesses = (config or {}).get("harnesses", {})
             assert "opencode" not in harnesses
 
@@ -445,9 +446,9 @@ class TestUninstallRemovesHarnessEntry:
         install()
         uninstall()
         uninstall()  # second call — no exception
-        config_path = cwd_tmp / ".arize" / "harness" / "config.yaml"
+        config_path = cwd_tmp / ".arize" / "harness" / "config.json"
         if config_path.is_file():
-            config = yaml.safe_load(config_path.read_text())
+            config = json.loads(config_path.read_text())
             harnesses = (config or {}).get("harnesses", {})
             assert "opencode" not in harnesses
 
@@ -523,7 +524,7 @@ class TestInstallDryRunWritesNothing:
         monkeypatch.setenv("ARIZE_DRY_RUN", "true")
         _mock_prompts(monkeypatch)
         install()
-        config_path = cwd_tmp / ".arize" / "harness" / "config.yaml"
+        config_path = cwd_tmp / ".arize" / "harness" / "config.json"
         assert not config_path.is_file()
 
 

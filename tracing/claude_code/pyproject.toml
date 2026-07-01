@@ -1,8 +1,8 @@
 [project]
 name = "claude-code-tracing"
-version = "1.0.1"
+version = "1.0.3"
 requires-python = ">=3.9"
-dependencies = ["pyyaml"]
+dependencies = []
 
 [project.scripts]
 arize-hook-session-start = "tracing.claude_code.hooks.handlers:session_start"

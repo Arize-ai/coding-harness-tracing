@@ -123,7 +123,7 @@ def _uninstall_hooks(hooks_dir: Path) -> None:
 
 
 def install() -> None:
-    """Install Copilot tracing hooks (VS Code + CLI) and register in config.yaml."""
+    """Install Copilot tracing hooks (VS Code + CLI) and register in config.json."""
     ensure_shared_runtime()
 
     # If this harness has no backend config yet, prompt; otherwise reuse.
@@ -138,7 +138,7 @@ def install() -> None:
         if not dry_run():
             write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
         else:
-            info("would write config.yaml with backend credentials")
+            info("would write config.json with backend credentials")
     else:
         project_name = prompt_project_name(existing_entry.get("project_name") or HARNESS_NAME)
         merge_harness_entry(HARNESS_NAME, project_name)
@@ -149,7 +149,7 @@ def install() -> None:
         logging_block = prompt_content_logging()
         write_logging_config(logging_block)
     else:
-        info("Using existing logging settings from config.yaml")
+        info("Using existing logging settings from config.json")
 
     hooks_dir = Path.cwd() / HOOKS_DIR
 
@@ -162,7 +162,7 @@ def install() -> None:
 
 
 def uninstall() -> None:
-    """Remove Copilot tracing hooks and deregister from config.yaml."""
+    """Remove Copilot tracing hooks and deregister from config.json."""
     hooks_dir = Path.cwd() / HOOKS_DIR
 
     _uninstall_hooks(hooks_dir)

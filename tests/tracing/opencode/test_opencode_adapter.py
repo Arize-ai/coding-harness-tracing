@@ -8,11 +8,11 @@ keys off the literal string "unknown".
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 
 import pytest
-import yaml
 
 from core.common import StateManager
 
@@ -38,7 +38,7 @@ def opencode_state_dir(tmp_harness_dir, monkeypatch):
 def disable_env_vars(monkeypatch):
     """Clear env vars that could influence session resolution.
 
-    On-disk config.yaml is isolated globally by the autouse ``reset_env_caches``
+    On-disk config.json is isolated globally by the autouse ``reset_env_caches``
     fixture combined with ``tmp_harness_dir``'s ``CONFIG_FILE`` redirect, so this
     only needs to clear the env-var inputs.
     """
@@ -93,19 +93,19 @@ class TestResolveSession:
     def test_uses_session_id_from_payload(self, opencode_state_dir, disable_env_vars):
         """sessionID in input_json is used as the state file key."""
         sm = adapter.resolve_session({"sessionID": "ses_123"})
-        assert sm.state_file == opencode_state_dir / "state_ses_123.yaml"
+        assert sm.state_file == opencode_state_dir / "state_ses_123.json"
         assert sm.state_file.exists()
 
     def test_unknown_fallback_when_missing(self, opencode_state_dir, disable_env_vars):
         """Missing sessionID -> key off 'unknown'. No PID-based key."""
         sm = adapter.resolve_session({})
-        assert sm.state_file == opencode_state_dir / "state_unknown.yaml"
+        assert sm.state_file == opencode_state_dir / "state_unknown.json"
         assert sm.state_file.exists()
 
     def test_unknown_fallback_when_empty(self, opencode_state_dir, disable_env_vars):
         """Empty sessionID -> key off 'unknown'."""
         sm = adapter.resolve_session({"sessionID": ""})
-        assert sm.state_file == opencode_state_dir / "state_unknown.yaml"
+        assert sm.state_file == opencode_state_dir / "state_unknown.json"
 
     def test_no_pid_keyed_fallback(self, opencode_state_dir, disable_env_vars):
         """Missing sessionID must NOT produce a PID-keyed state file.
@@ -114,7 +114,7 @@ class TestResolveSession:
         """
         adapter.resolve_session({})
         # No state file with a numeric (pid-style) key should exist
-        for f in opencode_state_dir.glob("state_*.yaml"):
+        for f in opencode_state_dir.glob("state_*.json"):
             key = f.stem.replace("state_", "", 1)
             assert not key.isdigit(), f"PID-keyed state file produced: {f.name}"
 
@@ -122,7 +122,7 @@ class TestResolveSession:
         """Returned StateManager has init_state() called (file exists with {})."""
         sm = adapter.resolve_session({"sessionID": "ses_init"})
         assert sm.state_file.exists()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {}
 
     def test_same_session_id_same_file(self, opencode_state_dir, disable_env_vars):
@@ -144,7 +144,7 @@ class TestResolveSession:
     def test_extra_payload_fields_ignored(self, opencode_state_dir, disable_env_vars):
         """Extra payload fields are not used for the session key."""
         sm = adapter.resolve_session({"sessionID": "ses_only", "session_id": "should-be-ignored", "messages": []})
-        assert sm.state_file == opencode_state_dir / "state_ses_only.yaml"
+        assert sm.state_file == opencode_state_dir / "state_ses_only.json"
 
 
 # ── ensure_session_initialized tests ─────────────────────────────────────────
@@ -154,7 +154,7 @@ class TestEnsureSessionInitialized:
     def _make_state(self, opencode_state_dir, key="test"):
         sm = StateManager(
             state_dir=opencode_state_dir,
-            state_file=opencode_state_dir / f"state_{key}.yaml",
+            state_file=opencode_state_dir / f"state_{key}.json",
             lock_path=opencode_state_dir / f".lock_{key}",
         )
         sm.init_state()
@@ -163,7 +163,7 @@ class TestEnsureSessionInitialized:
     def test_sets_all_keys(self, opencode_state_dir, disable_env_vars, monkeypatch):
         """First call sets all expected keys."""
         # Source user_id from env so the assertion is hermetic, not leaked from
-        # the developer's on-disk config.yaml.
+        # the developer's on-disk config.json.
         monkeypatch.setenv("ARIZE_USER_ID", "test-user-all-keys")
         sm = self._make_state(opencode_state_dir, "all-keys")
         adapter.ensure_session_initialized(sm, {"sessionID": "ses_all"})
@@ -296,7 +296,7 @@ class TestEnsureSessionInitialized:
 class TestGcStaleStateFiles:
     def test_old_file_removed(self, opencode_state_dir, disable_env_vars):
         """State file older than 24h is removed."""
-        state_file = opencode_state_dir / "state_old-session.yaml"
+        state_file = opencode_state_dir / "state_old-session.json"
         state_file.write_text("{}")
         # Set mtime to 25 hours ago
         old_time = time.time() - 90000
@@ -306,7 +306,7 @@ class TestGcStaleStateFiles:
 
     def test_recent_file_kept(self, opencode_state_dir, disable_env_vars):
         """State file younger than 24h is kept."""
-        state_file = opencode_state_dir / "state_recent-session.yaml"
+        state_file = opencode_state_dir / "state_recent-session.json"
         state_file.write_text("{}")
         # mtime is now (just created), which is < 24h old
         adapter.gc_stale_state_files()
@@ -314,7 +314,7 @@ class TestGcStaleStateFiles:
 
     def test_lock_dir_removed(self, opencode_state_dir, disable_env_vars):
         """Lock dir is removed when state file is removed."""
-        state_file = opencode_state_dir / "state_old-lock-dir.yaml"
+        state_file = opencode_state_dir / "state_old-lock-dir.json"
         state_file.write_text("{}")
         lock_dir = opencode_state_dir / ".lock_old-lock-dir"
         lock_dir.mkdir()
@@ -326,7 +326,7 @@ class TestGcStaleStateFiles:
 
     def test_lock_file_removed(self, opencode_state_dir, disable_env_vars):
         """Lock file is removed when state file is removed."""
-        state_file = opencode_state_dir / "state_old-lock-file.yaml"
+        state_file = opencode_state_dir / "state_old-lock-file.json"
         state_file.write_text("{}")
         lock_file = opencode_state_dir / ".lock_old-lock-file"
         lock_file.write_text("")
@@ -338,7 +338,7 @@ class TestGcStaleStateFiles:
 
     def test_empty_dir_no_error(self, opencode_state_dir, disable_env_vars):
         """Empty STATE_DIR causes no errors."""
-        for f in opencode_state_dir.glob("state_*.yaml"):
+        for f in opencode_state_dir.glob("state_*.json"):
             f.unlink()
         adapter.gc_stale_state_files()  # should not raise
 
@@ -350,7 +350,7 @@ class TestGcStaleStateFiles:
 
     def test_uses_24h_cutoff(self, opencode_state_dir, disable_env_vars):
         """Files exactly past the 24h boundary are removed."""
-        state_file = opencode_state_dir / "state_boundary.yaml"
+        state_file = opencode_state_dir / "state_boundary.json"
         state_file.write_text("{}")
         old_time = time.time() - 86401  # 24h + 1s
         os.utime(state_file, (old_time, old_time))
@@ -363,7 +363,7 @@ class TestGcStaleStateFiles:
         A *recent* numeric-named file should NOT be removed (no liveness check on it).
         """
         # Recent file with digit-style key: must be kept (mtime branch only).
-        state_file = opencode_state_dir / "state_99999.yaml"
+        state_file = opencode_state_dir / "state_99999.json"
         state_file.write_text("{}")
         # Fresh mtime
         adapter.gc_stale_state_files()
@@ -371,7 +371,7 @@ class TestGcStaleStateFiles:
 
     def test_unknown_key_file_old_removed(self, opencode_state_dir, disable_env_vars):
         """The 'unknown' fallback state file is removed once old (mtime branch)."""
-        state_file = opencode_state_dir / "state_unknown.yaml"
+        state_file = opencode_state_dir / "state_unknown.json"
         state_file.write_text("{}")
         old_time = time.time() - 90000
         os.utime(state_file, (old_time, old_time))
@@ -380,7 +380,7 @@ class TestGcStaleStateFiles:
 
     def test_oserror_on_unlink_is_caught(self, opencode_state_dir, disable_env_vars, monkeypatch):
         """OSError on unlink is caught and ignored (best-effort)."""
-        state_file = opencode_state_dir / "state_unlink-err.yaml"
+        state_file = opencode_state_dir / "state_unlink-err.json"
         state_file.write_text("{}")
         old_time = time.time() - 90000
         os.utime(state_file, (old_time, old_time))

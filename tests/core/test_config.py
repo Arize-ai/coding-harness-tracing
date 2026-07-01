@@ -1,12 +1,12 @@
 """Tests for core/config.py — pure functions and CLI main()."""
 
 import io
+import json
 import os
 import stat
 from pathlib import Path
 
 import pytest
-import yaml
 
 from core.config import _format_output, _parse_value, delete_value, get_value, load_config, main, save_config, set_value
 
@@ -145,19 +145,19 @@ class TestDeleteValue:
 
 
 class TestSaveConfig:
-    def test_writes_valid_yaml(self, tmp_path):
-        path = tmp_path / "config.yaml"
+    def test_writes_valid_json(self, tmp_path):
+        path = tmp_path / "config.json"
         save_config({"a": 1}, config_path=str(path))
-        data = yaml.safe_load(path.read_text())
+        data = json.loads(path.read_text())
         assert data == {"a": 1}
 
     def test_creates_parent_dirs(self, tmp_path):
-        path = tmp_path / "sub" / "dir" / "config.yaml"
+        path = tmp_path / "sub" / "dir" / "config.json"
         save_config({"x": "y"}, config_path=str(path))
         assert path.exists()
 
     def test_permissions_600(self, tmp_path):
-        path = tmp_path / "config.yaml"
+        path = tmp_path / "config.json"
         save_config({}, config_path=str(path))
         mode = stat.S_IMODE(os.stat(path).st_mode)
         assert mode == 0o600
@@ -165,28 +165,33 @@ class TestSaveConfig:
 
 class TestLoadConfig:
     def test_missing_file_returns_empty(self, tmp_path):
-        assert load_config(str(tmp_path / "nope.yaml")) == {}
+        assert load_config(str(tmp_path / "nope.json")) == {}
 
     def test_empty_file_returns_empty(self, tmp_path):
-        path = tmp_path / "empty.yaml"
+        path = tmp_path / "empty.json"
         path.write_text("")
         assert load_config(str(path)) == {}
 
-    def test_loads_valid_yaml(self, tmp_path):
-        path = tmp_path / "config.yaml"
-        path.write_text(yaml.safe_dump({"a": 1}))
+    def test_null_file_returns_empty(self, tmp_path):
+        path = tmp_path / "null.json"
+        path.write_text("null")
+        assert load_config(str(path)) == {}
+
+    def test_loads_valid_json(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"a": 1}, indent=2))
         assert load_config(str(path)) == {"a": 1}
 
     def test_non_mapping_raises(self, tmp_path):
-        path = tmp_path / "bad.yaml"
-        path.write_text("- item1\n- item2\n")
-        with pytest.raises(ValueError, match="not a YAML mapping"):
+        path = tmp_path / "bad.json"
+        path.write_text('["item1", "item2"]')
+        with pytest.raises(ValueError, match="not a JSON mapping"):
             load_config(str(path))
 
-    def test_malformed_yaml_raises(self, tmp_path):
-        path = tmp_path / "bad.yaml"
-        path.write_text(":::bad\n  yaml: [")
-        with pytest.raises(ValueError, match="Malformed YAML"):
+    def test_malformed_json_raises(self, tmp_path):
+        path = tmp_path / "bad.json"
+        path.write_text("{not valid json")
+        with pytest.raises(ValueError, match="Malformed JSON"):
             load_config(str(path))
 
 
@@ -198,7 +203,7 @@ class TestLoadConfig:
 @pytest.fixture
 def cli_config(tmp_harness_dir, sample_config, monkeypatch):
     """Patch core.config.CONFIG_FILE to the tmp harness config path."""
-    config_path = str(tmp_harness_dir / "config.yaml")
+    config_path = str(tmp_harness_dir / "config.json")
     monkeypatch.setattr("core.config.CONFIG_FILE", config_path)
     return config_path
 
@@ -231,7 +236,7 @@ class TestMainSet:
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
-        data = yaml.safe_load(Path(cli_config).read_text())
+        data = json.loads(Path(cli_config).read_text())
         assert data["harnesses"]["codex"]["collector"]["port"] == 9999
 
     def test_set_missing_args(self, cli_config, monkeypatch):
@@ -247,7 +252,7 @@ class TestMainDelete:
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
-        data = yaml.safe_load(Path(cli_config).read_text())
+        data = json.loads(Path(cli_config).read_text())
         assert "codex" not in data["harnesses"]
 
     def test_delete_missing_arg(self, cli_config, monkeypatch):
@@ -258,13 +263,13 @@ class TestMainDelete:
 
 
 class TestMainDump:
-    def test_dump_prints_yaml(self, cli_config, monkeypatch, capsys):
+    def test_dump_prints_json(self, cli_config, monkeypatch, capsys):
         monkeypatch.setattr("sys.argv", ["config.py", "dump"])
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
         output = capsys.readouterr().out
-        data = yaml.safe_load(output)
+        data = json.loads(output)
         assert data["harnesses"]["claude-code"]["target"] == "phoenix"
 
 
@@ -276,7 +281,7 @@ class TestMainExists:
         assert exc.value.code == 0
 
     def test_exists_when_missing(self, tmp_harness_dir, monkeypatch):
-        missing = str(tmp_harness_dir / "no_such_config.yaml")
+        missing = str(tmp_harness_dir / "no_such_config.json")
         monkeypatch.setattr("core.config.CONFIG_FILE", missing)
         monkeypatch.setattr("sys.argv", ["config.py", "exists"])
         with pytest.raises(SystemExit) as exc:
@@ -286,13 +291,13 @@ class TestMainExists:
 
 class TestMainWrite:
     def test_write_from_stdin(self, cli_config, monkeypatch):
-        input_yaml = yaml.safe_dump({"new_key": "new_value"})
-        monkeypatch.setattr("sys.stdin", io.StringIO(input_yaml))
+        input_json = json.dumps({"new_key": "new_value"}, indent=2)
+        monkeypatch.setattr("sys.stdin", io.StringIO(input_json))
         monkeypatch.setattr("sys.argv", ["config.py", "write"])
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
-        data = yaml.safe_load(Path(cli_config).read_text())
+        data = json.loads(Path(cli_config).read_text())
         assert data == {"new_key": "new_value"}
 
     def test_write_empty_stdin(self, cli_config, monkeypatch):
@@ -301,11 +306,11 @@ class TestMainWrite:
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
-        data = yaml.safe_load(Path(cli_config).read_text())
+        data = json.loads(Path(cli_config).read_text())
         assert data == {}
 
     def test_write_non_mapping_fails(self, cli_config, monkeypatch):
-        monkeypatch.setattr("sys.stdin", io.StringIO("- item"))
+        monkeypatch.setattr("sys.stdin", io.StringIO('["item"]'))
         monkeypatch.setattr("sys.argv", ["config.py", "write"])
         with pytest.raises(SystemExit) as exc:
             main()

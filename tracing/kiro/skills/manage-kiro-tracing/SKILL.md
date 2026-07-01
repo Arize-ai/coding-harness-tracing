@@ -13,7 +13,7 @@ Configure OpenInference tracing for **Kiro CLI** sessions to Arize AX (cloud) or
 
 1. **Is the harness already installed?**
    - Check `~/.kiro/agents/` for an agent file containing `arize-hook-kiro` in its `hooks` block
-   - Check `~/.arize/harness/config.yaml` for the `harnesses.kiro` block
+   - Check `~/.arize/harness/config.json` for the `harnesses.kiro` block
    - If both are present → Jump to [Validate](#validate) or [Troubleshoot](#troubleshoot)
 
 2. **Do they already have credentials?**
@@ -85,11 +85,11 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution.
+**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.json` to exist for backend credential resolution.
 
 Configuration has two parts:
 
-1. **Backend config** (`~/.arize/harness/config.yaml`) — backend credentials and per-harness settings, read by `send_span()`.
+1. **Backend config** (`~/.arize/harness/config.json`) — backend credentials and per-harness settings, read by `send_span()`.
 2. **Kiro agent config** (`~/.kiro/agents/<agent>.json`) — the agent the user runs with, containing the tracing `hooks` block.
 
 ### Ask the user for:
@@ -106,29 +106,37 @@ Configuration has two parts:
 
 ### Write the backend config
 
-The config file at `~/.arize/harness/config.yaml` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/kiro}`
+The config file at `~/.arize/harness/config.json` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/kiro}`
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.kiro` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.kiro` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
 
 **Phoenix:**
-```yaml
-harnesses:
-  kiro:
-    project_name: kiro
-    target: phoenix
-    endpoint: <endpoint>
-    api_key: ""
+```json
+{
+  "harnesses": {
+    "kiro": {
+      "project_name": "kiro",
+      "target": "phoenix",
+      "endpoint": "<endpoint>",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 **Arize AX:**
-```yaml
-harnesses:
-  kiro:
-    project_name: kiro
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <id>
+```json
+{
+  "harnesses": {
+    "kiro": {
+      "project_name": "kiro",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<id>"
+    }
+  }
+}
 ```
 
 If the user has a custom OTLP endpoint, set it in `harnesses.kiro.endpoint`.
@@ -194,7 +202,7 @@ kiro-cli chat --agent arize-traced
 
 ### Validate
 
-1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the file contains the `harnesses.kiro` block.
+1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the file contains the `harnesses.kiro` block.
 2. **Agent file exists**: Run `cat ~/.kiro/agents/<agent>.json` to verify the `hooks` block has all five events pointing at `arize-hook-kiro`.
 3. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 4. **Kiro accepts the agent config** (optional, requires `kiro-cli` on PATH): `kiro-cli agent validate --path ~/.kiro/agents/<agent>.json`.
@@ -202,7 +210,7 @@ kiro-cli chat --agent arize-traced
 ### Confirm
 
 Tell the user:
-- Backend config saved to `~/.arize/harness/config.yaml`
+- Backend config saved to `~/.arize/harness/config.json`
 - Tracing hooks registered in `~/.kiro/agents/<agent>.json`
 - Run a session with `kiro-cli chat` (if you set it as default) or `kiro-cli chat --agent <agent>`
 - Spans are sent directly to the backend from hooks — no background process needed
@@ -262,14 +270,14 @@ Common issues and fixes:
 
 | Problem | Fix |
 |---------|-----|
-| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.yaml`. Check hook log: `tail -20 ~/.arize/harness/logs/kiro.log` |
+| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/kiro.log` |
 | Hooks not firing | Verify the agent JSON has all five hooks under `hooks` and that each `command` resolves to the `arize-hook-kiro` venv binary. Run `kiro-cli agent validate --path ~/.kiro/agents/<agent>.json` if `kiro-cli` is on PATH |
 | Wrong agent in use | Either pass `--agent <name>` to `kiro-cli chat`, or set the agent as default: `kiro-cli agent set-default <name>` |
-| Config missing | Run `./install.sh kiro` or create `~/.arize/harness/config.yaml` manually with a `harnesses.kiro` section |
+| Config missing | Run `./install.sh kiro` or create `~/.arize/harness/config.json` manually with a `harnesses.kiro` section |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | LLM spans missing model name / cost | The session sidecar at `~/.kiro/sessions/cli/<session_id>.json` was unavailable when `stop` fired. Confirm the sidecar exists for the session — enrichment is fail-soft so the span is emitted without those attributes |
 | Tool spans mismatched or orphaned | Concurrent tool execution can break the FIFO match. The handler emits an "orphan" TOOL span when the stack is empty — search the hook log for `no pending tool slot` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Kiro |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching Kiro |
-| Wrong project name | Set `harnesses.kiro.project_name` in `~/.arize/harness/config.yaml` (default: `"kiro"`) |
+| Wrong project name | Set `harnesses.kiro.project_name` in `~/.arize/harness/config.json` (default: `"kiro"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` env var before launching Kiro |

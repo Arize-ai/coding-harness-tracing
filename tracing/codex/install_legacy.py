@@ -23,7 +23,7 @@ _PATH_MARKER_BEGIN = "# >>> arize codex tracing PATH >>>"
 _PATH_MARKER_END = "# <<< arize codex tracing PATH <<<"
 
 # v1 OTLP endpoint pattern. Matches any 127.0.0.1 endpoint ending in /v1/logs
-# to catch installs where the user customized the buffer port via config.yaml.
+# to catch installs where the user customized the buffer port via config.json.
 _V1_OTEL_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
 
 

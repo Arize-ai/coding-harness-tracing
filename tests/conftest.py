@@ -7,7 +7,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
-import yaml
 
 # Ensure repo root is importable
 REPO_ROOT = Path(__file__).parent.parent
@@ -16,7 +15,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 @pytest.fixture(autouse=True)
 def isolate_config(tmp_path, monkeypatch):
-    """Isolate every test from the developer's real ~/.arize/harness/config.yaml.
+    """Isolate every test from the developer's real ~/.arize/harness/config.json.
 
     Two independent leaks are closed here:
 
@@ -33,7 +32,7 @@ def isolate_config(tmp_path, monkeypatch):
     """
     from core.common import env
 
-    monkeypatch.setattr("core.config.CONFIG_FILE", tmp_path / "no-such-config.yaml")
+    monkeypatch.setattr("core.config.CONFIG_FILE", tmp_path / "no-such-config.json")
     env.invalidate_caches()
     yield
     env.invalidate_caches()
@@ -53,7 +52,7 @@ def tmp_harness_dir(tmp_path, monkeypatch):
     import core.constants as c
 
     monkeypatch.setattr(c, "BASE_DIR", base)
-    monkeypatch.setattr(c, "CONFIG_FILE", base / "config.yaml")
+    monkeypatch.setattr(c, "CONFIG_FILE", base / "config.json")
     monkeypatch.setattr(c, "PID_DIR", base / "run")
     monkeypatch.setattr(c, "LOG_DIR", base / "logs")
     monkeypatch.setattr(c, "BIN_DIR", base / "bin")
@@ -64,7 +63,7 @@ def tmp_harness_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def sample_config(tmp_harness_dir):
-    """Write a known-good config.yaml into the temp harness dir.
+    """Write a known-good config.json into the temp harness dir.
 
     Returns the config dict.
     """
@@ -91,9 +90,9 @@ def sample_config(tmp_harness_dir):
             },
         },
     }
-    config_path = tmp_harness_dir / "config.yaml"
+    config_path = tmp_harness_dir / "config.json"
     with open(config_path, "w") as f:
-        yaml.safe_dump(config, f)
+        json.dump(config, f, indent=2)
     return config
 
 

@@ -2,14 +2,14 @@
 """Shared library for coding-harness-tracing: state management, file locking, and span building.
 
 Provides FileLock (cross-platform file locking), StateManager (per-session
-key-value state backed by YAML files), and OTLP span building functions.
+key-value state backed by JSON files), and OTLP span building functions.
 Replaces the jq-based state functions in common.sh lines 46-109 and
 build_span/build_multi_span from common.sh lines 277-317 / codex common.sh lines 110-145.
 """
 
 import atexit
 import functools
-import json as _json
+import json
 import os
 import shutil
 import sys
@@ -20,8 +20,6 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Optional
-
-import yaml
 
 # ---------------------------------------------------------------------------
 # Environment helper — reads tracing-related env vars with defaults
@@ -48,8 +46,8 @@ class _Env:
 
         1. ``ARIZE_USER_ID`` env var (env always wins; an explicit empty value
            blanks it)
-        2. ``harnesses.<service_name>.user_id`` in config.yaml (per-harness)
-        3. top-level ``user_id`` in config.yaml (global)
+        2. ``harnesses.<service_name>.user_id`` in config.json (per-harness)
+        3. top-level ``user_id`` in config.json (global)
         → ``""`` if none set
         """
         raw = os.environ.get("ARIZE_USER_ID")
@@ -111,7 +109,7 @@ class _Env:
 
     @functools.cached_property
     def _top_level_config(self) -> dict:
-        """Full top-level config.yaml mapping. Loaded once per process."""
+        """Full top-level config.json mapping. Loaded once per process."""
         try:
             from core.config import load_config
 
@@ -122,7 +120,7 @@ class _Env:
 
     @functools.cached_property
     def _logging_config(self) -> dict:
-        """Top-level `logging:` block from config.yaml. Loaded once per process."""
+        """Top-level `logging` block from config.json. Loaded once per process."""
         try:
             from core.config import load_config
 
@@ -131,7 +129,7 @@ class _Env:
         except Exception:
             return {}
 
-    # cached_property attributes that read config.yaml once per process. Kept in
+    # cached_property attributes that read config.json once per process. Kept in
     # one place so invalidate_caches() stays correct if a new cached read is added.
     _CACHED_CONFIG_PROPERTIES = ("_top_level_config", "_logging_config")
 
@@ -140,14 +138,14 @@ class _Env:
 
         ``functools.cached_property`` stores its result in the instance
         ``__dict__``; popping the key forces recomputation. Used by tests (and
-        any code that mutates config.yaml at runtime) to avoid serving stale
+        any code that mutates config.json at runtime) to avoid serving stale
         config. Safe to call when nothing is cached.
         """
         for name in self._CACHED_CONFIG_PROPERTIES:
             self.__dict__.pop(name, None)
 
     def _resolve_log_flag(self, env_key: str, config_key: str, default: bool) -> bool:
-        """env var > config.yaml `logging.<key>` > default."""
+        """env var > config.json `logging.<key>` > default."""
         raw = os.environ.get(env_key)
         if raw is not None:
             return raw.lower() == "true"
@@ -183,11 +181,11 @@ class _Env:
         """Resolve custom span attributes for a harness.
 
         Layered, later wins:
-          1. top-level ``attributes:`` in config.yaml (global — all harnesses)
-          2. ``harnesses.<service_name>.attributes:`` in config.yaml (per-harness)
+          1. top-level ``attributes:`` in config.json (global — all harnesses)
+          2. ``harnesses.<service_name>.attributes:`` in config.json (per-harness)
           3. ``OTEL_RESOURCE_ATTRIBUTES`` env var (env always wins)
 
-        Config values keep their YAML type (an int stays an int, bool stays
+        Config values keep their JSON type (an int stays an int, bool stays
         bool); env values are always strings. Returns a fresh dict every call.
         """
         cfg = self._top_level_config
@@ -354,7 +352,7 @@ def restore_stderr_from_log_file() -> None:
 def debug_dump(label: str, data: object) -> None:
     """Trace-level debug dump — only when ARIZE_TRACE_DEBUG=true.
 
-    Writes YAML files to {STATE_DIR}/debug/{label}_{timestamp}.yaml.
+    Writes JSON files to {STATE_DIR}/debug/{label}_{timestamp}.json.
     Used by Codex hooks for detailed payload inspection.
     """
     if os.environ.get("ARIZE_TRACE_DEBUG", "").lower() != "true":
@@ -365,8 +363,8 @@ def debug_dump(label: str, data: object) -> None:
         debug_dir = STATE_BASE_DIR / "debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
         ts = int(time.time() * 1000)
-        dump_file = debug_dir / f"{label}_{ts}.yaml"
-        dump_file.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
+        dump_file = debug_dir / f"{label}_{ts}.json"
+        dump_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception:
         pass  # debug dumps must never cause failures
 
@@ -392,12 +390,12 @@ def resolve_backend(span_dict: dict) -> dict:
     """Resolve backend config for a span payload.
 
     Precedence per field: env var > harnesses.<service_name> in
-    ~/.arize/harness/config.yaml > defaults. Used so marketplace-installed
+    ~/.arize/harness/config.json > defaults. Used so marketplace-installed
     plugins (which skip the interactive wizard) can supply credentials
     purely via the runtime env block in ~/.claude/settings.json.
 
     Env vars consulted:
-      - PHOENIX_ENDPOINT     → target=phoenix (overrides YAML target)
+      - PHOENIX_ENDPOINT     → target=phoenix (overrides config target)
       - ARIZE_API_KEY        → target=arize when paired with ARIZE_SPACE_ID
       - ARIZE_SPACE_ID       → required for arize when env-only
       - ARIZE_PROJECT_NAME   → project_name override
@@ -428,7 +426,7 @@ def resolve_backend(span_dict: dict) -> dict:
         error("No service.name attribute found on span — cannot resolve harness config.")
         return _none
 
-    # Load YAML config (may be empty or missing the harness entry)
+    # Load config (may be empty or missing the harness entry)
     try:
         from core.config import load_config
 
@@ -438,10 +436,10 @@ def resolve_backend(span_dict: dict) -> dict:
 
     harness_cfg = cfg.get("harnesses", {}).get(service_name) or {}
 
-    # Resolve project_name: env > YAML > service_name
+    # Resolve project_name: env > config > service_name
     project_name = env.project_name or harness_cfg.get("project_name", "") or service_name
 
-    # Resolve target: env-derived backend takes precedence over YAML target
+    # Resolve target: env-derived backend takes precedence over config target
     if env.phoenix_endpoint:
         target = "phoenix"
     elif env.api_key and env.space_id:
@@ -453,7 +451,7 @@ def resolve_backend(span_dict: dict) -> dict:
         error(
             f"No backend configured for harness '{service_name}': set "
             f"ARIZE_API_KEY+ARIZE_SPACE_ID (or PHOENIX_ENDPOINT) in env, "
-            f"or add a 'harnesses.{service_name}' entry to ~/.arize/harness/config.yaml."
+            f"or add a 'harnesses.{service_name}' entry to ~/.arize/harness/config.json."
         )
         return {"target": "none", "project_name": project_name}
 
@@ -462,7 +460,7 @@ def resolve_backend(span_dict: dict) -> dict:
         if not endpoint:
             error(
                 f"Incomplete phoenix config for harness '{service_name}': missing endpoint "
-                f"(set PHOENIX_ENDPOINT in env or add 'endpoint' to config.yaml)."
+                f"(set PHOENIX_ENDPOINT in env or add 'endpoint' to config.json)."
             )
             return {"target": "none", "project_name": project_name}
         return {
@@ -485,7 +483,7 @@ def resolve_backend(span_dict: dict) -> dict:
         if missing:
             error(
                 f"Incomplete arize config for harness '{service_name}': missing "
-                f"{', '.join(missing)} or add to config.yaml."
+                f"{', '.join(missing)} or add to config.json."
             )
             return {"target": "none", "project_name": project_name}
         return {
@@ -647,7 +645,7 @@ def send_span(span_dict: dict) -> bool:
     Backend is resolved per harness via ``resolve_backend()``, which checks
     env vars (ARIZE_API_KEY+ARIZE_SPACE_ID, PHOENIX_ENDPOINT,
     ARIZE_PROJECT_NAME) before falling back to
-    ``~/.arize/harness/config.yaml``. If neither path yields a complete
+    ``~/.arize/harness/config.json``. If neither path yields a complete
     backend, the span is dropped and an error is logged.
 
     Never raises. Returns True on success, False on failure.
@@ -658,7 +656,7 @@ def send_span(span_dict: dict) -> bool:
             return True
 
         if env.verbose:
-            log(f"span payload: {_json.dumps(span_dict)}")
+            log(f"span payload: {json.dumps(span_dict)}")
 
         backend = resolve_backend(span_dict)
         target = backend["target"]
@@ -669,7 +667,7 @@ def send_span(span_dict: dict) -> bool:
             api_key = backend.get("api_key", "")
             project_identifier = urllib.parse.quote(project, safe="")
             url = f"{endpoint.rstrip('/')}/v1/projects/{project_identifier}/spans"
-            body = _json.dumps(_otlp_to_phoenix_payload(span_dict)).encode("utf-8")
+            body = json.dumps(_otlp_to_phoenix_payload(span_dict)).encode("utf-8")
             headers = {"Content-Type": "application/json"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
@@ -702,7 +700,7 @@ def send_span(span_dict: dict) -> bool:
             else:
                 url = f"https://{endpoint}/v1/traces"
 
-            body = _json.dumps(payload).encode("utf-8")
+            body = json.dumps(payload).encode("utf-8")
             headers = {
                 "Content-Type": "application/json",
                 "authorization": f"Bearer {api_key}",
@@ -875,13 +873,13 @@ class FileLock:
 
 
 class StateManager:
-    """Per-session key-value state backed by a YAML file.
+    """Per-session key-value state backed by a JSON file.
 
     All values are stored as strings (matching bash behavior where jq
     reads/writes everything as string arguments via --arg).
 
     The state_file and lock_path are set by the adapter when resolving
-    the session (e.g., state_<session_id>.yaml with .lock_<session_id>).
+    the session (e.g., state_<session_id>.json with .lock_<session_id>).
     """
 
     def __init__(
@@ -997,7 +995,7 @@ class StateManager:
         if self.state_file is None:
             return {}
         text = self.state_file.read_text(encoding="utf-8")
-        data = yaml.safe_load(text)
+        data = json.loads(text)
         if data is None:
             return {}
         if not isinstance(data, dict):
@@ -1011,7 +1009,7 @@ class StateManager:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_file.with_suffix(f".tmp.{os.getpid()}")
         try:
-            tmp.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
             tmp.replace(self.state_file)
         except Exception:
             try:

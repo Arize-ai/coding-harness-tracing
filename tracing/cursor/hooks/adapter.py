@@ -9,10 +9,9 @@ pairs.
 Replaces cursor-tracing/hooks/common.sh (195 lines).
 """
 import hashlib
+import json
 import os
 import re
-
-import yaml
 
 from core.common import FileLock, env, redirect_stderr_to_log_file
 from core.constants import HARNESSES, STATE_BASE_DIR
@@ -75,20 +74,20 @@ def truncate_attr(s: str, max_chars: "int | None" = None) -> str:
 def state_push(key: str, value: dict) -> None:
     """Push a dict onto a named stack.
 
-    Stack file: STATE_DIR/{key}.stack.yaml — a YAML list.
+    Stack file: STATE_DIR/{key}.stack.json — a JSON list.
     Uses FileLock for concurrent access.
 
     Matches bash state_push() at lines 59-87.
     """
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    stack_file = STATE_DIR / f"{key}.stack.yaml"
+    stack_file = STATE_DIR / f"{key}.stack.json"
     lock_path = STATE_DIR / f".lock_{key}"
 
     with FileLock(lock_path):
         if stack_file.exists():
             try:
-                data = yaml.safe_load(stack_file.read_text()) or []
-            except yaml.YAMLError:
+                data = json.loads(stack_file.read_text()) or []
+            except json.JSONDecodeError:
                 data = []
         else:
             data = []
@@ -99,7 +98,7 @@ def state_push(key: str, value: dict) -> None:
         data.append(value)
 
         tmp = stack_file.with_suffix(f".tmp.{os.getpid()}")
-        tmp.write_text(yaml.safe_dump(data, default_flow_style=False))
+        tmp.write_text(json.dumps(data, indent=2))
         tmp.replace(stack_file)
 
 
@@ -108,7 +107,7 @@ def state_pop(key: str) -> "dict | None":
 
     Matches bash state_pop() at lines 91-132.
     """
-    stack_file = STATE_DIR / f"{key}.stack.yaml"
+    stack_file = STATE_DIR / f"{key}.stack.json"
     lock_path = STATE_DIR / f".lock_{key}"
 
     with FileLock(lock_path):
@@ -116,8 +115,8 @@ def state_pop(key: str) -> "dict | None":
             return None
 
         try:
-            data = yaml.safe_load(stack_file.read_text()) or []
-        except yaml.YAMLError:
+            data = json.loads(stack_file.read_text()) or []
+        except json.JSONDecodeError:
             return None
 
         if not isinstance(data, list) or len(data) == 0:
@@ -127,7 +126,7 @@ def state_pop(key: str) -> "dict | None":
         data = data[:-1]
 
         tmp = stack_file.with_suffix(f".tmp.{os.getpid()}")
-        tmp.write_text(yaml.safe_dump(data, default_flow_style=False))
+        tmp.write_text(json.dumps(data, indent=2))
         tmp.replace(stack_file)
 
     return value if isinstance(value, dict) else None
@@ -169,7 +168,7 @@ def state_cleanup_generation(gen_id: str) -> None:
 
     Cleans up:
     1. Root span file: root_{sanitized_gen_id}
-    2. Stack files: *{sanitized_gen_id}*.stack.yaml
+    2. Stack files: *{sanitized_gen_id}*.stack.json
     3. Lock dirs: .lock_*{sanitized_gen_id}*
 
     Matches bash lines 159-176.
@@ -181,7 +180,7 @@ def state_cleanup_generation(gen_id: str) -> None:
     root_file.unlink(missing_ok=True)
 
     # Stack files containing this generation ID
-    for f in STATE_DIR.glob(f"*{safe}*.stack.yaml"):
+    for f in STATE_DIR.glob(f"*{safe}*.stack.json"):
         f.unlink(missing_ok=True)
 
     # Lock dirs containing this generation ID
