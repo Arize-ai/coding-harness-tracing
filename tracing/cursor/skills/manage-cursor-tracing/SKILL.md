@@ -30,7 +30,7 @@ Configure OpenInference tracing for Cursor IDE sessions to Arize AX (cloud) or P
 
 **Important:** Only follow the relevant path for the user's needs. Don't go through all sections.
 
-**Plugin users, please read:** The marketplace install via `/add-plugin` registers Cursor hooks automatically but cannot run an interactive credentials wizard. Run this skill once after `/add-plugin` so it can write `~/.arize/harness/config.yaml` with your backend credentials -- without that file, the hooks will fail open (no-op) and no spans will be sent.
+**Plugin users, please read:** The marketplace install via `/add-plugin` registers Cursor hooks automatically but cannot run an interactive credentials wizard. Run this skill once after `/add-plugin` so it can write `~/.arize/harness/config.json` with your backend credentials -- without that file, the hooks will fail open (no-op) and no spans will be sent.
 
 ## Set Up Phoenix
 

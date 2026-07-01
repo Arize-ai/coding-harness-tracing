@@ -8,7 +8,7 @@
     "url": "https://arize.com"
   },
   "repository": "https://github.com/Arize-ai/coding-harness-tracing",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "tracing",
     "agents",
