@@ -26,36 +26,48 @@ The marketplace flow registers the hooks but skips the interactive wizard, so ba
 
 For Phoenix, swap the Arize keys for `PHOENIX_ENDPOINT` (and optional `PHOENIX_API_KEY`). Each `ARIZE_LOG_*` flag accepts `"true"` or `"false"` — set to `"false"` to opt out per category. Env values take precedence over `~/.arize/harness/config.json`.
 
+Install:
+
 ```bash
-# Install
 claude plugin marketplace add Arize-ai/coding-harness-tracing
 claude plugin install claude-code-tracing@coding-harness-tracing
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 claude plugin uninstall claude-code-tracing@coding-harness-tracing
 claude plugin marketplace remove Arize-ai/coding-harness-tracing
 ```
 
 ### Remote setup
 
-macOS / Linux:
+#### macOS / Linux
+
+Install:
 
 ```bash
-# Install
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- claude
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- uninstall claude
 ```
 
-Windows (PowerShell):
+#### Windows (PowerShell)
+
+Install:
 
 ```powershell
-# Install
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat claude
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat uninstall claude
 ```
@@ -67,23 +79,31 @@ git clone https://github.com/Arize-ai/coding-harness-tracing.git
 cd coding-harness-tracing
 ```
 
-macOS / Linux:
+**macOS / Linux**
+
+Install:
 
 ```bash
-# Install
 ./install.sh claude
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 ./install.sh uninstall claude
 ```
 
-Windows:
+**Windows (PowerShell)**
+
+Install:
 
 ```powershell
-# Install
 install.bat claude
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 install.bat uninstall claude
 ```
 

@@ -9,24 +9,32 @@ Pass `--with-skills` to also symlink the `manage-codex-tracing` skill into the c
 
 ### Remote setup
 
-macOS / Linux:
+#### macOS / Linux
+
+Install:
 
 ```bash
-# Install
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- codex
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- uninstall codex
 ```
 
-Windows (PowerShell):
+#### Windows (PowerShell)
+
+Install:
 
 ```powershell
-# Install
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat codex
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat uninstall codex
 ```
@@ -38,23 +46,31 @@ git clone https://github.com/Arize-ai/coding-harness-tracing.git
 cd coding-harness-tracing
 ```
 
-macOS / Linux:
+**macOS / Linux**
+
+Install:
 
 ```bash
-# Install
 ./install.sh codex
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 ./install.sh uninstall codex
 ```
 
-Windows:
+**Windows (PowerShell)**
+
+Install:
 
 ```powershell
-# Install
 install.bat codex
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 install.bat uninstall codex
 ```
 

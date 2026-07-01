@@ -30,24 +30,32 @@ Pass `--with-skills` to also symlink the `manage-opencode-tracing` skill into th
 
 ### Remote setup
 
-macOS / Linux:
+#### macOS / Linux
+
+Install:
 
 ```bash
-# Install
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- opencode
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- uninstall opencode
 ```
 
-Windows (PowerShell):
+#### Windows (PowerShell)
+
+Install:
 
 ```powershell
-# Install
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat opencode
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat uninstall opencode
 ```
@@ -59,23 +67,31 @@ git clone https://github.com/Arize-ai/coding-harness-tracing.git
 cd coding-harness-tracing
 ```
 
-macOS / Linux:
+**macOS / Linux**
+
+Install:
 
 ```bash
-# Install
 ./install.sh opencode
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 ./install.sh uninstall opencode
 ```
 
-Windows:
+**Windows (PowerShell)**
+
+Install:
 
 ```powershell
-# Install
 install.bat opencode
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 install.bat uninstall opencode
 ```
 

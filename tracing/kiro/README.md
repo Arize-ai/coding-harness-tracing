@@ -10,24 +10,32 @@ Pass `--with-skills` to also symlink the `manage-kiro-tracing` skill into the cu
 
 ### Remote setup
 
-macOS / Linux:
+#### macOS / Linux
+
+Install:
 
 ```bash
-# Install
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- kiro
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- uninstall kiro
 ```
 
-Windows (PowerShell):
+#### Windows (PowerShell)
+
+Install:
 
 ```powershell
-# Install
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat kiro
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat uninstall kiro
 ```
@@ -39,23 +47,31 @@ git clone https://github.com/Arize-ai/coding-harness-tracing.git
 cd coding-harness-tracing
 ```
 
-macOS / Linux:
+**macOS / Linux**
+
+Install:
 
 ```bash
-# Install
 ./install.sh kiro
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 ./install.sh uninstall kiro
 ```
 
-Windows:
+**Windows (PowerShell)**
+
+Install:
 
 ```powershell
-# Install
 install.bat kiro
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 install.bat uninstall kiro
 ```
 
@@ -83,7 +99,15 @@ kiro-cli chat
 kiro-cli chat --agent arize-traced
 ```
 
-Errors land in `~/.arize/harness/logs/kiro.log` always; set `export ARIZE_VERBOSE=true` before launching Kiro to also see routine hook activity. See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_USER_ID`, etc.).
+## Verifying tracing
+
+Run a Kiro session with the traced agent (see [Usage](#usage) above). The installed hooks fire on `agentSpawn`, `userPromptSubmit`, `preToolUse`/`postToolUse`, and `stop`.
+
+- Errors land in `~/.arize/harness/logs/kiro.log` always; set `export ARIZE_VERBOSE=true` before launching Kiro to also see routine hook activity.
+- Confirm spans appear in your configured project in Arize AX or Phoenix.
+- Kiro meters in credits, not tokens — cost lands in `kiro.cost.credits` and token-count attributes are omitted when 0 (see [Limitations](#limitations)).
+
+See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_USER_ID`, etc.).
 
 ## Span shape
 
@@ -119,7 +143,7 @@ LLM spans are enriched from the session sidecar at `~/.kiro/sessions/cli/<sessio
 
 TOOL spans are parented to the LLM turn they belong to.
 
-## Known limitations
+## Limitations
 
 - **Token counts are 0.** `input_token_count` and `output_token_count` are reported as 0 in current Kiro CLI versions. Kiro meters in credits instead — see `kiro.cost.credits`. Token count attributes are omitted when 0.
 - **FIFO tool matching.** Kiro does not expose a tool-call ID, so pre/post tool events are matched using a FIFO stack. This assumes serial tool execution within a session.
