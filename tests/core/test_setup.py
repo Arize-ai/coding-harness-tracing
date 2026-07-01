@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 
 
 @pytest.fixture(autouse=True)
@@ -194,8 +193,8 @@ class TestWriteConfig:
     """Tests for write_config()."""
 
     def test_creates_new_config_phoenix(self, tmp_path, monkeypatch):
-        """write_config creates fresh config.yaml for Phoenix."""
-        config_path = str(tmp_path / "config.yaml")
+        """write_config creates fresh config.json for Phoenix."""
+        config_path = str(tmp_path / "config.json")
 
         # Monkeypatch core.config to use our temp path
         import core.config
@@ -212,7 +211,7 @@ class TestWriteConfig:
             config_path=config_path,
         )
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         entry = config["harnesses"]["claude-code"]
         assert entry["target"] == "phoenix"
         assert entry["endpoint"] == "http://localhost:6006"
@@ -220,8 +219,8 @@ class TestWriteConfig:
         assert "backend" not in config
 
     def test_creates_new_config_arize(self, tmp_path, monkeypatch):
-        """write_config creates fresh config.yaml for Arize AX."""
-        config_path = str(tmp_path / "config.yaml")
+        """write_config creates fresh config.json for Arize AX."""
+        config_path = str(tmp_path / "config.json")
         import core.config
 
         monkeypatch.setattr(core.config, "CONFIG_FILE", config_path)
@@ -236,7 +235,7 @@ class TestWriteConfig:
             config_path=config_path,
         )
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         entry = config["harnesses"]["codex"]
         assert entry["target"] == "arize"
         assert entry["api_key"] == "k"
@@ -246,7 +245,7 @@ class TestWriteConfig:
 
     def test_merge_harness_preserves_existing(self, tmp_path, monkeypatch):
         """write_config with existing config adds harness, preserves others."""
-        config_path = str(tmp_path / "config.yaml")
+        config_path = str(tmp_path / "config.json")
         import core.config
 
         monkeypatch.setattr(core.config, "CONFIG_FILE", config_path)
@@ -264,7 +263,7 @@ class TestWriteConfig:
         }
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, "w") as f:
-            yaml.safe_dump(existing, f)
+            json.dump(existing, f, indent=2)
 
         from core.setup import write_config
 
@@ -276,7 +275,7 @@ class TestWriteConfig:
             config_path=config_path,
         )
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         # New harness should be added
         assert config["harnesses"]["cursor"]["project_name"] == "cursor"
         assert config["harnesses"]["cursor"]["target"] == "phoenix"
@@ -286,7 +285,7 @@ class TestWriteConfig:
 
     def test_write_config_with_user_id(self, tmp_path, monkeypatch):
         """write_config sets user_id when provided."""
-        config_path = str(tmp_path / "config.yaml")
+        config_path = str(tmp_path / "config.json")
         import core.config
 
         monkeypatch.setattr(core.config, "CONFIG_FILE", config_path)
@@ -302,7 +301,7 @@ class TestWriteConfig:
             config_path=config_path,
         )
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         assert config["user_id"] == "alice"
 
 
@@ -462,7 +461,7 @@ class TestClaudeSetup:
         import core.setup as setup_mod
 
         install_dir = tmp_path / ".arize" / "harness"
-        config_path = install_dir / "config.yaml"
+        config_path = install_dir / "config.json"
 
         monkeypatch.setattr(setup_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(setup_mod, "VENV_DIR", install_dir / "venv")
@@ -501,7 +500,7 @@ class TestClaudeSetup:
         return config_path, settings_file
 
     def test_run_phoenix_flow(self, tmp_path, monkeypatch):
-        """Full Claude _run() flow for Phoenix backend writes settings.json and config.yaml."""
+        """Full Claude _run() flow for Phoenix backend writes settings.json and config.json."""
         config_path, settings_file = self._setup_install_env(tmp_path, monkeypatch)
 
         # Inputs: backend=1 (Phoenix), endpoint=default, project_name=default, user_id="",
@@ -514,7 +513,7 @@ class TestClaudeSetup:
 
         _run()
 
-        config = yaml.safe_load(config_path.read_text())
+        config = json.loads(config_path.read_text())
         assert config["harnesses"]["claude-code"]["target"] == "phoenix"
         assert config["harnesses"]["claude-code"]["project_name"] == "claude-code"
 
@@ -539,7 +538,7 @@ class TestClaudeSetup:
 
         _run()
 
-        config = yaml.safe_load(config_path.read_text())
+        config = json.loads(config_path.read_text())
         assert config["harnesses"]["claude-code"]["target"] == "arize"
 
         # settings.json should have hooks and env vars
@@ -725,7 +724,7 @@ class TestCodexRunFlow:
 
     def test_run_fresh_phoenix(self, tmp_path, monkeypatch):
         """Codex _run() with no existing config prompts and writes all files."""
-        config_path = str(tmp_path / "config.yaml")
+        config_path = str(tmp_path / "config.json")
         codex_dir = tmp_path / ".codex"
 
         import core.config
@@ -756,8 +755,8 @@ class TestCodexRunFlow:
 
         _run()
 
-        # config.yaml written
-        config = yaml.safe_load(Path(config_path).read_text())
+        # config.json written
+        config = json.loads(Path(config_path).read_text())
         assert config["harnesses"]["codex"]["target"] == "phoenix"
         assert config["harnesses"]["codex"]["project_name"] == "codex"
 
@@ -777,7 +776,7 @@ class TestCodexRunFlow:
 
     def test_run_existing_config_skips_prompts(self, tmp_path, monkeypatch):
         """Codex _run() with existing config skips backend prompts."""
-        config_path = str(tmp_path / "config.yaml")
+        config_path = str(tmp_path / "config.json")
         codex_dir = tmp_path / ".codex"
         existing = {
             "harnesses": {
@@ -792,7 +791,7 @@ class TestCodexRunFlow:
         }
         Path(config_path).parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w") as f:
-            yaml.safe_dump(existing, f)
+            json.dump(existing, f, indent=2)
 
         import core.config
 
@@ -819,7 +818,7 @@ class TestCodexRunFlow:
 
         _run()
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         assert config["harnesses"]["codex"]["project_name"] == "codex"
         assert config["harnesses"]["codex"]["target"] == "phoenix"
 
@@ -838,7 +837,7 @@ class TestCursorSetup:
 
     def test_config_written_with_cursor_harness(self, tmp_path, monkeypatch):
         """write_config creates config with cursor harness entry."""
-        config_path = str(tmp_path / "config.yaml")
+        config_path = str(tmp_path / "config.json")
         import core.config
 
         monkeypatch.setattr(core.config, "CONFIG_FILE", config_path)
@@ -849,13 +848,13 @@ class TestCursorSetup:
             "phoenix", {"endpoint": "http://localhost:6006", "api_key": ""}, "cursor", "cursor", config_path=config_path
         )
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         assert config["harnesses"]["cursor"]["project_name"] == "cursor"
         assert config["harnesses"]["cursor"]["target"] == "phoenix"
 
     def test_existing_config_adds_cursor_harness(self, tmp_path, monkeypatch):
         """Existing config gets cursor harness added, other harnesses preserved."""
-        config_path = str(tmp_path / "config.yaml")
+        config_path = str(tmp_path / "config.json")
         import core.config
 
         monkeypatch.setattr(core.config, "CONFIG_FILE", config_path)
@@ -873,13 +872,13 @@ class TestCursorSetup:
         }
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, "w") as f:
-            yaml.safe_dump(existing, f)
+            json.dump(existing, f, indent=2)
 
         config = core.config.load_config(config_path)
         core.config.set_value(config, "harnesses.cursor.project_name", "cursor")
         core.config.save_config(config, config_path)
 
-        result = yaml.safe_load(Path(config_path).read_text())
+        result = json.loads(Path(config_path).read_text())
         assert result["harnesses"]["cursor"]["project_name"] == "cursor"
         assert result["harnesses"]["claude-code"]["project_name"] == "claude-code"
         assert result["harnesses"]["claude-code"]["target"] == "arize"
@@ -899,7 +898,7 @@ class TestCursorSetup:
         import core.config
         import core.setup as setup_mod
 
-        config_path = str(tmp_path / "config.yaml")
+        config_path = str(tmp_path / "config.json")
         install_dir = tmp_path / ".arize" / "harness"
         hooks_file = tmp_path / ".cursor" / "hooks.json"
 
@@ -934,7 +933,7 @@ class TestCursorSetup:
         return config_path
 
     def test_run_fresh_phoenix(self, tmp_path, monkeypatch):
-        """Cursor _run() with no existing config prompts and writes config.yaml."""
+        """Cursor _run() with no existing config prompts and writes config.json."""
         config_path = self._patch_cursor_install(tmp_path, monkeypatch)
 
         # Inputs: backend=1, endpoint=default, project_name=default, user_id="",
@@ -947,7 +946,7 @@ class TestCursorSetup:
 
         _run()
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         assert config["harnesses"]["cursor"]["target"] == "phoenix"
         assert config["harnesses"]["cursor"]["project_name"] == "cursor"
 
@@ -974,7 +973,7 @@ class TestCursorSetup:
         }
         Path(config_path).parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w") as f:
-            yaml.safe_dump(existing, f)
+            json.dump(existing, f, indent=2)
 
         # Inputs: project_name=default (no backend prompts since cursor entry exists),
         # then three content-logging prompts (defaults).
@@ -985,7 +984,7 @@ class TestCursorSetup:
 
         _run()
 
-        config = yaml.safe_load(Path(config_path).read_text())
+        config = json.loads(Path(config_path).read_text())
         assert config["harnesses"]["cursor"]["project_name"] == "cursor"
         assert config["harnesses"]["claude-code"]["project_name"] == "claude-code"
         assert "backend" not in config

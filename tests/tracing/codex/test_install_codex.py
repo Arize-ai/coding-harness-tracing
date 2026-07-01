@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 
 import tracing.codex._toml as codex_toml
 import tracing.codex.install as codex_install
@@ -31,7 +31,7 @@ def fake_home(tmp_path, monkeypatch):
     """Redirect all paths to a temp directory."""
     install_dir = tmp_path / ".arize" / "harness"
     install_dir.mkdir(parents=True)
-    config_file = install_dir / "config.yaml"
+    config_file = install_dir / "config.json"
     codex_dir = tmp_path / ".codex"
     venv_bin_dir = install_dir / "venv" / "bin"
     venv_bin_dir.mkdir(parents=True)
@@ -171,8 +171,8 @@ class TestInstall:
     def test_install_fresh_writes_flat_phoenix_entry(self, fake_home, mock_prompts):
         codex_install.install()
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         entry = config["harnesses"]["codex"]
         assert entry["target"] == "phoenix"
         assert entry["endpoint"] == "http://localhost:6006"
@@ -185,8 +185,8 @@ class TestInstall:
         _mock_prompts_arize(monkeypatch)
         codex_install.install()
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         entry = config["harnesses"]["codex"]
         assert entry["target"] == "arize"
         assert entry["endpoint"] == "otlp.arize.com:443"
@@ -232,9 +232,9 @@ class TestInstall:
         assert "export ARIZE_TRACE_ENABLED=true" in env_text
 
     def test_install_existing_codex_entry_only_updates_project_name(self, fake_home, monkeypatch):
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         config_file.write_text(
-            yaml.safe_dump(
+            json.dumps(
                 {
                     "harnesses": {
                         "codex": {
@@ -245,7 +245,8 @@ class TestInstall:
                             "space_id": "S123",
                         }
                     }
-                }
+                },
+                indent=2,
             )
         )
 
@@ -254,7 +255,7 @@ class TestInstall:
 
         codex_install.install()
 
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         entry = config["harnesses"]["codex"]
         assert entry["project_name"] == "new-name"
         assert entry["target"] == "arize"
@@ -262,9 +263,9 @@ class TestInstall:
         assert entry["space_id"] == "S123"
 
     def test_install_offers_copy_from_existing_arize_harness(self, fake_home, monkeypatch):
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         config_file.write_text(
-            yaml.safe_dump(
+            json.dumps(
                 {
                     "harnesses": {
                         "claude-code": {
@@ -275,7 +276,8 @@ class TestInstall:
                             "space_id": "S-shared",
                         }
                     }
-                }
+                },
+                indent=2,
             )
         )
 
@@ -300,7 +302,7 @@ class TestInstall:
 
         assert "claude-code" in captured_kwargs["existing_harnesses"]
 
-        config = yaml.safe_load(config_file.read_text())
+        config = json.loads(config_file.read_text())
         codex_entry = config["harnesses"]["codex"]
         assert codex_entry["target"] == "arize"
         assert codex_entry["api_key"] == "ak-shared"
@@ -370,8 +372,8 @@ class TestUninstall:
         codex_install.install()
         codex_install.uninstall()
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = json.loads(config_file.read_text())
         assert "codex" not in config.get("harnesses", {})
 
     def test_uninstall_removes_our_toml_entries_preserves_unrelated(self, fake_home, mock_prompts):
@@ -435,9 +437,9 @@ class TestUninstall:
         # Second uninstall should not raise.
         codex_install.uninstall()
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         if config_file.is_file():
-            config = yaml.safe_load(config_file.read_text())
+            config = json.loads(config_file.read_text())
             assert "codex" not in config.get("harnesses", {})
 
 
@@ -458,7 +460,7 @@ class TestDryRun:
         assert not (codex_dir / "config.toml").exists()
         assert not (codex_dir / "arize-env.sh").exists()
 
-        config_file = fake_home / ".arize" / "harness" / "config.yaml"
+        config_file = fake_home / ".arize" / "harness" / "config.json"
         assert not config_file.exists()
 
     def test_dry_run_uninstall_preserves_files(self, fake_home, mock_prompts, monkeypatch):

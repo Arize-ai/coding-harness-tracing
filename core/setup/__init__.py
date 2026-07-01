@@ -10,12 +10,6 @@ from getpass import getpass
 from pathlib import Path
 from typing import Optional
 
-try:
-    import yaml  # noqa: F401  # presence check; writing configs needs PyYAML at runtime
-except ImportError:
-    sys.stderr.write("error: PyYAML not installed. Install it in the collector venv.\n")
-    sys.exit(1)
-
 from core.config import delete_value, load_config, save_config, set_value
 
 # ---------------------------------------------------------------------------
@@ -24,7 +18,7 @@ from core.config import delete_value, load_config, save_config, set_value
 
 INSTALL_DIR = Path.home() / ".arize" / "harness"
 VENV_DIR = INSTALL_DIR / "venv"
-CONFIG_FILE = INSTALL_DIR / "config.yaml"
+CONFIG_FILE = INSTALL_DIR / "config.json"
 BIN_DIR = INSTALL_DIR / "bin"
 RUN_DIR = INSTALL_DIR / "run"
 LOG_DIR = INSTALL_DIR / "logs"
@@ -302,13 +296,13 @@ def prompt_content_logging() -> dict:
 
 
 def write_logging_config(logging_block: dict, config_path: str | None = None) -> None:
-    """Merge a logging block into the top-level `logging:` key in config.yaml."""
+    """Merge a logging block into the top-level `logging:` key in config.json."""
     config = load_config(config_path)
     if not config:
         config = {}
     set_value(config, "logging", logging_block)
     if dry_run():
-        info("would write logging block to config.yaml")
+        info("would write logging block to config.json")
         return
     save_config(config, config_path)
 
@@ -333,7 +327,7 @@ def write_config(
     collector: dict | None = None,
     config_path: Optional[str] = None,
 ) -> None:
-    """Write or merge config.yaml with a fully-flattened harnesses.<name> entry.
+    """Write or merge config.json with a fully-flattened harnesses.<name> entry.
 
     Writes harnesses.<harness_name>.{project_name, target, endpoint, api_key,
     [space_id], [collector]}.  If user_id is non-empty, sets top-level user_id.
@@ -424,7 +418,7 @@ def merge_harness_entry(
     credentials: dict | None = None,
     collector: dict | None = None,
 ) -> None:
-    """Read config.yaml, add/update harnesses.<name>, write back with 0o600.
+    """Read config.json, add/update harnesses.<name>, write back with 0o600.
 
     If target + credentials are provided, writes the full entry.
     If only project_name, updates only that field (leaves other fields alone).
@@ -462,7 +456,7 @@ def merge_harness_entry(
 
 
 def remove_harness_entry(name: str) -> None:
-    """Read config.yaml, remove harnesses.<name> if present, write back.
+    """Read config.json, remove harnesses.<name> if present, write back.
 
     No-op if the file doesn't exist or the key isn't present.
     """
@@ -485,7 +479,7 @@ def remove_harness_entry(name: str) -> None:
 
 
 def list_installed_harnesses() -> list[str]:
-    """Return the list of keys under harnesses.* in config.yaml.
+    """Return the list of keys under harnesses.* in config.json.
 
     Returns empty list if config is missing.
     """

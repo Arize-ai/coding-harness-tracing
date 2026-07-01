@@ -13,7 +13,7 @@ Configure OpenInference tracing for **Gemini CLI** sessions to Arize AX (cloud) 
 
 1. **Is the harness already installed?**
    - Check `~/.gemini/settings.json` for 8 hook entries with `name: arize-tracing`
-   - Check `~/.arize/harness/config.yaml` for the `harnesses.gemini` block
+   - Check `~/.arize/harness/config.json` for the `harnesses.gemini` block
    - If both are present -> Jump to [Validate](#validate) or [Troubleshoot](#troubleshoot)
 
 2. **Do they already have credentials?**
@@ -85,7 +85,7 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution.
+**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.json` to exist for backend credential resolution.
 
 ### Ask the user for:
 
@@ -99,29 +99,37 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ### Write the config
 
-The config file at `~/.arize/harness/config.yaml` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/gemini}`
+The config file at `~/.arize/harness/config.json` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/gemini}`
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.gemini` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.gemini` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
 
 **Phoenix:**
-```yaml
-harnesses:
-  gemini:
-    project_name: gemini
-    target: phoenix
-    endpoint: <endpoint>
-    api_key: ""
+```json
+{
+  "harnesses": {
+    "gemini": {
+      "project_name": "gemini",
+      "target": "phoenix",
+      "endpoint": "<endpoint>",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 **Arize AX:**
-```yaml
-harnesses:
-  gemini:
-    project_name: gemini
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <id>
+```json
+{
+  "harnesses": {
+    "gemini": {
+      "project_name": "gemini",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<id>"
+    }
+  }
+}
 ```
 
 If the user has a custom OTLP endpoint, set it in `harnesses.gemini.endpoint`.
@@ -146,7 +154,7 @@ The installer registers all 8 hook events (`SessionStart`, `SessionEnd`, `Before
 
 ### Validate
 
-1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials under `harnesses.gemini`.
+1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials under `harnesses.gemini`.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 3. **Hooks active**: Verify `~/.gemini/settings.json` contains 8 hook entries with `name: arize-tracing`.
 4. **Quick dry-run test** (optional):
@@ -157,7 +165,7 @@ The installer registers all 8 hook events (`SessionStart`, `SessionEnd`, `Before
 ### Confirm
 
 Tell the user:
-- Config saved to `~/.arize/harness/config.yaml`
+- Config saved to `~/.arize/harness/config.json`
 - Gemini CLI hooks activated via `~/.gemini/settings.json`
 - Spans are sent directly to the backend from hooks -- no background process needed
 - After saving, open a new Gemini CLI session and traces will appear in their Phoenix UI or Arize AX dashboard under the project name
@@ -188,12 +196,12 @@ Common issues and fixes for Gemini CLI:
 
 | Problem | Fix |
 |---------|-----|
-| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.yaml`. Check hook log: `tail -20 ~/.arize/harness/logs/gemini.log` |
+| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/gemini.log` |
 | Hooks not firing | Verify `~/.gemini/settings.json` contains the 8 hook entries with `name: arize-tracing` for all events |
-| Config missing | Run `./install.sh gemini` or create `~/.arize/harness/config.yaml` manually (include `harnesses.gemini` section) |
+| Config missing | Run `./install.sh gemini` or create `~/.arize/harness/config.json` manually (include `harnesses.gemini` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Gemini CLI |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching Gemini CLI |
-| Wrong project name | Set `harnesses.gemini.project_name` in `~/.arize/harness/config.yaml` (default: `"gemini"`) |
+| Wrong project name | Set `harnesses.gemini.project_name` in `~/.arize/harness/config.json` (default: `"gemini"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` env var before launching Gemini CLI |
 | Tracing not toggling | Ensure `ARIZE_TRACE_ENABLED` is exported in your shell, not just set |

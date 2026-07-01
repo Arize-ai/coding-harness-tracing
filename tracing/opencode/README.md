@@ -24,30 +24,38 @@ opencode is fundamentally different from every other harness in this repo: exten
 Snapshots repeat across firings — that's what dedup is for. There is no streaming-chunk forwarding.
 
 ## Setup
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, and copies the plugin shim into `~/.config/opencode/plugin/arize-tracing.ts`. opencode auto-discovers plugins in that directory ([config docs](https://opencode.ai/docs/config/)) — no `opencode.json` edit is required. Spans are sent directly to the backend from the reconciler — no separate buffer/collector service is required.
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and copies the plugin shim into `~/.config/opencode/plugin/arize-tracing.ts`. opencode auto-discovers plugins in that directory ([config docs](https://opencode.ai/docs/config/)) — no `opencode.json` edit is required. Spans are sent directly to the backend from the reconciler — no separate buffer/collector service is required.
 
 Pass `--with-skills` to also symlink the `manage-opencode-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage opencode tracing configuration.
 
 ### Remote setup
 
-macOS / Linux:
+#### macOS / Linux
+
+Install:
 
 ```bash
-# Install
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- opencode
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- uninstall opencode
 ```
 
-Windows (PowerShell):
+#### Windows (PowerShell)
+
+Install:
 
 ```powershell
-# Install
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat opencode
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat uninstall opencode
 ```
@@ -59,27 +67,35 @@ git clone https://github.com/Arize-ai/coding-harness-tracing.git
 cd coding-harness-tracing
 ```
 
-macOS / Linux:
+**macOS / Linux**
+
+Install:
 
 ```bash
-# Install
 ./install.sh opencode
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 ./install.sh uninstall opencode
 ```
 
-Windows:
+**Windows (PowerShell)**
+
+Install:
 
 ```powershell
-# Install
 install.bat opencode
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 install.bat uninstall opencode
 ```
 
-Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts` (only if it carries the Arize header marker — your own plugins are left alone) and removes the `harnesses.opencode` block from `~/.arize/harness/config.yaml`.
+Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts` (only if it carries the Arize header marker — your own plugins are left alone) and removes the `harnesses.opencode` block from `~/.arize/harness/config.json`.
 
 ## Default Settings
 
@@ -102,7 +118,7 @@ Run any opencode session as you normally would. opencode loads the plugin on sta
 
 - Errors and reconciler stderr land in `~/.arize/harness/logs/opencode.log` always (the adapter redirects Python stderr there via `ARIZE_LOG_FILE`); set `export ARIZE_VERBOSE=true` before launching opencode to also see routine reconciler activity (snapshot ingest, span emits, dedup hits).
 - Confirm spans appear in your configured project in Arize AX or Phoenix.
-- Set `ARIZE_TRACE_DEBUG=true` to dump the raw snapshot payloads under `~/.arize/harness/state/debug/` (files are named `opencode_reconcile_<ts>.yaml` / `opencode_close_<ts>.yaml`) for inspection.
+- Set `ARIZE_TRACE_DEBUG=true` to dump the raw snapshot payloads under `~/.arize/harness/state/debug/` (files are named `opencode_reconcile_<ts>.json` / `opencode_close_<ts>.json`) for inspection.
 
 See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_USER_ID`, `ARIZE_PROJECT_NAME`, `ARIZE_VERBOSE`, `ARIZE_TRACE_DEBUG`, etc.).
 

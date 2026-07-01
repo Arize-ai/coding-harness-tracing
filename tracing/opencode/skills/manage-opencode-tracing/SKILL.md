@@ -13,7 +13,7 @@ Configure OpenInference tracing for **opencode** terminal coding sessions to Ari
 
 1. **Is the harness already installed?**
    - Check `~/.config/opencode/plugin/arize-tracing.ts` for the Arize plugin shim
-   - Check `~/.arize/harness/config.yaml` for the `harnesses.opencode` block
+   - Check `~/.arize/harness/config.json` for the `harnesses.opencode` block
    - If both are present -> Jump to [Validate](#validate) or [Troubleshoot](#troubleshoot)
 
 2. **Do they already have credentials?**
@@ -85,7 +85,7 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution.
+**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.json` to exist for backend credential resolution.
 
 ### Ask the user for:
 
@@ -99,34 +99,42 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ### Write the config
 
-The config file at `~/.arize/harness/config.yaml` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/opencode}`
+The config file at `~/.arize/harness/config.json` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/opencode}`
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.opencode` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.opencode` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
 
 **Phoenix:**
-```yaml
-harnesses:
-  opencode:
-    project_name: opencode
-    target: phoenix
-    endpoint: <endpoint>
-    api_key: ""   # set when the Phoenix instance requires auth (Phoenix Cloud)
+```json
+{
+  "harnesses": {
+    "opencode": {
+      "project_name": "opencode",
+      "target": "phoenix",
+      "endpoint": "<endpoint>",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 If Phoenix requires authentication (e.g. Phoenix Cloud), set the API key here under
 `api_key`, or export `PHOENIX_API_KEY` in the environment — it is sent as a
-`Authorization: Bearer <key>` header. The env var takes precedence over the YAML value.
+`Authorization: Bearer <key>` header. The env var takes precedence over the config value.
 Leave `api_key: ""` for an unauthenticated local Phoenix.
 
 **Arize AX:**
-```yaml
-harnesses:
-  opencode:
-    project_name: opencode
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <id>
+```json
+{
+  "harnesses": {
+    "opencode": {
+      "project_name": "opencode",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<id>"
+    }
+  }
+}
 ```
 
 If the user has a custom OTLP endpoint, set it in `harnesses.opencode.endpoint`.
@@ -147,11 +155,11 @@ To uninstall:
 ./install.sh uninstall opencode
 ```
 
-Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts` (only if it carries the Arize header marker — the installer never touches the user's own plugins) and removes the `harnesses.opencode` block from `~/.arize/harness/config.yaml`.
+Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts` (only if it carries the Arize header marker — the installer never touches the user's own plugins) and removes the `harnesses.opencode` block from `~/.arize/harness/config.json`.
 
 ### Validate
 
-1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials under `harnesses.opencode`.
+1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials under `harnesses.opencode`.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 3. **Plugin installed**: Verify `~/.config/opencode/plugin/arize-tracing.ts` exists and starts with the Arize header marker.
 4. **Reconciler entry point**: Verify the reconciler binary exists at `~/.arize/harness/venv/bin/arize-hook-opencode` (or `~/.arize/harness/venv/Scripts/arize-hook-opencode.exe` on Windows). The shim spawns this binary by absolute path — it does not rely on PATH resolution. `install.sh` installs it as a venv entry point.
@@ -159,7 +167,7 @@ Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts
 ### Confirm
 
 Tell the user:
-- Config saved to `~/.arize/harness/config.yaml`
+- Config saved to `~/.arize/harness/config.json`
 - opencode plugin shim installed at `~/.config/opencode/plugin/arize-tracing.ts`
 - opencode auto-discovers the plugin on next launch — no `opencode.json` edit required
 - Spans are sent directly to the backend from the reconciler — no background process needed
@@ -169,7 +177,7 @@ Tell the user:
 - Errors and reconciler stderr are always written to `~/.arize/harness/logs/opencode.log` (the adapter redirects Python stderr there via `ARIZE_LOG_FILE`); set `ARIZE_VERBOSE=true` in the shell before launching opencode to also capture routine reconciler activity (snapshot ingest, span emits, dedup hits)
 - Toggle tracing on/off via `ARIZE_TRACE_ENABLED` env var (must be exported in the user's shell before launching opencode — the shim and reconciler inherit host env vars)
 - Tail the log file at `~/.arize/harness/logs/opencode.log` for real-time debugging
-- Mention `ARIZE_TRACE_DEBUG=true` to dump raw snapshot payloads under `~/.arize/harness/state/debug/` (files are named `opencode_reconcile_<ts>.yaml` / `opencode_close_<ts>.yaml`) for inspection
+- Mention `ARIZE_TRACE_DEBUG=true` to dump raw snapshot payloads under `~/.arize/harness/state/debug/` (files are named `opencode_reconcile_<ts>.json` / `opencode_close_<ts>.json`) for inspection
 
 ## Architecture (How spans are produced)
 
@@ -194,7 +202,7 @@ Common issues and fixes for opencode:
 
 | Problem | Fix |
 |---------|-----|
-| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.yaml`. Check reconciler log: `tail -20 ~/.arize/harness/logs/opencode.log`. Confirm the plugin is in place: `ls ~/.config/opencode/plugin/arize-tracing.ts`. |
+| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check reconciler log: `tail -20 ~/.arize/harness/logs/opencode.log`. Confirm the plugin is in place: `ls ~/.config/opencode/plugin/arize-tracing.ts`. |
 | Plugin not loading | opencode loads plugins from `~/.config/opencode/plugin/` on startup. If the file exists but isn't loading, restart opencode and check the opencode CLI output for plugin errors. |
 | Reconciler entry point missing | The shim spawns the reconciler by absolute path; verify the binary exists at `~/.arize/harness/venv/bin/arize-hook-opencode` (or `~/.arize/harness/venv/Scripts/arize-hook-opencode.exe` on Windows). Rerun `./install.sh opencode` to reinstall the venv entry point. |
 | Spans appear partial / missing tool spans | Snapshots are pulled on `message.updated` (assistant complete) and `session.idle`. Pending or running tool parts won't emit a span until they reach `completed` or `error` state. Wait for the turn to finish. |
@@ -203,7 +211,7 @@ Common issues and fixes for opencode:
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching opencode |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching opencode |
-| Want raw snapshot payloads for inspection | Set `ARIZE_TRACE_DEBUG=true` env var; payloads land under `~/.arize/harness/state/debug/` as `opencode_reconcile_<ts>.yaml` / `opencode_close_<ts>.yaml` |
-| Wrong project name | Set `harnesses.opencode.project_name` in `~/.arize/harness/config.yaml` (default: `"opencode"`) |
+| Want raw snapshot payloads for inspection | Set `ARIZE_TRACE_DEBUG=true` env var; payloads land under `~/.arize/harness/state/debug/` as `opencode_reconcile_<ts>.json` / `opencode_close_<ts>.json` |
+| Wrong project name | Set `harnesses.opencode.project_name` in `~/.arize/harness/config.json` (default: `"opencode"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` env var before launching opencode |
 | Tracing not toggling | Ensure `ARIZE_TRACE_ENABLED` is exported in your shell, not just set — the opencode process and any plugin-spawned reconciler inherit host env vars |

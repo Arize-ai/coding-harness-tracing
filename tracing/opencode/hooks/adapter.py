@@ -40,7 +40,7 @@ def resolve_session(input_json: dict) -> StateManager:
     """
     key = input_json.get("sessionID") or "unknown"
 
-    state_file = STATE_DIR / f"state_{key}.yaml"
+    state_file = STATE_DIR / f"state_{key}.json"
     lock_path = STATE_DIR / f".lock_{key}"
 
     sm = StateManager(
@@ -106,7 +106,7 @@ def gc_stale_state_files() -> None:
     if not STATE_DIR.is_dir():
         return
     cutoff = time.time() - 86400
-    for f in STATE_DIR.glob("state_*.yaml"):
+    for f in STATE_DIR.glob("state_*.json"):
         try:
             key = f.stem.replace("state_", "", 1)
             if f.stat().st_mtime >= cutoff:

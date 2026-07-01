@@ -142,7 +142,7 @@ class TestAgentSpawn:
 
         # Verify state file was created
         state_dir = tmp_path / "state" / "kiro"
-        state_files = list(state_dir.glob("state_*.yaml"))
+        state_files = list(state_dir.glob("state_*.json"))
         assert len(state_files) >= 1
 
 
@@ -161,7 +161,7 @@ class TestUserPromptSubmit:
 
         # Check that state has the expected keys
         state_dir = tmp_path / "state" / "kiro"
-        state_files = list(state_dir.glob(f"state_{SESSION_1}.yaml"))
+        state_files = list(state_dir.glob(f"state_{SESSION_1}.json"))
         assert len(state_files) == 1
 
         from core.common import StateManager
@@ -187,7 +187,7 @@ class TestUserPromptSubmit:
         state_dir = tmp_path / "state" / "kiro"
         from core.common import StateManager
 
-        state_file = state_dir / f"state_{SESSION_1}.yaml"
+        state_file = state_dir / f"state_{SESSION_1}.json"
         sm = StateManager(state_dir=state_dir, state_file=state_file, lock_path=state_dir / f".lock_{SESSION_1}")
         assert sm.get("trace_count") == "1"
 
@@ -212,7 +212,7 @@ class TestUserPromptSubmit:
         state_dir = tmp_path / "state" / "kiro"
         from core.common import StateManager
 
-        state_file = state_dir / f"state_{SESSION_1}.yaml"
+        state_file = state_dir / f"state_{SESSION_1}.json"
         sm = StateManager(state_dir=state_dir, state_file=state_file, lock_path=state_dir / f".lock_{SESSION_1}")
         stored_prompt = sm.get("pending_turn_prompt")
         assert stored_prompt == "what's the current time and date?"
@@ -301,7 +301,7 @@ class TestToolFlow:
         state_dir = tmp_path / "state" / "kiro"
         from core.common import StateManager
 
-        state_file = state_dir / f"state_{SESSION_1}.yaml"
+        state_file = state_dir / f"state_{SESSION_1}.json"
         sm = StateManager(state_dir=state_dir, state_file=state_file, lock_path=state_dir / f".lock_{SESSION_1}")
         turn_span_id = sm.get("pending_turn_span_id")
 
@@ -390,7 +390,7 @@ class TestStop:
         state_dir = tmp_path / "state" / "kiro"
         from core.common import StateManager
 
-        state_file = state_dir / f"state_{SESSION_1}.yaml"
+        state_file = state_dir / f"state_{SESSION_1}.json"
         sm = StateManager(state_dir=state_dir, state_file=state_file, lock_path=state_dir / f".lock_{SESSION_1}")
         for key in (
             "pending_turn_trace_id",
@@ -637,7 +637,7 @@ class TestMain:
 
         # No state files should have been created
         state_dir = tmp_path / "state" / "kiro"
-        state_files = list(state_dir.glob("state_*.yaml"))
+        state_files = list(state_dir.glob("state_*.json"))
         assert len(state_files) == 0
 
 

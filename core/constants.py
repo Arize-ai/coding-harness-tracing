@@ -18,7 +18,7 @@ class HarnessMetadata(TypedDict):
 
 # --- Base layout ---
 BASE_DIR = Path.home() / ".arize" / "harness"
-CONFIG_FILE = BASE_DIR / "config.yaml"
+CONFIG_FILE = BASE_DIR / "config.json"
 
 # --- Runtime directories ---
 PID_DIR = BASE_DIR / "run"
@@ -31,7 +31,7 @@ STATE_BASE_DIR = BASE_DIR / "state"
 
 # --- Harness metadata ---
 # Used by adapters to look up service_name, scope_name, state_subdir, etc.
-# Keys match the harness names used in config.yaml harnesses section.
+# Keys match the harness names used in config.json harnesses section.
 HARNESSES: dict[str, HarnessMetadata] = {
     "claude-code": {
         "service_name": "claude-code",

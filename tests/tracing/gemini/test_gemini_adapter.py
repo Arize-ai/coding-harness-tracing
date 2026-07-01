@@ -7,11 +7,11 @@ PID-based or dual-mode session keys.
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 
 import pytest
-import yaml
 
 from core.common import StateManager, env
 
@@ -84,13 +84,13 @@ class TestResolveSession:
         """GEMINI_SESSION_ID env var is the preferred session key."""
         monkeypatch.setenv("GEMINI_SESSION_ID", "env-session-42")
         sm = adapter.resolve_session({})
-        assert sm.state_file == gemini_state_dir / "state_env-session-42.yaml"
+        assert sm.state_file == gemini_state_dir / "state_env-session-42.json"
         assert sm.state_file.exists()
 
     def test_falls_back_to_payload_session_id(self, gemini_state_dir, disable_env_vars):
         """Falls back to input_json['session_id'] when env var not set."""
         sm = adapter.resolve_session({"session_id": "payload-sess-99"})
-        assert sm.state_file == gemini_state_dir / "state_payload-sess-99.yaml"
+        assert sm.state_file == gemini_state_dir / "state_payload-sess-99.json"
 
     def test_falls_back_to_grandparent_pid_when_no_session_id(self, gemini_state_dir, disable_env_vars):
         """Falls back to grandparent PID when neither env var nor payload has session_id.
@@ -110,7 +110,7 @@ class TestResolveSession:
         monkeypatch.setenv("GEMINI_SESSION_ID", "test-init")
         sm = adapter.resolve_session({})
         assert sm.state_file.exists()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {}
 
     def test_same_input_same_file(self, gemini_state_dir, disable_env_vars, monkeypatch):
@@ -130,7 +130,7 @@ class TestResolveSession:
         """GEMINI_SESSION_ID env var takes priority over payload session_id."""
         monkeypatch.setenv("GEMINI_SESSION_ID", "from-env")
         sm = adapter.resolve_session({"session_id": "from-payload"})
-        assert sm.state_file == gemini_state_dir / "state_from-env.yaml"
+        assert sm.state_file == gemini_state_dir / "state_from-env.json"
 
 
 # ── ensure_session_initialized tests ─────────────────────────────────────────
@@ -140,7 +140,7 @@ class TestEnsureSessionInitialized:
     def _make_state(self, gemini_state_dir, key="test"):
         sm = StateManager(
             state_dir=gemini_state_dir,
-            state_file=gemini_state_dir / f"state_{key}.yaml",
+            state_file=gemini_state_dir / f"state_{key}.json",
             lock_path=gemini_state_dir / f".lock_{key}",
         )
         sm.init_state()
@@ -246,7 +246,7 @@ class TestEnsureSessionInitialized:
 class TestGcStaleStateFiles:
     def test_old_file_removed(self, gemini_state_dir, disable_env_vars):
         """State file older than 24h is removed."""
-        state_file = gemini_state_dir / "state_old-session.yaml"
+        state_file = gemini_state_dir / "state_old-session.json"
         state_file.write_text("{}")
         # Set mtime to 25 hours ago
         old_time = time.time() - 90000  # 25 hours
@@ -256,7 +256,7 @@ class TestGcStaleStateFiles:
 
     def test_recent_file_kept(self, gemini_state_dir, disable_env_vars):
         """State file younger than 24h is kept."""
-        state_file = gemini_state_dir / "state_recent-session.yaml"
+        state_file = gemini_state_dir / "state_recent-session.json"
         state_file.write_text("{}")
         # mtime is now (just created), which is < 24h old
         adapter.gc_stale_state_files()
@@ -264,7 +264,7 @@ class TestGcStaleStateFiles:
 
     def test_lock_dir_removed(self, gemini_state_dir, disable_env_vars):
         """Lock dir is removed when state file is removed."""
-        state_file = gemini_state_dir / "state_old-lock-dir.yaml"
+        state_file = gemini_state_dir / "state_old-lock-dir.json"
         state_file.write_text("{}")
         lock_dir = gemini_state_dir / ".lock_old-lock-dir"
         lock_dir.mkdir()
@@ -276,7 +276,7 @@ class TestGcStaleStateFiles:
 
     def test_lock_file_removed(self, gemini_state_dir, disable_env_vars):
         """Lock file (fcntl-style) is removed when state file is removed."""
-        state_file = gemini_state_dir / "state_old-lock-file.yaml"
+        state_file = gemini_state_dir / "state_old-lock-file.json"
         state_file.write_text("{}")
         lock_file = gemini_state_dir / ".lock_old-lock-file"
         lock_file.write_text("")
@@ -288,7 +288,7 @@ class TestGcStaleStateFiles:
 
     def test_empty_dir_no_error(self, gemini_state_dir, disable_env_vars):
         """Empty STATE_DIR causes no errors."""
-        for f in gemini_state_dir.glob("state_*.yaml"):
+        for f in gemini_state_dir.glob("state_*.json"):
             f.unlink()
         adapter.gc_stale_state_files()  # should not raise
 
@@ -301,7 +301,7 @@ class TestGcStaleStateFiles:
     def test_uses_24h_cutoff(self, gemini_state_dir, disable_env_vars):
         """Files exactly at the 24h boundary are handled correctly."""
         # File just barely old enough (24h + 1 second)
-        state_file = gemini_state_dir / "state_boundary.yaml"
+        state_file = gemini_state_dir / "state_boundary.json"
         state_file.write_text("{}")
         old_time = time.time() - 86401
         os.utime(state_file, (old_time, old_time))
@@ -310,7 +310,7 @@ class TestGcStaleStateFiles:
 
     def test_oserror_on_unlink_is_caught(self, gemini_state_dir, disable_env_vars, monkeypatch):
         """OSError on unlink is caught and ignored (best-effort)."""
-        state_file = gemini_state_dir / "state_unlink-err.yaml"
+        state_file = gemini_state_dir / "state_unlink-err.json"
         state_file.write_text("{}")
         old_time = time.time() - 90000
         os.utime(state_file, (old_time, old_time))
@@ -428,7 +428,7 @@ class TestGcPidKeyed:
 
     def test_dead_pid_state_file_removed(self, gemini_state_dir, disable_env_vars, monkeypatch):
         """A state file whose key is a non-alive PID is unlinked even if recent."""
-        state_file = gemini_state_dir / "state_999999.yaml"
+        state_file = gemini_state_dir / "state_999999.json"
         state_file.write_text("{}")
         monkeypatch.setattr(adapter, "_is_pid_alive", lambda pid: False)
         adapter.gc_stale_state_files()
@@ -436,7 +436,7 @@ class TestGcPidKeyed:
 
     def test_alive_pid_state_file_kept(self, gemini_state_dir, disable_env_vars, monkeypatch):
         """A state file keyed by an alive PID is kept regardless of mtime."""
-        state_file = gemini_state_dir / "state_42.yaml"
+        state_file = gemini_state_dir / "state_42.json"
         state_file.write_text("{}")
         # Even if old, an alive pid keeps the file.
         old = time.time() - 90000
@@ -457,7 +457,7 @@ class TestResolveSessionWindowsFallback:
         ppid = 4242
         monkeypatch.setattr(adapter.os, "getppid", lambda: ppid)
         sm = adapter.resolve_session({})
-        assert sm.state_file == gemini_state_dir / f"state_{ppid}.yaml"
+        assert sm.state_file == gemini_state_dir / f"state_{ppid}.json"
 
 
 # ── module-level log-file env wiring ─────────────────────────────────────────

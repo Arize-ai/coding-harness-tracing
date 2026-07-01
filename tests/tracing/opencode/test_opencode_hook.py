@@ -82,7 +82,7 @@ def _by_kind(spans, kind):
 @pytest.fixture
 def state(tmp_path):
     """StateManager with pre-initialized session keys."""
-    sf = tmp_path / "state_test.yaml"
+    sf = tmp_path / "state_test.json"
     lp = tmp_path / ".lock_test"
     sm = StateManager(state_dir=tmp_path, state_file=sf, lock_path=lp)
     sm.init_state()
