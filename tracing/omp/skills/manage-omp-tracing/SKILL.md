@@ -14,7 +14,7 @@ Configure OpenInference tracing for **Oh My Pi (omp)** terminal coding sessions 
 1. **Is the harness already installed?**
    - Check `~/.omp/extensions/arize-tracing.ts` for the Arize hook shim
    - Check `~/.omp/agent/settings.json` for the shim's path in the `extensions` array
-   - Check `~/.arize/harness/config.yaml` for the `harnesses.omp` block
+   - Check `~/.arize/harness/config.json` for the `harnesses.omp` block
    - If all are present -> Jump to [Validate](#validate) or [Troubleshoot](#troubleshoot)
 
 2. **Do they already have credentials?**
@@ -86,7 +86,7 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution.
+**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.json` to exist for backend credential resolution.
 
 ### Ask the user for:
 
@@ -100,34 +100,42 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ### Write the config
 
-The config file at `~/.arize/harness/config.yaml` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/omp}`
+The config file at `~/.arize/harness/config.json` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/omp}`
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.omp` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.omp` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
 
 **Phoenix:**
-```yaml
-harnesses:
-  omp:
-    project_name: omp
-    target: phoenix
-    endpoint: <endpoint>
-    api_key: ""   # set when the Phoenix instance requires auth (Phoenix Cloud)
+```json
+{
+  "harnesses": {
+    "omp": {
+      "project_name": "omp",
+      "target": "phoenix",
+      "endpoint": "<endpoint>",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 If Phoenix requires authentication (e.g. Phoenix Cloud), set the API key here under
 `api_key`, or export `PHOENIX_API_KEY` in the environment — it is sent as a
-`Authorization: Bearer <key>` header. The env var takes precedence over the YAML value.
+`Authorization: Bearer <key>` header. The env var takes precedence over the config value.
 Leave `api_key: ""` for an unauthenticated local Phoenix.
 
 **Arize AX:**
-```yaml
-harnesses:
-  omp:
-    project_name: omp
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <id>
+```json
+{
+  "harnesses": {
+    "omp": {
+      "project_name": "omp",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<id>"
+    }
+  }
+}
 ```
 
 If the user has a custom OTLP endpoint, set it in `harnesses.omp.endpoint`.
@@ -154,11 +162,11 @@ To uninstall:
 ./install.sh uninstall omp
 ```
 
-Uninstall removes the shim's path from the `extensions` array, deletes the hook file at `~/.omp/extensions/arize-tracing.ts` (only if it carries the Arize header marker — the installer never touches the user's own extensions), and removes the `harnesses.omp` block from `~/.arize/harness/config.yaml`.
+Uninstall removes the shim's path from the `extensions` array, deletes the hook file at `~/.omp/extensions/arize-tracing.ts` (only if it carries the Arize header marker — the installer never touches the user's own extensions), and removes the `harnesses.omp` block from `~/.arize/harness/config.json`.
 
 ### Validate
 
-1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials under `harnesses.omp`.
+1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials under `harnesses.omp`.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 3. **Hook installed**: Verify `~/.omp/extensions/arize-tracing.ts` exists and starts with the Arize header marker.
 4. **Hook registered**: Verify the shim's absolute path appears in the `extensions` array of `~/.omp/agent/settings.json` (omp does not auto-discover — registration is required).
@@ -167,7 +175,7 @@ Uninstall removes the shim's path from the `extensions` array, deletes the hook 
 ### Confirm
 
 Tell the user:
-- Config saved to `~/.arize/harness/config.yaml`
+- Config saved to `~/.arize/harness/config.json`
 - omp hook shim installed at `~/.omp/extensions/arize-tracing.ts`
 - Shim path registered in the `extensions` array of `~/.omp/agent/settings.json` — omp requires explicit registration (no auto-discovery)
 - Spans are sent directly to the backend from the handler — no background process needed
@@ -177,7 +185,7 @@ Tell the user:
 - Errors and handler stderr are always written to `~/.arize/harness/logs/omp.log` (the adapter redirects Python stderr there via `ARIZE_LOG_FILE`); set `ARIZE_VERBOSE=true` in the shell before launching omp to also capture routine handler activity (event dispatch, span emits, state transitions)
 - Toggle tracing on/off via `ARIZE_TRACE_ENABLED` env var (must be exported in the user's shell before launching omp — the shim and handler inherit host env vars)
 - Tail the log file at `~/.arize/harness/logs/omp.log` for real-time debugging
-- Mention `ARIZE_TRACE_DEBUG=true` to dump raw event payloads under `~/.arize/harness/state/debug/` (files are named `omp_before_agent_start_<ts>.yaml` / `omp_turn_end_<ts>.yaml` / `omp_agent_end_<ts>.yaml` / `omp_session_shutdown_<ts>.yaml`) for inspection
+- Mention `ARIZE_TRACE_DEBUG=true` to dump raw event payloads under `~/.arize/harness/state/debug/` (files are named `omp_before_agent_start_<ts>.json` / `omp_turn_end_<ts>.json` / `omp_agent_end_<ts>.json` / `omp_session_shutdown_<ts>.json`) for inspection
 
 ## Architecture (How spans are produced)
 
@@ -202,7 +210,7 @@ Common issues and fixes for omp:
 
 | Problem | Fix |
 |---------|-----|
-| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.yaml`. Check handler log: `tail -20 ~/.arize/harness/logs/omp.log`. Confirm the hook is in place: `ls ~/.omp/extensions/arize-tracing.ts`. |
+| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check handler log: `tail -20 ~/.arize/harness/logs/omp.log`. Confirm the hook is in place: `ls ~/.omp/extensions/arize-tracing.ts`. |
 | Hook not loading | omp does **not** auto-discover an extensions dir. Confirm the shim's absolute path is in the `extensions` array of `~/.omp/agent/settings.json`, then restart omp and check its CLI output for extension errors. |
 | Handler entry point missing | The shim spawns the handler by absolute path; verify the binary exists at `~/.arize/harness/venv/bin/arize-hook-omp` (or `~/.arize/harness/venv/Scripts/arize-hook-omp.exe` on Windows). Rerun `./install.sh omp` to reinstall the venv entry point. |
 | Missing LLM or tool spans | Spans emit on `turn_end` (one LLM span per model call, one TOOL span per tool result). If a turn hasn't completed yet, its spans won't appear until the event fires. Wait for the agent run to finish (`agent_end`). |
@@ -210,7 +218,7 @@ Common issues and fixes for omp:
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching omp |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching omp |
-| Want raw event payloads for inspection | Set `ARIZE_TRACE_DEBUG=true` env var; payloads land under `~/.arize/harness/state/debug/` as `omp_before_agent_start_<ts>.yaml` / `omp_turn_end_<ts>.yaml` / `omp_agent_end_<ts>.yaml` / `omp_session_shutdown_<ts>.yaml` |
-| Wrong project name | Set `harnesses.omp.project_name` in `~/.arize/harness/config.yaml` (default: `"omp"`) |
+| Want raw event payloads for inspection | Set `ARIZE_TRACE_DEBUG=true` env var; payloads land under `~/.arize/harness/state/debug/` as `omp_before_agent_start_<ts>.json` / `omp_turn_end_<ts>.json` / `omp_agent_end_<ts>.json` / `omp_session_shutdown_<ts>.json` |
+| Wrong project name | Set `harnesses.omp.project_name` in `~/.arize/harness/config.json` (default: `"omp"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` env var before launching omp |
 | Tracing not toggling | Ensure `ARIZE_TRACE_ENABLED` is exported in your shell, not just set — the omp process and any shim-spawned handler inherit host env vars |

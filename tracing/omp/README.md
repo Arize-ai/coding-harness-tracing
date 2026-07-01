@@ -27,30 +27,38 @@ Because omp's lifecycle events fire exactly once each and carry final data, ther
 
 ## Setup
 
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, copies the hook shim into `~/.omp/extensions/arize-tracing.ts`, **and** registers the shim's absolute path in the `extensions` array of `~/.omp/agent/settings.json`. omp does **not** auto-discover an extensions directory ([extension loading docs](https://omp.sh/docs/hooks)) — explicit registration is required, and the installer handles it. Spans are sent directly to the backend from the handler — no separate buffer/collector service is required.
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, copies the hook shim into `~/.omp/extensions/arize-tracing.ts`, **and** registers the shim's absolute path in the `extensions` array of `~/.omp/agent/settings.json`. omp does **not** auto-discover an extensions directory ([extension loading docs](https://omp.sh/docs/hooks)) — explicit registration is required, and the installer handles it. Spans are sent directly to the backend from the handler — no separate buffer/collector service is required.
 
 Pass `--with-skills` to also symlink the `manage-omp-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage omp tracing configuration.
 
 ### Remote setup
 
-macOS / Linux:
+#### macOS / Linux
+
+Install:
 
 ```bash
-# Install
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- omp
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- uninstall omp
 ```
 
-Windows (PowerShell):
+#### Windows (PowerShell)
+
+Install:
 
 ```powershell
-# Install
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat omp
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat uninstall omp
 ```
@@ -62,27 +70,35 @@ git clone https://github.com/Arize-ai/coding-harness-tracing.git
 cd coding-harness-tracing
 ```
 
-macOS / Linux:
+**macOS / Linux**
+
+Install:
 
 ```bash
-# Install
 ./install.sh omp
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 ./install.sh uninstall omp
 ```
 
-Windows:
+**Windows (PowerShell)**
+
+Install:
 
 ```powershell
-# Install
 install.bat omp
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 install.bat uninstall omp
 ```
 
-Uninstall removes the shim's path from the `extensions` array in `~/.omp/agent/settings.json`, deletes the hook file at `~/.omp/extensions/arize-tracing.ts` (only if it carries the Arize header marker — your own extensions are left alone), and removes the `harnesses.omp` block from `~/.arize/harness/config.yaml`.
+Uninstall removes the shim's path from the `extensions` array in `~/.omp/agent/settings.json`, deletes the hook file at `~/.omp/extensions/arize-tracing.ts` (only if it carries the Arize header marker — your own extensions are left alone), and removes the `harnesses.omp` block from `~/.arize/harness/config.json`.
 
 ## Default Settings
 
@@ -106,6 +122,6 @@ Run any omp session as you normally would. omp loads the registered extension on
 
 - Errors and handler stderr land in `~/.arize/harness/logs/omp.log` always (the adapter redirects Python stderr there via `ARIZE_LOG_FILE`); set `export ARIZE_VERBOSE=true` before launching omp to also see routine handler activity (event dispatch, span emits, state transitions).
 - Confirm spans appear in your configured project in Arize AX or Phoenix.
-- Set `ARIZE_TRACE_DEBUG=true` to dump the raw event payloads under `~/.arize/harness/state/debug/` (files are named `omp_before_agent_start_<ts>.yaml`, `omp_turn_end_<ts>.yaml`, `omp_agent_end_<ts>.yaml`, `omp_session_shutdown_<ts>.yaml`) for inspection.
+- Set `ARIZE_TRACE_DEBUG=true` to dump the raw event payloads under `~/.arize/harness/state/debug/` (files are named `omp_before_agent_start_<ts>.json`, `omp_turn_end_<ts>.json`, `omp_agent_end_<ts>.json`, `omp_session_shutdown_<ts>.json`) for inspection.
 
 See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_USER_ID`, `ARIZE_PROJECT_NAME`, `ARIZE_VERBOSE`, `ARIZE_TRACE_DEBUG`, etc.).
