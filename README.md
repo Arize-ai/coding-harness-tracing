@@ -25,17 +25,22 @@ The installer involves a brief interactive setup. The steps below run in order:
 
 #### 1. Backend selection
 
-Pick where spans should be sent:
+Choose where spans should be sent:
 
-- **1) Phoenix ** — your own Phoenix instance.
-- **2) Arize AX ** — the hosted Arize platform.
+- **1) Phoenix** — your own Phoenix instance.
+- **2) Arize AX** — the hosted Arize platform.
 
 #### 2. Credentials
 
 Prompts depend on the backend:
 
-- **Phoenix:** endpoint (defaults to `http://localhost:6006`) and an optional API key (leave blank for no auth).
-- **Arize AX:** Arize API key, Space ID, and OTLP endpoint (defaults to `otlp.arize.com:443` — only override for hosted/dedicated instances).
+- **Phoenix:**
+    - endpoint (defaults to `http://localhost:6006`)
+    - optional API key (leave blank for no auth)
+- **Arize AX:**
+    - [Arize API key](https://arize.com/docs/ax/security-and-settings/api-keys)
+    - Space ID (found in Arize settings tab along with api keys)
+    - OTLP endpoint (defaults to `otlp.arize.com:443` — only override for hosted/dedicated instances).
 
 If you've already configured another harness against the same backend, the installer offers a **copy-from** menu so you can reuse those credentials instead of re-entering them.
 
