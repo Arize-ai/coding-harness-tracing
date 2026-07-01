@@ -6,30 +6,38 @@ This harness is **transcript-driven**: Antigravity hooks are control-plane trigg
 
 ## Setup
 
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.yaml`, and registers hooks under the top-level `arize-tracing` key in `~/.gemini/config/hooks.json` (Antigravity's global hooks file — distinct from Gemini's `~/.gemini/settings.json`).
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers hooks under the top-level `arize-tracing` key in `~/.gemini/config/hooks.json` (Antigravity's global hooks file — distinct from Gemini's `~/.gemini/settings.json`).
 
 Pass `--with-skills` to also symlink the `manage-antigravity-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Antigravity tracing configuration.
 
 ### Remote setup
 
-macOS / Linux:
+#### macOS / Linux
+
+Install:
 
 ```bash
-# Install
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- antigravity
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- uninstall antigravity
 ```
 
-Windows (PowerShell):
+#### Windows (PowerShell)
+
+Install:
 
 ```powershell
-# Install
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat antigravity
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 iwr -useb https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat -OutFile $env:TEMP\install.bat
 & $env:TEMP\install.bat uninstall antigravity
 ```
@@ -41,23 +49,31 @@ git clone https://github.com/Arize-ai/coding-harness-tracing.git
 cd coding-harness-tracing
 ```
 
-macOS / Linux:
+**macOS / Linux**
+
+Install:
 
 ```bash
-# Install
 ./install.sh antigravity
+```
 
-# Uninstall
+Uninstall:
+
+```bash
 ./install.sh uninstall antigravity
 ```
 
-Windows:
+**Windows (PowerShell)**
+
+Install:
 
 ```powershell
-# Install
 install.bat antigravity
+```
 
-# Uninstall
+Uninstall:
+
+```powershell
 install.bat uninstall antigravity
 ```
 
@@ -82,8 +98,8 @@ Run any Antigravity CLI/IDE session as you normally would. The installed hooks f
 - Confirm spans appear in your configured project in Arize AX or Phoenix.
 - Each hook has a 30-second timeout — see `HOOK_TIMEOUT_SECONDS` in `constants.py` if you need to adjust.
 
-## Known limitations
+See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_USER_ID`, etc.).
+
+## Limitations
 
 - **Token counts are not captured.** Antigravity does not expose per-turn token usage on any local surface (neither the hook payload nor the transcript). `llm.token_count.*` attributes are intentionally absent on Antigravity spans rather than reported as 0.
-
-See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_USER_ID`, etc.).

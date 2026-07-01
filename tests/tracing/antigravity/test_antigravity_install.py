@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 
 import pytest
-import yaml
 
 import tracing.antigravity.constants as _ac
 import tracing.antigravity.install as _install
@@ -78,7 +77,7 @@ def cwd_tmp(tmp_path, monkeypatch):
 
     monkeypatch.setattr(setup_mod, "INSTALL_DIR", tmp_path / ".arize" / "harness")
     monkeypatch.setattr(setup_mod, "VENV_DIR", tmp_path / ".arize" / "harness" / "venv")
-    monkeypatch.setattr(setup_mod, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.yaml")
+    monkeypatch.setattr(setup_mod, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.json")
     monkeypatch.setattr(setup_mod, "BIN_DIR", tmp_path / ".arize" / "harness" / "bin")
     monkeypatch.setattr(setup_mod, "RUN_DIR", tmp_path / ".arize" / "harness" / "run")
     monkeypatch.setattr(setup_mod, "LOG_DIR", tmp_path / ".arize" / "harness" / "logs")
@@ -87,11 +86,11 @@ def cwd_tmp(tmp_path, monkeypatch):
     import core.constants as c
 
     monkeypatch.setattr(c, "BASE_DIR", tmp_path / ".arize" / "harness")
-    monkeypatch.setattr(c, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.yaml")
+    monkeypatch.setattr(c, "CONFIG_FILE", tmp_path / ".arize" / "harness" / "config.json")
 
     import core.config as config_mod
 
-    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(tmp_path / ".arize" / "harness" / "config.yaml"))
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(tmp_path / ".arize" / "harness" / "config.json"))
 
     # Redirect Antigravity hooks file to temp dir
     antigravity_settings_dir = tmp_path / ".gemini" / "config"
@@ -365,18 +364,18 @@ class TestDryRun:
 
 
 # ---------------------------------------------------------------------------
-# Config.yaml integration
+# Config.json integration
 # ---------------------------------------------------------------------------
 
 
-class TestConfigYamlIntegration:
+class TestConfigJsonIntegration:
     def test_fresh_install_writes_harness_entry(self, cwd_tmp, monkeypatch):
         _mock_prompts(monkeypatch, backend=PHOENIX_BACKEND)
         install()
 
-        config_path = cwd_tmp / ".arize" / "harness" / "config.yaml"
+        config_path = cwd_tmp / ".arize" / "harness" / "config.json"
         assert config_path.is_file()
-        config = yaml.safe_load(config_path.read_text())
+        config = json.loads(config_path.read_text())
         entry = config["harnesses"]["antigravity"]
         assert entry["target"] == "phoenix"
         assert entry["project_name"] == "antigravity"
@@ -385,9 +384,9 @@ class TestConfigYamlIntegration:
         _mock_prompts(monkeypatch)
         install()
         uninstall()
-        config_path = cwd_tmp / ".arize" / "harness" / "config.yaml"
+        config_path = cwd_tmp / ".arize" / "harness" / "config.json"
         if config_path.is_file():
-            config = yaml.safe_load(config_path.read_text())
+            config = json.loads(config_path.read_text())
             harnesses = config.get("harnesses", {}) if config else {}
             assert "antigravity" not in harnesses
 

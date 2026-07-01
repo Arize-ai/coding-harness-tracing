@@ -7,11 +7,11 @@ no PID-keyed gc.
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 
 import pytest
-import yaml
 
 from core.common import StateManager
 from tracing.antigravity.hooks import adapter
@@ -75,7 +75,7 @@ class TestResolveSession:
     def test_uses_conversation_id(self, antigravity_state_dir, disable_env_vars):
         """conversationId from the payload is the session key."""
         sm = adapter.resolve_session({"conversationId": "abc"})
-        assert sm.state_file == antigravity_state_dir / "state_abc.yaml"
+        assert sm.state_file == antigravity_state_dir / "state_abc.json"
         assert sm.state_file.exists()
 
     def test_falls_back_to_pid_when_missing(self, antigravity_state_dir, disable_env_vars):
@@ -95,7 +95,7 @@ class TestResolveSession:
         """Returned StateManager has init_state() called (file exists with {})."""
         sm = adapter.resolve_session({"conversationId": "test-init"})
         assert sm.state_file.exists()
-        data = yaml.safe_load(sm.state_file.read_text())
+        data = json.loads(sm.state_file.read_text())
         assert data == {}
 
     def test_same_input_same_file(self, antigravity_state_dir, disable_env_vars):
@@ -117,7 +117,7 @@ class TestEnsureSessionInitialized:
     def _make_state(self, antigravity_state_dir, key="test"):
         sm = StateManager(
             state_dir=antigravity_state_dir,
-            state_file=antigravity_state_dir / f"state_{key}.yaml",
+            state_file=antigravity_state_dir / f"state_{key}.json",
             lock_path=antigravity_state_dir / f".lock_{key}",
         )
         sm.init_state()
@@ -197,7 +197,7 @@ class TestEnsureSessionInitialized:
 class TestGcStaleStateFiles:
     def test_old_file_removed(self, antigravity_state_dir, disable_env_vars):
         """State file older than 24h is removed."""
-        state_file = antigravity_state_dir / "state_old-session.yaml"
+        state_file = antigravity_state_dir / "state_old-session.json"
         state_file.write_text("{}")
         old_time = time.time() - 90000  # 25h
         os.utime(state_file, (old_time, old_time))
@@ -206,14 +206,14 @@ class TestGcStaleStateFiles:
 
     def test_recent_file_kept(self, antigravity_state_dir, disable_env_vars):
         """State file younger than 24h is kept."""
-        state_file = antigravity_state_dir / "state_recent-session.yaml"
+        state_file = antigravity_state_dir / "state_recent-session.json"
         state_file.write_text("{}")
         adapter.gc_stale_state_files()
         assert state_file.exists()
 
     def test_lock_dir_removed(self, antigravity_state_dir, disable_env_vars):
         """Lock dir is removed when state file is removed."""
-        state_file = antigravity_state_dir / "state_old-lock-dir.yaml"
+        state_file = antigravity_state_dir / "state_old-lock-dir.json"
         state_file.write_text("{}")
         lock_dir = antigravity_state_dir / ".lock_old-lock-dir"
         lock_dir.mkdir()
@@ -225,7 +225,7 @@ class TestGcStaleStateFiles:
 
     def test_lock_file_removed(self, antigravity_state_dir, disable_env_vars):
         """Lock file (fcntl-style) is removed when state file is removed."""
-        state_file = antigravity_state_dir / "state_old-lock-file.yaml"
+        state_file = antigravity_state_dir / "state_old-lock-file.json"
         state_file.write_text("{}")
         lock_file = antigravity_state_dir / ".lock_old-lock-file"
         lock_file.write_text("")
@@ -237,7 +237,7 @@ class TestGcStaleStateFiles:
 
     def test_empty_dir_no_error(self, antigravity_state_dir, disable_env_vars):
         """Empty STATE_DIR causes no errors."""
-        for f in antigravity_state_dir.glob("state_*.yaml"):
+        for f in antigravity_state_dir.glob("state_*.json"):
             f.unlink()
         adapter.gc_stale_state_files()  # should not raise
 
@@ -249,7 +249,7 @@ class TestGcStaleStateFiles:
 
     def test_uses_24h_cutoff(self, antigravity_state_dir, disable_env_vars):
         """Files just past 24h boundary are removed."""
-        state_file = antigravity_state_dir / "state_boundary.yaml"
+        state_file = antigravity_state_dir / "state_boundary.json"
         state_file.write_text("{}")
         old_time = time.time() - 86401
         os.utime(state_file, (old_time, old_time))

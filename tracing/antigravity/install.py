@@ -143,7 +143,7 @@ def _uninstall_hooks() -> None:
 
 
 def install() -> None:
-    """Install Antigravity tracing hooks and register in config.yaml."""
+    """Install Antigravity tracing hooks and register in config.json."""
     ensure_shared_runtime()
 
     config = load_config()
@@ -157,7 +157,7 @@ def install() -> None:
         if not dry_run():
             write_config(target, credentials, _c.HARNESS_NAME, project_name, user_id=user_id)
         else:
-            info("would write config.yaml with backend credentials")
+            info("would write config.json with backend credentials")
     else:
         project_name = prompt_project_name(existing_entry.get("project_name") or _c.HARNESS_NAME)
         merge_harness_entry(_c.HARNESS_NAME, project_name)
@@ -167,7 +167,7 @@ def install() -> None:
         logging_block = prompt_content_logging()
         write_logging_config(logging_block)
     else:
-        info("Using existing logging settings from config.yaml")
+        info("Using existing logging settings from config.json")
 
     _install_hooks()
 
@@ -175,7 +175,7 @@ def install() -> None:
 
 
 def uninstall() -> None:
-    """Remove Antigravity tracing hooks and deregister from config.yaml."""
+    """Remove Antigravity tracing hooks and deregister from config.json."""
     _uninstall_hooks()
 
     remove_harness_entry(_c.HARNESS_NAME)

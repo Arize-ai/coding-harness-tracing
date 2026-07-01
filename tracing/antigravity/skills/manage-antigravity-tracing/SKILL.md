@@ -15,7 +15,7 @@ This harness is **transcript-driven**: Antigravity hooks are a control plane tha
 
 1. **Is the harness already installed?**
    - Check `~/.gemini/config/hooks.json` for a top-level `"arize-tracing"` key containing `PreInvocation` and `Stop` entries
-   - Check `~/.arize/harness/config.yaml` for the `harnesses.antigravity` block
+   - Check `~/.arize/harness/config.json` for the `harnesses.antigravity` block
    - If both are present -> Jump to [Validate](#validate) or [Troubleshoot](#troubleshoot)
 
 2. **Do they already have credentials?**
@@ -87,7 +87,7 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ## Configure Settings
 
-**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.yaml` to exist for backend credential resolution.
+**Important:** Users must run this setup before tracing will work. The `send_span()` function requires `~/.arize/harness/config.json` to exist for backend credential resolution.
 
 ### Ask the user for:
 
@@ -101,29 +101,37 @@ Then proceed to [Configure Settings](#configure-settings). If the user is on an 
 
 ### Write the config
 
-The config file at `~/.arize/harness/config.yaml` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/antigravity}`
+The config file at `~/.arize/harness/config.json` is the single source of truth for backend credentials and per-harness settings. Create the directory structure if needed: `mkdir -p ~/.arize/harness/{bin,run,logs,state/antigravity}`
 
-**Important: read-merge-write.** If `~/.arize/harness/config.yaml` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.antigravity` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
+**Important: read-merge-write.** If `~/.arize/harness/config.json` already exists, read it first, then merge in the new or updated fields (e.g., add/update the `harnesses.antigravity` entry) while preserving existing backend credentials. Only prompt for backend credentials if no existing config is found.
 
 **Phoenix:**
-```yaml
-harnesses:
-  antigravity:
-    project_name: antigravity
-    target: phoenix
-    endpoint: <endpoint>
-    api_key: ""
+```json
+{
+  "harnesses": {
+    "antigravity": {
+      "project_name": "antigravity",
+      "target": "phoenix",
+      "endpoint": "<endpoint>",
+      "api_key": ""
+    }
+  }
+}
 ```
 
 **Arize AX:**
-```yaml
-harnesses:
-  antigravity:
-    project_name: antigravity
-    target: arize
-    endpoint: otlp.arize.com:443
-    api_key: <key>
-    space_id: <id>
+```json
+{
+  "harnesses": {
+    "antigravity": {
+      "project_name": "antigravity",
+      "target": "arize",
+      "endpoint": "otlp.arize.com:443",
+      "api_key": "<key>",
+      "space_id": "<id>"
+    }
+  }
+}
 ```
 
 If the user has a custom OTLP endpoint, set it in `harnesses.antigravity.endpoint`.
@@ -148,7 +156,7 @@ The installer registers a top-level `"arize-tracing"` block in `~/.gemini/config
 
 ### Validate
 
-1. **Config exists**: Run `cat ~/.arize/harness/config.yaml` to verify the config file exists and has correct backend credentials under `harnesses.antigravity`.
+1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials under `harnesses.antigravity`.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 3. **Hooks active**: Verify `~/.gemini/config/hooks.json` contains a top-level `"arize-tracing"` entry with `PreInvocation` and `Stop` handler lists.
 4. **Quick dry-run test** (optional):
@@ -160,7 +168,7 @@ The installer registers a top-level `"arize-tracing"` block in `~/.gemini/config
 ### Confirm
 
 Tell the user:
-- Config saved to `~/.arize/harness/config.yaml`
+- Config saved to `~/.arize/harness/config.json`
 - Antigravity hooks activated via `~/.gemini/config/hooks.json`
 - Spans are sent directly to the backend from hooks -- no background process needed
 - After saving, open a new Antigravity session and traces will appear in their Phoenix UI or Arize AX dashboard under the project name
@@ -198,14 +206,14 @@ Common issues and fixes for Antigravity:
 
 | Problem | Fix |
 |---------|-----|
-| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.yaml`. Check hook log: `tail -20 ~/.arize/harness/logs/antigravity.log` |
+| Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/antigravity.log` |
 | Hooks not firing | Verify `~/.gemini/config/hooks.json` contains a top-level `"arize-tracing"` block with `PreInvocation` and `Stop` entries pointing at absolute venv binary paths |
 | Agent loops or won't exit | Check that the Stop handler is printing exactly `{}` on stdout -- a stray `{"decision": "continue"}` will force re-entry. Inspect `~/.arize/harness/logs/antigravity.log`. |
-| Config missing | Run `./install.sh antigravity` or create `~/.arize/harness/config.yaml` manually (include `harnesses.antigravity` section) |
+| Config missing | Run `./install.sh antigravity` or create `~/.arize/harness/config.json` manually (include `harnesses.antigravity` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Antigravity |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching Antigravity |
-| Wrong project name | Set `harnesses.antigravity.project_name` in `~/.arize/harness/config.yaml` (default: `"antigravity"`) |
+| Wrong project name | Set `harnesses.antigravity.project_name` in `~/.arize/harness/config.json` (default: `"antigravity"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` env var before launching Antigravity |
 | Tracing not toggling | Ensure `ARIZE_TRACE_ENABLED` is exported in your shell, not just set |
 | Token counts missing | Expected -- Antigravity does not expose per-turn token usage on any local surface, so the harness intentionally leaves token attributes unset |
