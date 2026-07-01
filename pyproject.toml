@@ -60,6 +60,8 @@ arize-hook-cursor = "tracing.cursor.hooks.handlers:main"
 arize-hook-kiro = "tracing.kiro.hooks.handlers:main"
 # opencode hook
 arize-hook-opencode = "tracing.opencode.hooks.handlers:main"
+# omp hook
+arize-hook-omp = "tracing.omp.hooks.handlers:main"
 # Setup wizards
 arize-setup-claude = "core.setup.claude:main"
 arize-setup-codex = "core.setup.codex:main"
@@ -68,6 +70,7 @@ arize-setup-cursor = "core.setup.cursor:main"
 arize-setup-gemini = "core.setup.gemini:main"
 arize-setup-kiro = "core.setup.kiro:main"
 arize-setup-opencode = "core.setup.opencode:main"
+arize-setup-omp = "core.setup.omp:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

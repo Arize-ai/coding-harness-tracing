@@ -52,3 +52,6 @@ repos:
       - id: mypy
         name: mypy (tracing/opencode)
         files: ^tracing/opencode/
+      - id: mypy
+        name: mypy (tracing/omp)
+        files: ^tracing/omp/
