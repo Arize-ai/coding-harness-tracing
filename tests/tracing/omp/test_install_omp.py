@@ -321,16 +321,18 @@ class TestInstallHandlesMissingSettings:
         data = _read_settings(settings_file)
         assert str(plugin_file) in data["extensions"]
 
-    def test_handles_invalid_json_as_empty(self, settings_file, plugin_file, monkeypatch):
-        """Invalid JSON is logged and treated as {} (per spec — not a hard abort)."""
+    def test_invalid_json_aborts_without_clobbering(self, settings_file, plugin_file, monkeypatch):
+        """Malformed JSON aborts (SystemExit) instead of silently wiping the file."""
         settings_file.parent.mkdir(parents=True, exist_ok=True)
-        settings_file.write_text("{this is not valid json!!!", encoding="utf-8")
+        original = "{this is not valid json!!!"
+        settings_file.write_text(original, encoding="utf-8")
 
         _mock_prompts(monkeypatch)
-        install()
+        with pytest.raises(SystemExit):
+            install()
 
-        data = _read_settings(settings_file)
-        assert str(plugin_file) in data["extensions"]
+        # The user's (malformed) file is left untouched, not overwritten with {}.
+        assert settings_file.read_text(encoding="utf-8") == original
 
 
 # ---------------------------------------------------------------------------
@@ -841,11 +843,11 @@ class TestSetupOmpModule:
     """core/setup/omp.py delegates to tracing.omp.install."""
 
     def test_setup_module_importable(self):
-        from core.setup.omp import install, main, uninstall
+        import core.setup.omp as setup_omp
 
-        assert callable(install)
-        assert callable(uninstall)
-        assert callable(main)
+        assert callable(setup_omp.install)
+        assert callable(setup_omp.uninstall)
+        assert callable(setup_omp.main)
 
     def test_setup_install_delegates(self, cwd_tmp, monkeypatch):
         import core.setup.omp as setup_omp

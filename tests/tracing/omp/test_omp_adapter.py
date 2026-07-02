@@ -4,8 +4,9 @@
 Mirrors tests/tracing/opencode/test_opencode_adapter.py but adapted for omp's
 authoritative ``sessionId`` field (camelCase — the shim stamps it on every
 forwarded payload). omp always supplies a real session id, so there is NO PID /
-grandparent-PID fallback — a missing sessionId keys off the literal string
-"unknown".
+grandparent-PID fallback for real sessions — a missing sessionId keys off a
+per-process ``"unknown-<pid>"`` fallback so concurrent id-less runs don't
+collide on a shared state file.
 
 omp also differs from opencode in project-name derivation: there is no
 snapshot/message payload to mine, so the chain is simply
@@ -102,31 +103,34 @@ class TestResolveSession:
         assert sm.state_file.exists()
 
     def test_unknown_fallback_when_missing(self, omp_state_dir, disable_env_vars):
-        """Missing sessionId -> key off 'unknown'. No PID-based key."""
+        """Missing sessionId -> per-process 'unknown-<pid>' key."""
         sm = adapter.resolve_session({})
-        assert sm.state_file == omp_state_dir / "state_unknown.json"
+        assert sm.state_file == omp_state_dir / f"state_unknown-{os.getpid()}.json"
         assert sm.state_file.exists()
 
     def test_unknown_fallback_when_empty(self, omp_state_dir, disable_env_vars):
-        """Empty sessionId -> key off 'unknown'."""
+        """Empty sessionId -> per-process 'unknown-<pid>' key."""
         sm = adapter.resolve_session({"sessionId": ""})
-        assert sm.state_file == omp_state_dir / "state_unknown.json"
+        assert sm.state_file == omp_state_dir / f"state_unknown-{os.getpid()}.json"
 
     def test_unknown_fallback_when_none(self, omp_state_dir, disable_env_vars):
-        """Explicit None sessionId -> key off 'unknown'."""
+        """Explicit None sessionId -> per-process 'unknown-<pid>' key."""
         sm = adapter.resolve_session({"sessionId": None})
-        assert sm.state_file == omp_state_dir / "state_unknown.json"
+        assert sm.state_file == omp_state_dir / f"state_unknown-{os.getpid()}.json"
 
-    def test_no_pid_keyed_fallback(self, omp_state_dir, disable_env_vars):
-        """Missing sessionId must NOT produce a PID-keyed state file.
+    def test_idless_fallback_is_per_process(self, omp_state_dir, disable_env_vars):
+        """Missing sessionId keys off pid so concurrent id-less runs don't collide.
 
-        Unlike gemini, omp adapters never use PID-based keys.
+        The fallback carries the pid suffix rather than a bare numeric pid key or
+        a shared 'unknown' literal.
         """
         adapter.resolve_session({})
-        # No state file with a numeric (pid-style) key should exist
-        for f in omp_state_dir.glob("state_*.json"):
+        files = list(omp_state_dir.glob("state_*.json"))
+        assert files, "no state file produced"
+        for f in files:
             key = f.stem.replace("state_", "", 1)
-            assert not key.isdigit(), f"PID-keyed state file produced: {f.name}"
+            assert not key.isdigit(), f"bare PID-keyed state file produced: {f.name}"
+            assert key == f"unknown-{os.getpid()}"
 
     def test_init_state_called(self, omp_state_dir, disable_env_vars):
         """Returned StateManager has init_state() called (file exists with {})."""
@@ -155,10 +159,10 @@ class TestResolveSession:
         """Only camelCase ``sessionId`` is honored — opencode's ``sessionID`` is not.
 
         The shim stamps ``sessionId`` (camelCase); a payload carrying only the
-        opencode-style ``sessionID`` must fall through to 'unknown'.
+        opencode-style ``sessionID`` must fall through to the 'unknown-<pid>' key.
         """
         sm = adapter.resolve_session({"sessionID": "WRONG_CASE"})
-        assert sm.state_file == omp_state_dir / "state_unknown.json"
+        assert sm.state_file == omp_state_dir / f"state_unknown-{os.getpid()}.json"
 
     def test_extra_payload_fields_ignored(self, omp_state_dir, disable_env_vars):
         """Extra payload fields are not used for the session key."""
@@ -200,10 +204,10 @@ class TestEnsureSessionInitialized:
         assert sm.get("session_id") == "ses_xyz789"
 
     def test_session_id_unknown_when_missing(self, omp_state_dir, disable_env_vars):
-        """session_id falls back to 'unknown' when payload lacks sessionId."""
+        """session_id falls back to 'unknown-<pid>' when payload lacks sessionId."""
         sm = self._make_state(omp_state_dir, "sid-missing")
         adapter.ensure_session_initialized(sm, {})
-        assert sm.get("session_id") == "unknown"
+        assert sm.get("session_id") == f"unknown-{os.getpid()}"
 
     def test_idempotent(self, omp_state_dir, disable_env_vars):
         """Second call is a no-op — values unchanged."""

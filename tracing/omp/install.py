@@ -23,10 +23,11 @@ import shutil
 import sys
 from pathlib import Path
 
+import tracing.omp.constants as omp_constants
 from core.config import get_value, load_config
+from core.setup import dry_run, ensure_shared_runtime
+from core.setup import err as _err
 from core.setup import (
-    dry_run,
-    ensure_shared_runtime,
     info,
     merge_harness_entry,
     prompt_backend,
@@ -39,12 +40,10 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
-from tracing.omp.constants import HARNESS_NAME
 
 # Header-marker the installer writes into the shim and checks on uninstall so
 # we never delete a user's own extension file.
 _HEADER_MARKER = "// Arize omp tracing hook (shim)."
-
 
 # ---------------------------------------------------------------------------
 # Path helpers (re-read constants each call so tests can monkeypatch them)
@@ -94,10 +93,12 @@ def _plugin_source():
 
 
 def _read_settings() -> dict:
-    """Read settings.json, returning ``{}`` on missing/empty/invalid JSON.
+    """Read settings.json, returning ``{}`` on a missing or empty file.
 
-    Unlike Gemini's installer, malformed JSON is logged and treated as ``{}``
-    rather than aborting — omp's settings file is more likely to be hand-edited.
+    Like Gemini's installer, an unreadable file or malformed JSON raises
+    ``SystemExit(1)`` rather than being treated as ``{}``: rewriting an empty
+    dict back would silently wipe a hand-edited ``settings.json``. The user must
+    fix the file and retry.
     """
     path = _settings_file()
     if not path.is_file():
@@ -105,16 +106,18 @@ def _read_settings() -> dict:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        info(f"Cannot read {path}: {exc}; treating as empty")
-        return {}
+
+        _err(f"Cannot read {path}: {exc}")
+        sys.exit(1)
     if not text.strip():
         info("settings.json is empty, treating as {}")
         return {}
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
-        info(f"{path} contains invalid JSON; treating as empty.\n  {exc}")
-        return {}
+
+        _err(f"{path} contains invalid JSON; aborting. Please fix the file and retry.\n  {exc}")
+        sys.exit(1)
     return data if isinstance(data, dict) else {}
 
 
@@ -204,8 +207,18 @@ def _unregister_extension() -> None:
         return
 
     plugin_path = str(_plugin_file())
-    data["extensions"] = [e for e in exts if e != plugin_path]
-    _write_settings(data)
+    remaining = [e for e in exts if e != plugin_path]
+    if remaining:
+        data["extensions"] = remaining
+    else:
+        # Don't leave a stray {"extensions": []} behind; drop the now-empty key
+        # and remove the file entirely if we were the only thing in it.
+        data.pop("extensions", None)
+
+    if not data:
+        path.unlink()
+    else:
+        _write_settings(data)
 
 
 # ---------------------------------------------------------------------------
@@ -218,20 +231,20 @@ def install(with_skills: bool = False) -> None:
     ensure_shared_runtime()
 
     config = load_config()
-    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
+    existing_entry = get_value(config, f"harnesses.{omp_constants.HARNESS_NAME}")
 
     if not existing_entry or not isinstance(existing_entry, dict) or "target" not in existing_entry:
         existing_harnesses = config.get("harnesses") if config else None
         target, credentials = prompt_backend(existing_harnesses)
-        project_name = prompt_project_name(HARNESS_NAME)
+        project_name = prompt_project_name(omp_constants.HARNESS_NAME)
         user_id = prompt_user_id()
         if not dry_run():
-            write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
+            write_config(target, credentials, omp_constants.HARNESS_NAME, project_name, user_id=user_id)
         else:
             info("would write config.json with backend credentials")
     else:
-        project_name = prompt_project_name(existing_entry.get("project_name") or HARNESS_NAME)
-        merge_harness_entry(HARNESS_NAME, project_name)
+        project_name = prompt_project_name(existing_entry.get("project_name") or omp_constants.HARNESS_NAME)
+        merge_harness_entry(omp_constants.HARNESS_NAME, project_name)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:
@@ -244,7 +257,7 @@ def install(with_skills: bool = False) -> None:
     _register_extension()
 
     if with_skills:
-        symlink_skills(HARNESS_NAME)
+        symlink_skills(omp_constants.HARNESS_NAME)
 
     info("omp tracing installed")
 
@@ -254,8 +267,8 @@ def uninstall() -> None:
     _unregister_extension()
     _uninstall_plugin()
 
-    remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
+    remove_harness_entry(omp_constants.HARNESS_NAME)
+    unlink_skills(omp_constants.HARNESS_NAME)
     info("omp tracing uninstalled")
 
 

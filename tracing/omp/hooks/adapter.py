@@ -4,8 +4,9 @@
 omp always supplies an authoritative ``sessionId`` (camelCase — the TypeScript
 shim stamps it on every forwarded payload, reading it from the hook context for
 events whose payload is empty). So, like opencode, this adapter has no PID /
-grandparent-PID heuristics. Missing/empty ``sessionId`` keys off the literal
-string ``"unknown"``.
+grandparent-PID heuristics. Missing/empty ``sessionId`` keys off a per-process
+``"unknown-<pid>"`` fallback (see ``_session_key``) so two concurrent id-less
+runs cannot collide on a single shared state file.
 
 Unlike opencode there is no snapshot/message payload to mine for the project
 name, so the derivation chain is simply
@@ -39,13 +40,28 @@ def check_requirements() -> bool:
     return True
 
 
+def _session_key(input_json: dict) -> str:
+    """Return the omp ``sessionId``, or a per-process fallback when it is absent.
+
+    omp normally supplies an authoritative ``sessionId``. When it is missing or
+    empty we key off ``"unknown-<pid>"`` rather than a shared ``"unknown"``
+    literal, so two concurrent id-less runs cannot clobber each other's state
+    file. Within a single event's process the pid is stable, so ``resolve_session``
+    and ``ensure_session_initialized`` agree on the key; span correlation across a
+    run's separate detached processes is already impossible without a real
+    ``sessionId``, so no correlation is lost by using the pid here.
+    """
+    return input_json.get("sessionId") or f"unknown-{os.getpid()}"
+
+
 def resolve_session(input_json: dict) -> StateManager:
     """Build a StateManager keyed off the omp ``sessionId`` payload field.
 
-    Missing/empty sessionId falls back to the literal key ``"unknown"`` — omp
-    adapters never use PID-based keys.
+    Missing/empty sessionId falls back to a per-process ``"unknown-<pid>"`` key
+    (see ``_session_key``) — omp adapters never use PID-based keys for real
+    sessions.
     """
-    key = input_json.get("sessionId") or "unknown"
+    key = _session_key(input_json)
 
     state_file = STATE_DIR / f"state_{key}.json"
     lock_path = STATE_DIR / f".lock_{key}"
@@ -65,7 +81,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     if existing is not None:
         return
 
-    session_id = input_json.get("sessionId") or "unknown"
+    session_id = _session_key(input_json)
 
     project_name = env.project_name
     if not project_name:
