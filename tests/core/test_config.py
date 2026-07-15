@@ -8,7 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from core.config import _format_output, _parse_value, delete_value, get_value, load_config, main, save_config, set_value
+from core.config import (
+    _format_output,
+    _parse_value,
+    delete_value,
+    get_value,
+    load_config,
+    main,
+    migrate_yaml_config,
+    parse_yaml_config,
+    save_config,
+    set_value,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -329,3 +340,187 @@ class TestMainEdgeCases:
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# parse_yaml_config
+# ---------------------------------------------------------------------------
+
+
+class TestParseYamlConfig:
+    def test_empty_string(self):
+        assert parse_yaml_config("") == {}
+
+    def test_whitespace_only(self):
+        assert parse_yaml_config("   \n  \n\t\n") == {}
+
+    def test_full_config_roundtrips(self):
+        text = (
+            "harnesses:\n"
+            "  claude-code:\n"
+            "    project_name: claude-code\n"
+            "    target: arize\n"
+            "    endpoint: https://otlp.arize.com\n"
+            "    api_key: sk-abc123\n"
+            "    space_id: space-42\n"
+        )
+        assert parse_yaml_config(text) == {
+            "harnesses": {
+                "claude-code": {
+                    "project_name": "claude-code",
+                    "target": "arize",
+                    "endpoint": "https://otlp.arize.com",
+                    "api_key": "sk-abc123",
+                    "space_id": "space-42",
+                }
+            }
+        }
+
+    def test_top_level_scalar_string(self):
+        assert parse_yaml_config("user_id: someone") == {"user_id": "someone"}
+
+    def test_logging_block_bools(self):
+        text = "logging:\n  prompts: true\n  tool_details: false\n"
+        result = parse_yaml_config(text)
+        assert result["logging"]["prompts"] is True
+        assert result["logging"]["tool_details"] is False
+
+    def test_attributes_int_and_bool(self):
+        text = "attributes:\n  session: 42\n  enabled: true\n"
+        result = parse_yaml_config(text)
+        assert result["attributes"]["session"] == 42
+        assert isinstance(result["attributes"]["session"], int)
+        assert result["attributes"]["enabled"] is True
+
+    def test_double_quoted_value_with_colon(self):
+        result = parse_yaml_config('note: "a: b"')
+        assert result["note"] == "a: b"
+
+    def test_single_quoted_value_with_doubled_quote(self):
+        result = parse_yaml_config("name: 'it''s fine'")
+        assert result["name"] == "it's fine"
+
+    def test_comments_and_blank_lines_ignored(self):
+        text = (
+            "# leading comment\n"
+            "\n"
+            "user_id: someone\n"
+            "   # indented comment\n"
+            "\n"
+            "logging:\n"
+            "  prompts: true\n"
+        )
+        assert parse_yaml_config(text) == {
+            "user_id": "someone",
+            "logging": {"prompts": True},
+        }
+
+    def test_url_value_preserved_verbatim(self):
+        result = parse_yaml_config("endpoint: https://otlp.arize.com:443/v1")
+        assert result["endpoint"] == "https://otlp.arize.com:443/v1"
+
+
+# ---------------------------------------------------------------------------
+# migrate_yaml_config
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateYamlConfig:
+    def test_happy_path(self, tmp_path, monkeypatch):
+        yaml_path = tmp_path / "config.yaml"
+        json_path = tmp_path / "config.json"
+        yaml_path.write_text(
+            "harnesses:\n"
+            "  claude-code:\n"
+            "    project_name: claude-code\n"
+            "    target: arize\n"
+            "    endpoint: https://otlp.arize.com\n"
+            "    api_key: sk-abc123\n"
+            "user_id: someone\n"
+        )
+        monkeypatch.setattr("core.config.CONFIG_FILE", json_path)
+        monkeypatch.setattr("core.config.CONFIG_FILE_YAML", yaml_path)
+
+        assert migrate_yaml_config() is True
+
+        assert json.loads(json_path.read_text()) == {
+            "harnesses": {
+                "claude-code": {
+                    "project_name": "claude-code",
+                    "target": "arize",
+                    "endpoint": "https://otlp.arize.com",
+                    "api_key": "sk-abc123",
+                }
+            },
+            "user_id": "someone",
+        }
+        assert (tmp_path / "config.yaml.bak").exists()
+        assert not yaml_path.exists()
+        mode = stat.S_IMODE(os.stat(json_path).st_mode)
+        assert mode == 0o600
+
+    def test_noop_when_json_exists(self, tmp_path, monkeypatch):
+        yaml_path = tmp_path / "config.yaml"
+        json_path = tmp_path / "config.json"
+        yaml_path.write_text("user_id: from_yaml\n")
+        json_path.write_text(json.dumps({"user_id": "from_json"}))
+        monkeypatch.setattr("core.config.CONFIG_FILE", json_path)
+        monkeypatch.setattr("core.config.CONFIG_FILE_YAML", yaml_path)
+
+        assert migrate_yaml_config() is False
+        assert json.loads(json_path.read_text()) == {"user_id": "from_json"}
+        assert yaml_path.exists()
+        assert not (tmp_path / "config.yaml.bak").exists()
+
+    def test_noop_when_no_yaml(self, tmp_path, monkeypatch):
+        yaml_path = tmp_path / "config.yaml"
+        json_path = tmp_path / "config.json"
+        monkeypatch.setattr("core.config.CONFIG_FILE", json_path)
+        monkeypatch.setattr("core.config.CONFIG_FILE_YAML", yaml_path)
+
+        assert migrate_yaml_config() is False
+        assert not json_path.exists()
+
+    def test_fail_soft_on_parse_error(self, tmp_path, monkeypatch):
+        yaml_path = tmp_path / "config.yaml"
+        json_path = tmp_path / "config.json"
+        yaml_path.write_text("user_id: someone\n")
+        monkeypatch.setattr("core.config.CONFIG_FILE", json_path)
+        monkeypatch.setattr("core.config.CONFIG_FILE_YAML", yaml_path)
+
+        def _boom(_text):
+            raise ValueError("bad parse")
+
+        monkeypatch.setattr("core.config.parse_yaml_config", _boom)
+
+        assert migrate_yaml_config() is False
+        assert yaml_path.exists()
+        assert not json_path.exists()
+
+
+class TestMainMigrate:
+    def test_migrate_creates_json(self, tmp_path, monkeypatch, capsys):
+        yaml_path = tmp_path / "config.yaml"
+        json_path = tmp_path / "config.json"
+        yaml_path.write_text("user_id: someone\n")
+        monkeypatch.setattr("core.config.CONFIG_FILE", json_path)
+        monkeypatch.setattr("core.config.CONFIG_FILE_YAML", yaml_path)
+        monkeypatch.setattr("sys.argv", ["config.py", "migrate"])
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        assert json_path.exists()
+        assert json.loads(json_path.read_text()) == {"user_id": "someone"}
+
+    def test_migrate_noop_exits_zero(self, tmp_path, monkeypatch):
+        json_path = tmp_path / "config.json"
+        yaml_path = tmp_path / "config.yaml"
+        monkeypatch.setattr("core.config.CONFIG_FILE", json_path)
+        monkeypatch.setattr("core.config.CONFIG_FILE_YAML", yaml_path)
+        monkeypatch.setattr("sys.argv", ["config.py", "migrate"])
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        assert not json_path.exists()
