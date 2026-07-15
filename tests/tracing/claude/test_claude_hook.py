@@ -733,6 +733,110 @@ class TestScanTranscriptForUsage:
         assert usage.cache_read == 20
         assert usage.cache_write == 30
 
+    def test_duplicate_request_records_counted_once(self, tmp_path):
+        """A streamed response writes one record per content block, each
+        repeating the same usage snapshot — one API call must be billed once,
+        while the text of every content block is still concatenated."""
+        tf = tmp_path / "dup.jsonl"
+        usage_snapshot = {
+            "input_tokens": 10,
+            "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 30,
+            "output_tokens": 40,
+        }
+        lines = [
+            json.dumps(
+                {
+                    "requestId": "req_1",
+                    "message": {
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": text,
+                        "model": "m",
+                        "usage": usage_snapshot,
+                    },
+                }
+            )
+            for text in ("first block", "second block", "third block")
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert output == "first block\nsecond block\nthird block"
+        assert usage.prompt == 60  # 10 + 20 + 30, once — not three times
+        assert usage.completion == 40
+        assert usage.cache_read == 20
+        assert usage.cache_write == 30
+
+    def test_partial_then_final_snapshot_last_record_wins(self, tmp_path):
+        """Some harness versions write partial usage snapshots before the
+        final one; the last record for a request is authoritative."""
+        tf = tmp_path / "partial.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "requestId": "req_1",
+                    "message": {
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": "x",
+                        "model": "m",
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "requestId": "req_1",
+                    "message": {
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": "y",
+                        "model": "m",
+                        "usage": {"input_tokens": 10, "output_tokens": 31979},
+                    },
+                }
+            ),
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert usage.completion == 31979
+        assert usage.prompt == 10
+
+    def test_distinct_requests_are_summed(self, tmp_path):
+        """Different API calls (distinct requestIds) still accumulate."""
+        tf = tmp_path / "distinct.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "requestId": f"req_{n}",
+                    "message": {
+                        "id": f"msg_{n}",
+                        "role": "assistant",
+                        "content": "x",
+                        "model": "m",
+                        "usage": {"input_tokens": 10, "output_tokens": n},
+                    },
+                }
+            )
+            for n in (1, 2)
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert usage.completion == 3
+        assert usage.prompt == 20
+
+    def test_records_without_identity_counted_individually(self, tmp_path):
+        """Records with neither requestId nor message.id can't be correlated,
+        so each one counts (matches the pre-dedup behavior for such records)."""
+        tf = tmp_path / "noid.jsonl"
+        lines = [
+            json.dumps({"message": {"role": "assistant", "content": "a", "model": "m", "usage": {"output_tokens": 1}}}),
+            json.dumps({"message": {"role": "assistant", "content": "b", "model": "m", "usage": {"output_tokens": 2}}}),
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert usage.completion == 3
+
 
 # ---------------------------------------------------------------------------
 # subagent_stop tests

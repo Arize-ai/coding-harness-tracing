@@ -401,6 +401,15 @@ def _scan_transcript_for_usage(
     usage_totals = _TokenUsage()
     model = ""
 
+    # A streamed API response is written to the transcript as one assistant
+    # record per content block, and every record of that response repeats the
+    # same usage snapshot (same requestId / message.id). Summing each record
+    # would bill one API call several times (2-3x on real transcripts), so
+    # usage is collected per request and the last record wins — on older
+    # harness versions the earlier snapshots are partial and the final one is
+    # authoritative. Records with no identity at all are counted individually.
+    last_usage: "dict[object, dict]" = {}
+
     with open(transcript) as f:
         for i, line in enumerate(f):
             if i < start_line:
@@ -430,20 +439,25 @@ def _scan_transcript_for_usage(
 
             model = msg.get("model", "") or model
 
-            # Anthropic reports input_tokens (uncached), cache_read_input_tokens,
-            # and cache_creation_input_tokens as disjoint buckets. The prompt
-            # total is their sum (the OpenInference total), while the two cache
-            # buckets are tracked separately and surfaced as prompt_details so
-            # downstream cost pricing can apply the cheaper cache-read /
-            # cache-write rates instead of the full input rate.
-            usage = msg.get("usage", {})
-            uncached = _usage_int(usage, "input_tokens")
-            cache_read = _usage_int(usage, "cache_read_input_tokens")
-            cache_write = _usage_int(usage, "cache_creation_input_tokens")
-            usage_totals.prompt += uncached + cache_read + cache_write
-            usage_totals.cache_read += cache_read
-            usage_totals.cache_write += cache_write
-            usage_totals.completion += _usage_int(usage, "output_tokens")
+            usage = msg.get("usage")
+            if isinstance(usage, dict) and usage:
+                key = entry.get("requestId") or msg.get("id") or object()
+                last_usage[key] = usage
+
+    for usage in last_usage.values():
+        # Anthropic reports input_tokens (uncached), cache_read_input_tokens,
+        # and cache_creation_input_tokens as disjoint buckets. The prompt
+        # total is their sum (the OpenInference total), while the two cache
+        # buckets are tracked separately and surfaced as prompt_details so
+        # downstream cost pricing can apply the cheaper cache-read /
+        # cache-write rates instead of the full input rate.
+        uncached = _usage_int(usage, "input_tokens")
+        cache_read = _usage_int(usage, "cache_read_input_tokens")
+        cache_write = _usage_int(usage, "cache_creation_input_tokens")
+        usage_totals.prompt += uncached + cache_read + cache_write
+        usage_totals.cache_read += cache_read
+        usage_totals.cache_write += cache_write
+        usage_totals.completion += _usage_int(usage, "output_tokens")
 
     return output, usage_totals, model
 
