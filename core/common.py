@@ -38,7 +38,14 @@ class _Env:
 
     @property
     def project_name(self) -> str:
-        return os.environ.get("ARIZE_PROJECT_NAME", "")
+        # ARIZE_PROJECT_NAME takes precedence for backward compatibility;
+        # PHOENIX_PROJECT_NAME / PHOENIX_PROJECT are honored as Phoenix-native aliases.
+        return (
+            os.environ.get("ARIZE_PROJECT_NAME")
+            or os.environ.get("PHOENIX_PROJECT_NAME")
+            or os.environ.get("PHOENIX_PROJECT")
+            or ""
+        )
 
     def get_user_id(self, service_name: str = "") -> str:
         """Resolve user id, checking highest precedence first and returning on
@@ -494,7 +501,7 @@ def resolve_backend(span_dict: dict) -> dict:
             "project_name": project_name,
         }
 
-    error(f"Unknown target '{target}' for harness '{service_name}'. " f"Expected 'arize' or 'phoenix'.")
+    error(f"Unknown target '{target}' for harness '{service_name}'. Expected 'arize' or 'phoenix'.")
     return {"target": "none", "project_name": project_name}
 
 

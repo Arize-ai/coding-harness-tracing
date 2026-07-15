@@ -1332,7 +1332,6 @@ class TestSendSpan:
 
 
 class TestGetTarget:
-
     def test_phoenix_when_endpoint_set(self, monkeypatch):
         monkeypatch.setenv("PHOENIX_ENDPOINT", "http://phoenix:6006")
         assert get_target() == "phoenix"
@@ -1354,7 +1353,6 @@ class TestGetTarget:
 
 
 class TestDebugDump:
-
     def test_writes_json_to_debug_dir(self, tmp_path, monkeypatch):
         """debug_dump writes JSON file to STATE_BASE_DIR/debug/."""
         monkeypatch.setenv("ARIZE_TRACE_DEBUG", "true")
@@ -1518,6 +1516,27 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["project_name"] == "from-env"
+
+    def test_phoenix_project_env_sets_project_name(self, monkeypatch):
+        """PHOENIX_PROJECT is honored as a Phoenix-native alias for the project name."""
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setenv("PHOENIX_PROJECT", "from-phoenix-env")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "phoenix"
+        assert result["project_name"] == "from-phoenix-env"
+
+    def test_arize_project_name_precedes_phoenix_project(self, monkeypatch):
+        """ARIZE_PROJECT_NAME takes precedence over PHOENIX_PROJECT (backward compatible)."""
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "from-arize-env")
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setenv("PHOENIX_PROJECT", "from-phoenix-env")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["project_name"] == "from-arize-env"
 
     # ── env-overrides-config precedence ────────────────────────────────────
 
