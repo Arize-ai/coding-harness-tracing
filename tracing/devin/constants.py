@@ -19,15 +19,15 @@ HARNESS_BIN = "devin"  # binary name for shutil.which() fallback
 # Global hook config file (hooks nest under a top-level "hooks" key here).
 CONFIG_FILE = Path.home() / ".config" / "devin" / "config.json"
 
-# Local data dir where Devin persists sessions + transcripts.
+# Local data dir where Devin persists the live sessions DB.
 DATA_DIR = Path.home() / ".local" / "share" / "devin" / "cli"
-TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
 SESSIONS_DB = DATA_DIR / "sessions.db"
 
 # Single hook binary; the handler dispatches by hook_event_name.
 HOOK_BIN_NAME = "arize-hook-devin"
 
-# We only register SessionEnd — the transcript is complete at session end.
-HOOK_EVENTS = ("SessionEnd",)
+# Stop fires per agent response (per-turn emission); SessionEnd is a final
+# flush for an interrupted last turn. Both dispatch to the same hook binary.
+HOOK_EVENTS = ("Stop", "SessionEnd")
 
 DEFAULT_LOG_FILE = Path.home() / ".arize" / "harness" / "logs" / "devin.log"

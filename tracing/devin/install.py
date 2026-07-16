@@ -30,11 +30,19 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
-from tracing.devin.constants import CONFIG_FILE, DISPLAY_NAME, HARNESS_BIN, HARNESS_HOME, HARNESS_NAME, HOOK_BIN_NAME
+from tracing.devin.constants import (
+    CONFIG_FILE,
+    DISPLAY_NAME,
+    HARNESS_BIN,
+    HARNESS_HOME,
+    HARNESS_NAME,
+    HOOK_BIN_NAME,
+    HOOK_EVENTS,
+)
 
-# The single Devin hook event we register. The transcript is only complete at
-# session end, so that is the only point we need to fire.
-HOOK_EVENT = "SessionEnd"
+# Devin hook events we register. Stop fires per agent response (per-turn
+# emission); SessionEnd is a final flush for an interrupted last turn.
+HOOK_EVENT_NAMES = HOOK_EVENTS
 
 # Devin command-hook timeout (seconds).
 HOOK_TIMEOUT = 30
@@ -127,7 +135,7 @@ def _hook_entry(hook_cmd: str) -> dict:
 
 
 def _register_hooks() -> None:
-    """Ensure ``hooks.SessionEnd`` contains our command exactly once.
+    """Ensure each event in ``HOOK_EVENT_NAMES`` contains our command exactly once.
 
     Idempotent: re-installing does not duplicate the entry. All other config
     keys and hook events are preserved untouched. Honors dry-run.
@@ -139,14 +147,14 @@ def _register_hooks() -> None:
     if not isinstance(hooks, dict):
         hooks = {}
         config["hooks"] = hooks
-    event_list = hooks.setdefault(HOOK_EVENT, [])
-    if not isinstance(event_list, list):
-        event_list = []
-        hooks[HOOK_EVENT] = event_list
 
-    already = any(_matcher_has_command(matcher, hook_cmd) for matcher in event_list)
-    if not already:
-        event_list.append(_hook_entry(hook_cmd))
+    for event in HOOK_EVENT_NAMES:
+        event_list = hooks.setdefault(event, [])
+        if not isinstance(event_list, list):
+            event_list = []
+            hooks[event] = event_list
+        if not any(_matcher_has_command(matcher, hook_cmd) for matcher in event_list):
+            event_list.append(_hook_entry(hook_cmd))
 
     if dry_run():
         info(f"would write Devin hook config to {CONFIG_FILE}")
@@ -155,9 +163,9 @@ def _register_hooks() -> None:
 
 
 def _unregister_hooks() -> None:
-    """Remove only our command from ``hooks.SessionEnd``.
+    """Remove only our command from each event in ``HOOK_EVENT_NAMES``.
 
-    Drops the event list if it becomes empty, and drops the ``hooks`` key if it
+    Drops an event list if it becomes empty, and drops the ``hooks`` key if it
     becomes empty. Everything else in the config is preserved.
     """
     if not CONFIG_FILE.exists():
@@ -170,22 +178,25 @@ def _unregister_hooks() -> None:
         return
 
     hooks = config.get("hooks")
-    if not isinstance(hooks, dict) or HOOK_EVENT not in hooks:
+    if not isinstance(hooks, dict):
         return
 
     hook_cmd = str(venv_bin(HOOK_BIN_NAME))
-    event_list = hooks.get(HOOK_EVENT, [])
-    if not isinstance(event_list, list):
+    changed = False
+    for event in HOOK_EVENT_NAMES:
+        event_list = hooks.get(event)
+        if not isinstance(event_list, list):
+            continue
+        filtered = [matcher for matcher in event_list if not _matcher_has_command(matcher, hook_cmd)]
+        if filtered == event_list:
+            continue  # our command wasn't present in this event
+        changed = True
+        if filtered:
+            hooks[event] = filtered
+        else:
+            del hooks[event]
+    if not changed:
         return
-
-    filtered = [matcher for matcher in event_list if not _matcher_has_command(matcher, hook_cmd)]
-    if filtered == event_list:
-        return  # our command wasn't present; nothing to do
-
-    if filtered:
-        hooks[HOOK_EVENT] = filtered
-    else:
-        del hooks[HOOK_EVENT]
     if not hooks:
         del config["hooks"]
 

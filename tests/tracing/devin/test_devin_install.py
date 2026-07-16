@@ -32,13 +32,41 @@ def config_file(tmp_path, monkeypatch):
     return path
 
 
-def _session_end_commands(config: dict) -> list:
-    """Collect all hook commands registered under hooks.SessionEnd."""
+def _event_commands(config: dict, event: str) -> list:
+    """Collect all hook commands registered under hooks.<event>."""
     cmds = []
-    for matcher in config.get("hooks", {}).get("SessionEnd", []):
+    for matcher in config.get("hooks", {}).get(event, []):
         for h in matcher.get("hooks", []):
             cmds.append(h.get("command"))
     return cmds
+
+
+def _session_end_commands(config: dict) -> list:
+    """Collect all hook commands registered under hooks.SessionEnd."""
+    return _event_commands(config, "SessionEnd")
+
+
+class TestRegistersAllEvents:
+    def test_registers_stop_and_session_end(self, config_file):
+        from tracing.devin.install import HOOK_EVENT_NAMES, _register_hooks
+
+        _register_hooks()
+        data = json.loads(config_file.read_text())
+        assert set(HOOK_EVENT_NAMES) == {"Stop", "SessionEnd"}
+        for event in HOOK_EVENT_NAMES:
+            assert _event_commands(data, event) == [HOOK_CMD]
+
+    def test_unregister_removes_all_events(self, config_file):
+        from tracing.devin.install import _register_hooks, _unregister_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps({"version": 1}))
+        _register_hooks()
+        _unregister_hooks()
+
+        data = json.loads(config_file.read_text())
+        assert "hooks" not in data
+        assert data["version"] == 1
 
 
 class TestRegisterHooks:

@@ -1,14 +1,16 @@
-"""Devin CLI hook handlers — the ``SessionEnd`` entry point.
+"""Devin CLI hook handlers — per-turn span emission.
 
-Span model (transcript-driven, deferred to session end):
-- Devin hook payloads are thin, so no live per-turn spans are emitted. When
-  ``SessionEnd`` fires we resolve the session's ATIF-v1.7 transcript, parse it,
-  and emit the full OpenInference span tree in one shot:
-    * one root AGENT span for the whole session (with session-level token totals)
-    * one LLM span per ``source == "agent"`` step (with per-step token counts)
-    * one TOOL span per tool call issued by a step
-  Tokens only exist at session end and OTLP spans are immutable once exported,
-  so deferred one-shot emission is correct.
+Span model (live, incremental, one trace per interaction):
+- Devin fires a thin ``Stop`` hook at the end of each agent response. When it
+  fires we resolve the session from ``DEVIN_PROJECT_DIR`` -> ``sessions.db``,
+  read the generations that have appeared since we last emitted (deduped by
+  ``request_id``), and emit one self-contained OpenInference trace for that
+  interaction:
+    * one root AGENT span (input = user prompt, output = final assistant text)
+    * one LLM span per generation (content/reasoning, per-step tokens, model)
+    * one TOOL span per tool call issued by a generation
+  ``SessionEnd`` runs the same flush so a final/interrupted turn is not lost.
+  Interactions are grouped in Arize by ``session.id``.
 
 Like every hook here, ``main()`` never raises: it catches all exceptions and
 returns 0 so a bug can never crash Devin.
@@ -22,21 +24,29 @@ import sys
 from typing import Any
 
 from core.common import build_span, env, generate_span_id, generate_trace_id, log, redact_content, send_span
-from tracing.devin.constants import SCOPE_NAME, SERVICE_NAME
-from tracing.devin.hooks.adapter import already_emitted, check_requirements, mark_emitted, resolve_transcript_path
-from tracing.devin.transcript import ParsedSession, parse_transcript
+from tracing.devin.constants import SCOPE_NAME, SERVICE_NAME, SESSIONS_DB
+from tracing.devin.hooks.adapter import already_emitted, check_requirements, mark_emitted
+from tracing.devin.session_db import (
+    LlmStep,
+    connect_readonly,
+    latest_user_prompt,
+    read_session_meta,
+    read_steps,
+    resolve_session_id,
+)
 
-# ---------------------------------------------------------------------------
-# Token attributes
-# ---------------------------------------------------------------------------
+# Events that trigger a flush of newly-appeared generations. Stop is the
+# per-turn trigger; SessionEnd is a final safety-net flush.
+_TRIGGER_EVENTS = ("Stop", "SessionEnd")
 
 
-def _token_attrs(prompt: int, completion: int, cached: int = 0) -> dict:
+def _token_attrs(prompt: int, completion: int, cache_read: int = 0, cache_write: int = 0) -> dict:
     """Build OpenInference token-count attributes, omitting any that are 0.
 
-    Follows the convention: ``prompt`` is the inclusive prompt total,
-    ``total = prompt + completion``, and cached tokens are a subset of the
-    prompt reported on ``prompt_details.cache_read`` — never a flat key.
+    ``prompt`` is the inclusive prompt total, ``total = prompt + completion``,
+    and cached tokens are subsets of the prompt reported on
+    ``prompt_details.cache_read`` / ``prompt_details.cache_write`` — never flat
+    keys.
     """
     attrs: dict[str, Any] = {}
     if prompt:
@@ -46,14 +56,11 @@ def _token_attrs(prompt: int, completion: int, cached: int = 0) -> dict:
     total = prompt + completion
     if total:
         attrs["llm.token_count.total"] = total
-    if cached:
-        attrs["llm.token_count.prompt_details.cache_read"] = cached
+    if cache_read:
+        attrs["llm.token_count.prompt_details.cache_read"] = cache_read
+    if cache_write:
+        attrs["llm.token_count.prompt_details.cache_write"] = cache_write
     return attrs
-
-
-# ---------------------------------------------------------------------------
-# Span emission
-# ---------------------------------------------------------------------------
 
 
 def _resolve_project_name() -> str:
@@ -65,74 +72,91 @@ def _resolve_project_name() -> str:
     return base or "devin"
 
 
-def emit_session_spans(parsed: ParsedSession) -> None:
-    """Emit the full span tree for one parsed session: root + steps + tools."""
+def _step_output(step: LlmStep) -> str:
+    """Output text for an LLM span: visible content, or reasoning when the
+    generation produced only thinking + tool calls (so the span still renders —
+    ``llm.reasoning`` alone does not display in Arize)."""
+    return step.content or step.thinking
+
+
+def emit_interaction(session_id: str, steps: list[LlmStep], user_prompt: str, meta: dict) -> None:
+    """Emit one trace (root AGENT + LLM/TOOL children) for a batch of new steps."""
+    if not steps:
+        return
+
     trace_id = generate_trace_id()
     root_span_id = generate_span_id()
-
     project_name = _resolve_project_name()
     user_id = env.get_user_id(SERVICE_NAME)
 
-    # --- Root AGENT span -----------------------------------------------------
-    last_output = parsed.steps[-1].assistant_text if parsed.steps else ""
+    start_ms = steps[0].start_ms
+    end_ms = steps[-1].end_ms or start_ms
+    final_output = _step_output(steps[-1])
+    model_name = meta.get("model") or next((s.model_name for s in reversed(steps) if s.model_name), "")
+
     root_attrs: dict[str, Any] = {
-        "session.id": parsed.session_id,
+        "session.id": session_id,
         "openinference.span.kind": "AGENT",
-        "input.value": redact_content(env.log_prompts, "\n\n".join(parsed.user_prompts)),
-        "output.value": redact_content(env.log_prompts, last_output),
+        "input.value": redact_content(env.log_prompts, user_prompt),
+        "output.value": redact_content(env.log_prompts, final_output),
     }
-    if parsed.model_name:
-        root_attrs["llm.model_name"] = parsed.model_name
+    if model_name:
+        root_attrs["llm.model_name"] = model_name
     root_attrs.update(
         _token_attrs(
-            parsed.total_prompt_tokens,
-            parsed.total_completion_tokens,
-            parsed.total_cached_tokens,
+            sum(s.prompt_tokens for s in steps),
+            sum(s.completion_tokens for s in steps),
+            sum(s.cache_read_tokens for s in steps),
+            sum(s.cache_write_tokens for s in steps),
         )
     )
     if project_name:
         root_attrs["project.name"] = project_name
     if user_id:
         root_attrs["user.id"] = user_id
-    if parsed.backend:
-        root_attrs["devin.backend"] = parsed.backend
-    if parsed.agent_version:
-        root_attrs["devin.agent_version"] = parsed.agent_version
+    if meta.get("backend"):
+        root_attrs["devin.backend"] = meta["backend"]
 
     root_span = build_span(
-        f"Devin Session {parsed.session_id}",
+        f"Devin Interaction {session_id}",
         "AGENT",
         root_span_id,
         trace_id,
         "",  # root — no parent
-        parsed.start_ms,
-        parsed.end_ms,
+        start_ms,
+        end_ms,
         root_attrs,
         SERVICE_NAME,
         SCOPE_NAME,
     )
     send_span(root_span)
 
-    # --- Per-step LLM spans (+ their TOOL spans) -----------------------------
-    for step in parsed.steps:
+    for step in steps:
         step_span_id = generate_span_id()
-        redacted_text = redact_content(env.log_prompts, step.assistant_text)
-        output_messages = [{"message.role": "assistant", "message.content": redacted_text}]
+        output_text = redact_content(env.log_prompts, _step_output(step))
+        output_messages = [{"message.role": "assistant", "message.content": output_text}]
 
         step_attrs: dict[str, Any] = {
-            "session.id": parsed.session_id,
+            "session.id": session_id,
             "openinference.span.kind": "LLM",
-            "output.value": redacted_text,
+            "output.value": output_text,
             "llm.output_messages": json.dumps(output_messages),
         }
         if step.model_name:
             step_attrs["llm.model_name"] = step.model_name
-        if step.reasoning:
-            step_attrs["llm.reasoning"] = redact_content(env.log_prompts, step.reasoning)
-        step_attrs.update(_token_attrs(step.prompt_tokens, step.completion_tokens))
+        if step.thinking:
+            step_attrs["llm.reasoning"] = redact_content(env.log_prompts, step.thinking)
+        step_attrs.update(
+            _token_attrs(
+                step.prompt_tokens,
+                step.completion_tokens,
+                step.cache_read_tokens,
+                step.cache_write_tokens,
+            )
+        )
 
         step_span = build_span(
-            f"LLM step {step.step_id}",
+            f"LLM {step.request_id}",
             "LLM",
             step_span_id,
             trace_id,
@@ -147,7 +171,7 @@ def emit_session_spans(parsed: ParsedSession) -> None:
 
         for tc in step.tool_calls:
             tool_attrs: dict[str, Any] = {
-                "session.id": parsed.session_id,
+                "session.id": session_id,
                 "openinference.span.kind": "TOOL",
                 "tool.name": tc.name,
                 "input.value": redact_content(env.log_tool_content, json.dumps(tc.arguments)),
@@ -168,9 +192,42 @@ def emit_session_spans(parsed: ParsedSession) -> None:
             send_span(tool_span)
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+def flush_session(project_dir: str) -> int:
+    """Resolve the session for ``project_dir`` and emit any not-yet-emitted
+    generations. Returns the number of interactions emitted (0 if none / on any
+    soft failure)."""
+    con = None
+    try:
+        con = connect_readonly(SESSIONS_DB)
+    except Exception as exc:  # noqa: BLE001 — DB open is best-effort
+        log(f"flush_session: could not open {SESSIONS_DB}: {exc!r}")
+        return 0
+    if con is None:
+        return 0
+    try:
+        session_id = resolve_session_id(con, project_dir)
+        if not session_id:
+            log(f"flush_session: no session for project_dir {project_dir!r}")
+            return 0
+
+        all_steps = read_steps(con, session_id)
+        new_steps = [s for s in all_steps if not already_emitted(session_id, s.request_id)]
+        if not new_steps:
+            log(f"flush_session: no new generations for session {session_id}")
+            return 0
+
+        user_prompt = latest_user_prompt(con, session_id)
+        meta = read_session_meta(con, session_id)
+        emit_interaction(session_id, new_steps, user_prompt, meta)
+        for step in new_steps:
+            mark_emitted(session_id, step.request_id)
+        log(f"flush_session: emitted {len(new_steps)} generation(s) for session {session_id}")
+        return 1
+    finally:
+        try:
+            con.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def main() -> int:
@@ -189,35 +246,12 @@ def main() -> int:
             return 0
 
         event = input_json.get("hook_event_name") or ""
-        if event != "SessionEnd":
-            log(f"Ignoring hook_event_name: {event!r} (only SessionEnd is registered)")
+        if event not in _TRIGGER_EVENTS:
+            log(f"Ignoring hook_event_name: {event!r} (triggers: {_TRIGGER_EVENTS})")
             return 0
 
         project_dir = os.environ.get("DEVIN_PROJECT_DIR") or os.getcwd()
-        path = resolve_transcript_path(project_dir)
-        if path is None:
-            log("SessionEnd: no transcript found")
-            return 0
-
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            log(f"SessionEnd: could not read transcript {path}: {exc!r}")
-            return 0
-
-        parsed = parse_transcript(data)
-
-        if parsed.session_id and already_emitted(parsed.session_id):
-            log(f"SessionEnd: already emitted session {parsed.session_id}")
-            return 0
-
-        emit_session_spans(parsed)
-
-        if parsed.session_id:
-            mark_emitted(parsed.session_id)
-
-        log(f"SessionEnd: emitted spans for session {parsed.session_id!r}")
+        flush_session(project_dir)
     except Exception as exc:  # noqa: BLE001 — never block Devin on a bug
         log(f"hook main() crashed: {exc!r}")
     return 0
