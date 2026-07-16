@@ -74,8 +74,8 @@ def resolve_session_id(project_dir: str) -> str | None:
         if con is not None:
             try:
                 con.close()
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as exc:
+                log(f"resolve_session_id: suppressing close failure: {exc!r}")
 
     if row and row[0]:
         return str(row[0])

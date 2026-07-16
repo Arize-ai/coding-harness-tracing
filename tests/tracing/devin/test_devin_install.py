@@ -265,7 +265,7 @@ class TestUnregisterHooks:
 class TestUninstallEntryPoint:
     def test_uninstall_cleans_config_and_calls_harness_cleanup(self, config_file, monkeypatch):
         """Public uninstall(): strips our hook and runs the harness-entry cleanup chain."""
-        import tracing.devin.install as install_mod
+        from tracing.devin import install as install_mod
         from tracing.devin.install import _register_hooks, uninstall
 
         calls = {}
