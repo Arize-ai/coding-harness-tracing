@@ -1,0 +1,25 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "test-session",
+  "agent": {
+    "name": "devin", "version": "3000.1.27", "model_name": "SWE-1.6 Slow",
+    "extra": {"backend": "Windsurf", "permission_mode": "Normal"}
+  },
+  "steps": [
+    {"step_id": 1, "timestamp": "2026-07-16T18:58:47.538048+00:00", "source": "system", "message": "You are Devin..."},
+    {"step_id": 7, "timestamp": "2026-07-16T19:00:46.267526+00:00", "source": "user", "message": "Can you get me the weather in Seattle today"},
+    {
+      "step_id": 9, "timestamp": "2026-07-16T19:00:47.614156+00:00", "source": "agent",
+      "message": "I'll search for the current weather in Seattle for you.",
+      "model_name": "SWE-1.6 Slow",
+      "metrics": {"prompt_tokens": 15093, "completion_tokens": 101},
+      "reasoning_content": "The user is asking for the weather...",
+      "tool_calls": [{"tool_call_id": "call_f067", "function_name": "web_search", "arguments": {"query": "Seattle weather today"}}],
+      "observation": {"results": [{"source_call_id": "call_f067", "content": "# Web Search Results..."}]}
+    },
+    {"step_id": 10, "timestamp": "2026-07-16T19:00:49.219635+00:00", "source": "agent",
+     "message": "Here's the current weather...", "model_name": "SWE-1.6 Slow",
+     "metrics": {"prompt_tokens": 16527, "completion_tokens": 328}, "reasoning_content": "..."}
+  ],
+  "final_metrics": {"total_prompt_tokens": 31620, "total_completion_tokens": 429, "total_cached_tokens": 0, "total_steps": 10}
+}
