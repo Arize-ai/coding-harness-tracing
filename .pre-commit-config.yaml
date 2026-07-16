@@ -44,6 +44,9 @@ repos:
         name: mypy (tracing/cursor)
         files: ^tracing/cursor/
       - id: mypy
+        name: mypy (tracing/devin)
+        files: ^tracing/devin/
+      - id: mypy
         name: mypy (tracing/gemini)
         files: ^tracing/gemini/
       - id: mypy
