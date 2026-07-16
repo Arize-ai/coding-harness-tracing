@@ -128,6 +128,52 @@ class TestRegisterHooks:
         assert data["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "/usr/bin/other"
         assert _session_end_commands(data) == [HOOK_CMD]
 
+    def test_appends_alongside_foreign_command_in_same_event(self, config_file):
+        """A pre-existing foreign SessionEnd command is preserved; ours is appended."""
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionEnd": [{"hooks": [{"type": "command", "command": "/usr/bin/other"}]}],
+                    }
+                }
+            )
+        )
+
+        _register_hooks()
+
+        data = json.loads(config_file.read_text())
+        cmds = _session_end_commands(data)
+        assert "/usr/bin/other" in cmds
+        assert HOOK_CMD in cmds
+        assert cmds.count(HOOK_CMD) == 1
+
+    def test_idempotent_with_foreign_command_present(self, config_file):
+        """Re-running with a foreign command present still adds ours exactly once."""
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionEnd": [{"hooks": [{"type": "command", "command": "/usr/bin/other"}]}],
+                    }
+                }
+            )
+        )
+
+        _register_hooks()
+        _register_hooks()
+
+        data = json.loads(config_file.read_text())
+        cmds = _session_end_commands(data)
+        assert cmds.count(HOOK_CMD) == 1
+        assert cmds.count("/usr/bin/other") == 1
+
 
 class TestUnregisterHooks:
     def test_removes_command_and_drops_empty_hooks(self, config_file):
@@ -214,3 +260,25 @@ class TestUnregisterHooks:
         _unregister_hooks()
 
         assert config_file.read_text() == before
+
+
+class TestUninstallEntryPoint:
+    def test_uninstall_cleans_config_and_calls_harness_cleanup(self, config_file, monkeypatch):
+        """Public uninstall(): strips our hook and runs the harness-entry cleanup chain."""
+        import tracing.devin.install as install_mod
+        from tracing.devin.install import _register_hooks, uninstall
+
+        calls = {}
+        monkeypatch.setattr(install_mod, "remove_harness_entry", lambda name: calls.__setitem__("remove", name))
+        monkeypatch.setattr(install_mod, "unlink_skills", lambda name: calls.__setitem__("unlink", name))
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps({"version": 1}))
+        _register_hooks()
+
+        uninstall()
+
+        data = json.loads(config_file.read_text())
+        assert "hooks" not in data
+        assert data["version"] == 1
+        assert calls == {"remove": "devin", "unlink": "devin"}
