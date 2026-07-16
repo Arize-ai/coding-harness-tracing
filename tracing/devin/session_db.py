@@ -239,6 +239,8 @@ def latest_user_prompt(con: sqlite3.Connection, session_id: str) -> str:
         if row and row[0]:
             return _as_str(row[0])
     except sqlite3.Error:
+        # Best-effort read: ignore prompt_history DB errors and fall back
+        # to scanning message_nodes for the latest user prompt.
         pass
     try:
         rows = con.execute(
