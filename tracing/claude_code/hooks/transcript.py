@@ -36,6 +36,7 @@ def parse_claude_transcript(
     graph = EventGraph([root_event])
     parser_diagnostics: list[GraphDiagnostic] = []
     tools_by_call_id: dict[str, ToolEvent] = {}
+    models_by_message_id: dict[str, ModelCallEvent] = {}
     agent_id = root_event.agent_id if isinstance(root_event, AgentEvent) else None
     sequence = root_event.sequence + 1
 
@@ -99,24 +100,51 @@ def parse_claude_transcript(
                 )
 
             content = message.get("content")
-            model_event = ModelCallEvent(
-                event_id=event_id,
-                parent_event_id=root_event.event_id,
-                session_id=_string(entry.get("sessionId")) or root_event.session_id,
-                turn_id=root_event.turn_id,
-                sequence=sequence,
-                started_at_ms=timestamp_ms,
-                ended_at_ms=timestamp_ms,
-                status=EventStatus.COMPLETED,
-                input=None,
-                output=_assistant_text(content),
-                agent_id=agent_id,
-                source_id=_string(message.get("id")) or event_id,
-                model=_string(message.get("model")) or None,
-                usage=_usage(message.get("usage")),
-            )
-            graph.events.append(model_event)
-            sequence += 1
+            message_id = _string(message.get("id"))
+            # Claude Code v2 writes one assistant response (one message.id) as
+            # several records -- thinking / text / each tool_use on its own line,
+            # each with a distinct record uuid. Fold those back into a single
+            # ModelCallEvent keyed by message.id so one response is one LLM span,
+            # not one per block. Records with no message.id can't be grouped and
+            # stay one-event-per-record (also preserves assistant-line-* ids).
+            model_event = models_by_message_id.get(message_id) if message_id else None
+            if model_event is None:
+                model_event = ModelCallEvent(
+                    event_id=event_id,
+                    parent_event_id=root_event.event_id,
+                    session_id=_string(entry.get("sessionId")) or root_event.session_id,
+                    turn_id=root_event.turn_id,
+                    sequence=sequence,
+                    started_at_ms=timestamp_ms,
+                    ended_at_ms=timestamp_ms,
+                    status=EventStatus.COMPLETED,
+                    input=None,
+                    output=_assistant_text(content),
+                    agent_id=agent_id,
+                    source_id=message_id or event_id,
+                    model=_string(message.get("model")) or None,
+                    usage=_usage(message.get("usage")),
+                )
+                graph.events.append(model_event)
+                sequence += 1
+                if message_id:
+                    models_by_message_id[message_id] = model_event
+            else:
+                # Merge this continuation record into the existing call: append
+                # any text, extend the time window, keep the fullest usage/model.
+                extra_text = _assistant_text(content)
+                if extra_text:
+                    model_event.output = f"{model_event.output}\n{extra_text}" if model_event.output else extra_text
+                if timestamp_ms is not None:
+                    if model_event.started_at_ms is None:
+                        model_event.started_at_ms = timestamp_ms
+                    model_event.ended_at_ms = timestamp_ms
+                if not model_event.model:
+                    model_event.model = _string(message.get("model")) or None
+                record_usage = _usage(message.get("usage"))
+                existing_total = model_event.usage.total_tokens if model_event.usage else -1
+                if record_usage.total_tokens > existing_total:
+                    model_event.usage = record_usage
 
             for block in _content_blocks(content):
                 if block.get("type") != "tool_use":
