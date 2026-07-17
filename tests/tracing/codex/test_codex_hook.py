@@ -348,6 +348,29 @@ class TestBuildAndSendSpans:
             side_effect=lambda p: (sent.append(p), True)[1],
         )
 
+    def test_project_name_from_config(self, monkeypatch):
+        """project.name comes from config.json when no env override is set (#74)."""
+        from core.common import env as core_env
+
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        cfg = {"harnesses": {"codex": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 2000,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["project.name"]["stringValue"] == "from-config"
+
     def test_multi_span_with_one_tool(self, monkeypatch):
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "codex")
         turn = {

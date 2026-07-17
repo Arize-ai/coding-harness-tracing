@@ -10,7 +10,8 @@ runs cannot collide on a single shared state file.
 
 Unlike opencode there is no snapshot/message payload to mine for the project
 name, so the derivation chain is simply
-``env.project_name`` -> ``os.path.basename(os.getcwd())`` -> ``HARNESS_NAME``.
+``env.project_name_for(SERVICE_NAME)`` (framework env override or config.json)
+-> ``os.path.basename(os.getcwd())`` -> ``HARNESS_NAME``.
 """
 from __future__ import annotations
 
@@ -83,7 +84,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
 
     session_id = _session_key(input_json)
 
-    project_name = env.project_name
+    project_name = env.project_name_for(SERVICE_NAME)
     if not project_name:
         project_name = os.path.basename(os.getcwd()) or HARNESS_NAME
 
