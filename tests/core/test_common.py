@@ -1377,7 +1377,15 @@ class TestResolveBackend:
     @pytest.fixture(autouse=True)
     def _fresh_env(self, monkeypatch):
         # Clear any inherited backend env vars so each test starts clean.
-        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "PHOENIX_ENDPOINT", "PHOENIX_API_KEY", "ARIZE_PROJECT_NAME"):
+        for key in (
+            "ARIZE_API_KEY",
+            "ARIZE_SPACE_ID",
+            "PHOENIX_ENDPOINT",
+            "PHOENIX_API_KEY",
+            "ARIZE_PROJECT_NAME",
+            "PHOENIX_PROJECT",
+            "PHOENIX_PROJECT_NAME",
+        ):
             monkeypatch.delenv(key, raising=False)
 
     def _make_span(self, service_name=""):
@@ -1518,6 +1526,98 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["project_name"] == "from-env"
+
+    # ── framework-scoped project env vars ──────────────────────────────────
+
+    def test_phoenix_project_env_override(self, monkeypatch):
+        """PHOENIX_PROJECT sets the project on the Phoenix backend."""
+        monkeypatch.setenv("PHOENIX_PROJECT", "from-phoenix-env")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "project_name": "from-config",
+                    "target": "phoenix",
+                    "endpoint": "http://localhost:6006",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "phoenix"
+        assert result["project_name"] == "from-phoenix-env"
+
+    def test_phoenix_project_name_env_override(self, monkeypatch):
+        """PHOENIX_PROJECT_NAME is honored on the Phoenix backend."""
+        monkeypatch.setenv("PHOENIX_PROJECT_NAME", "from-phoenix-name")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "project_name": "from-config",
+                    "target": "phoenix",
+                    "endpoint": "http://localhost:6006",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["project_name"] == "from-phoenix-name"
+
+    def test_phoenix_project_beats_phoenix_project_name(self, monkeypatch):
+        """PHOENIX_PROJECT takes precedence over PHOENIX_PROJECT_NAME."""
+        monkeypatch.setenv("PHOENIX_PROJECT", "primary")
+        monkeypatch.setenv("PHOENIX_PROJECT_NAME", "secondary")
+        cfg = {
+            "harnesses": {
+                "claude-code": {"target": "phoenix", "endpoint": "http://localhost:6006"},
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["project_name"] == "primary"
+
+    def test_arize_project_name_ignored_on_phoenix(self, monkeypatch):
+        """ARIZE_PROJECT_NAME does not affect the Phoenix backend (issue #74).
+
+        The Claude Code installer used to bake ARIZE_PROJECT_NAME into
+        settings.json; on the Phoenix backend it must be ignored so the
+        config project_name (or PHOENIX_PROJECT) wins instead.
+        """
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "claude-code")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "project_name": "my-phoenix-project",
+                    "target": "phoenix",
+                    "endpoint": "http://localhost:6006",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["project_name"] == "my-phoenix-project"
+
+    def test_phoenix_project_ignored_on_arize(self, monkeypatch):
+        """PHOENIX_PROJECT does not affect the Arize backend."""
+        monkeypatch.setenv("PHOENIX_PROJECT", "phoenix-only")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "project_name": "arize-project",
+                    "target": "arize",
+                    "api_key": "ak",
+                    "space_id": "sp",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "arize"
+        assert result["project_name"] == "arize-project"
 
     # ── env-overrides-config precedence ────────────────────────────────────
 

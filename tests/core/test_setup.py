@@ -520,7 +520,8 @@ class TestClaudeSetup:
         # settings.json should have hooks and env vars
         result = json.loads(settings_file.read_text())
         assert result["env"]["ARIZE_TRACE_ENABLED"] == "true"
-        assert result["env"]["ARIZE_PROJECT_NAME"] == "claude-code"
+        # project_name lives in config.json only; not baked into settings.json (#74).
+        assert "ARIZE_PROJECT_NAME" not in result["env"]
         assert len(result.get("hooks", {})) == 16
 
     def test_run_arize_flow(self, tmp_path, monkeypatch):
