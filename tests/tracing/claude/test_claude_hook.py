@@ -546,9 +546,7 @@ class TestStop:
         assert state.get("high_fidelity_span_ids") is not None
         assert [item.tool_use_id for item in ToolBuffer(state).all()] == ["tool-1"]
 
-    def test_legacy_success_preserves_unexported_child_snapshots(
-        self, mock_resolve, state, captured_spans
-    ):
+    def test_legacy_success_preserves_unexported_child_snapshots(self, mock_resolve, state, captured_spans):
         for key, value in {
             "current_trace_id": "t" * 32,
             "current_trace_span_id": "s" * 16,

@@ -18,13 +18,9 @@ Turn 1 (CHAIN)
     └── Bash (TOOL)
 ```
 
-All spans for a turn share one trace ID. Turns from the same Claude Code session share `session.id`. Token and cache usage is attached to the individual `LLM` call that reported it rather than being aggregated on the turn root.
+All spans for a turn share one trace ID. Turns from the same Claude Code session share `session.id`. Token and cache usage is attached to the individual `LLM` call that reported it.
 
 Transcript parsing and hook observations are fail-soft. Unknown or malformed records produce diagnostics where possible; missing parents, duplicate IDs, invalid timestamps, and interrupted exports do not prevent the remaining valid graph from being emitted. If the transcript is unavailable, the integration falls back to the legacy turn export instead of inventing model-call boundaries.
-
-### Migration note
-
-The turn root is now an OpenInference `CHAIN`, not an `LLM`. Model name and `llm.token_count.*` attributes now live on child `LLM` spans. Dashboards or queries that previously treated the root as a model call must select the child `LLM` spans for per-call token and cost analysis.
 
 ### Current limitations
 

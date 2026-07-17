@@ -74,6 +74,15 @@ bootstrap() {
     # backend here: Python 3.12 venvs do not include setuptools, and hooks must
     # bootstrap without network access.  Source launchers also pick up plugin
     # updates immediately instead of copying stale code into the venv.
+    #
+    # Standing invariant: nothing is pip-installed into this venv.  Each launcher
+    # below runs `python -c "from hooks.handlers import ..."` with
+    # PYTHONPATH=$CLAUDE_PLUGIN_ROOT, so every runtime import must resolve from
+    # the plugin tree alone -- the `hooks.*` package and `core.*` (reachable via
+    # the tracing/claude_code/core symlink) -- using only the standard library.
+    # No code reachable from a hook may import `tracing.*` or any third-party
+    # package: it would resolve on the pip-installed path but break on the
+    # plugin path only, where tests do not exercise it.
     if [ -x "$VENV_DIR/bin/python" ]; then VENV_PYTHON="$VENV_DIR/bin/python"
     elif [ -x "$VENV_DIR/Scripts/python.exe" ]; then VENV_PYTHON="$VENV_DIR/Scripts/python.exe"
     else
