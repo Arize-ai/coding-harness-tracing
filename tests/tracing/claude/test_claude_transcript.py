@@ -107,6 +107,100 @@ def test_model_usage_and_text_are_kept_per_call():
     assert models[2].status is EventStatus.COMPLETED
 
 
+def test_split_message_id_records_coalesce_into_one_model_call(tmp_path: Path):
+    """Claude Code v2 writes one assistant response (one message.id) across
+    several records — thinking / text / each tool_use. They must fold into a
+    single ModelCallEvent, not one LLM span per record, with un-inflated usage."""
+    transcript = tmp_path / "split-message.jsonl"
+    usage = {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 10}
+    rows = [
+        {
+            "type": "assistant",
+            "uuid": "rec-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {
+                "role": "assistant",
+                "id": "msg-1",
+                "model": "claude-x",
+                "content": [{"type": "thinking", "thinking": "hmm"}],
+                "usage": usage,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "rec-2",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "assistant",
+                "id": "msg-1",
+                "model": "claude-x",
+                "content": [{"type": "text", "text": "Hello"}],
+                "usage": usage,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "rec-3",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {
+                "role": "assistant",
+                "id": "msg-1",
+                "content": [{"type": "tool_use", "id": "call-1", "name": "Read", "input": {"file_path": "x"}}],
+                "usage": usage,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "rec-4",
+            "timestamp": "2026-01-01T00:00:03Z",
+            "message": {
+                "role": "assistant",
+                "id": "msg-1",
+                "content": [{"type": "tool_use", "id": "call-2", "name": "Bash", "input": {"command": "ls"}}],
+                "usage": usage,
+            },
+        },
+        {
+            "type": "user",
+            "timestamp": "2026-01-01T00:00:04Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "ok1"}],
+            },
+        },
+        {
+            "type": "user",
+            "timestamp": "2026-01-01T00:00:05Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "call-2", "content": "ok2"}],
+            },
+        },
+    ]
+    transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    graph = parse_claude_transcript(transcript, _turn())
+
+    models = _typed(graph.events, ModelCallEvent)
+    tools = _typed(graph.events, ToolEvent)
+
+    # One real LLM call, not four.
+    assert len(models) == 1
+    assert models[0].event_id == "rec-1"
+    assert models[0].source_id == "msg-1"
+    assert models[0].model == "claude-x"
+    assert "Hello" in (models[0].output or "")
+    # Both tool_use blocks hang off the single coalesced call.
+    assert [tool.tool_call_id for tool in tools] == ["call-1", "call-2"]
+    assert [tool.parent_event_id for tool in tools] == ["rec-1", "rec-1"]
+    # Usage is the message's usage, not summed across the split records.
+    assert models[0].usage.input_tokens == 100
+    assert models[0].usage.output_tokens == 20
+    assert models[0].usage.cache_read_tokens == 10
+    # Span covers the full response window.
+    assert models[0].ended_at_ms > models[0].started_at_ms
+
+
 def test_start_line_excludes_prior_model_and_tool_cycles():
     graph = parse_claude_transcript(FIXTURE_DIR / "main_tool_cycle.jsonl", _turn(), start_line=3)
 
