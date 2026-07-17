@@ -55,6 +55,8 @@ call :bootstrap_repo
 if %ERRORLEVEL% neq 0 exit /b 1
 call :setup_venv
 if %ERRORLEVEL% neq 0 exit /b 1
+REM Migrate legacy config.yaml -> config.json (no-op if nothing to migrate)
+if exist "%VENV_PYTHON%" "%VENV_PYTHON%" -m core.config migrate
 call :resolve_dir "%COMMAND%"
 set "_PY=%INSTALL_DIR%\%HARNESS_DIR%\install.py"
 if not exist "%_PY%" ( echo [arize] install.py not found at %_PY% >&2 & exit /b 1 )
@@ -92,6 +94,8 @@ if "!_UPDATE_NEED_VENV!"=="1" (
     echo [arize] Reinstalling package...
     "%VENV_PIP%" install --quiet "%INSTALL_DIR%" >nul 2>&1
 )
+REM Migrate legacy config.yaml -> config.json (no-op if nothing to migrate)
+if exist "%VENV_PYTHON%" "%VENV_PYTHON%" -m core.config migrate
 if exist "%VENV_PYTHON%" (
     for /f "usebackq delims=" %%H in (`"%VENV_PYTHON%" -c "from core.setup import list_installed_harnesses; [print(h) for h in list_installed_harnesses()]" 2^>nul`) do (
         call :resolve_dir "%%H"

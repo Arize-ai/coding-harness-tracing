@@ -250,12 +250,14 @@ class TestLoadSessionSidecar:
         """Empty session_id returns None."""
         assert adapter.load_session_sidecar("") is None
 
-    def test_returns_none_when_file_missing(self, sidecar_dir):
+    def test_returns_none_when_file_missing(self, sidecar_dir, monkeypatch):
         """Missing sidecar file returns None."""
+        monkeypatch.setattr(adapter, "_SIDECAR_RETRY_SECS", 0.0)
         assert adapter.load_session_sidecar("nonexistent-session") is None
 
-    def test_returns_none_for_malformed_json(self, sidecar_dir):
+    def test_returns_none_for_malformed_json(self, sidecar_dir, monkeypatch):
         """Malformed JSON in sidecar file returns None."""
+        monkeypatch.setattr(adapter, "_SIDECAR_RETRY_SECS", 0.0)
         sid = "malformed-session"
         (sidecar_dir / f"{sid}.json").write_text("not json")
         assert adapter.load_session_sidecar(sid) is None
@@ -270,6 +272,79 @@ class TestLoadSessionSidecar:
         """Successfully loads a complete sidecar file."""
         sid = "complete-session"
         (sidecar_dir / f"{sid}.json").write_text(json.dumps(sidecar_complete))
+        result = adapter.load_session_sidecar(sid)
+        assert isinstance(result, dict)
+        assert "session_state" in result
+
+    def test_returns_early_once_metering_present(self, sidecar_dir, sidecar_complete, monkeypatch):
+        """Returns on the first read when metering_usage is already present; sleep never called."""
+        sleep_calls = []
+        monkeypatch.setattr(adapter.time, "sleep", lambda s: sleep_calls.append(s))
+        monkeypatch.setattr(adapter.time, "monotonic", lambda: 0.0)
+
+        sid = "early-exit"
+        (sidecar_dir / f"{sid}.json").write_text(json.dumps(sidecar_complete))
+        result = adapter.load_session_sidecar(sid)
+
+        assert result is not None
+        assert sleep_calls == []  # returned immediately, no polling
+
+    def test_retries_until_metering_arrives(self, sidecar_dir, sidecar_complete, monkeypatch):
+        """Polls until metering_usage appears; sleep is called between retries, not after success."""
+        import copy
+
+        # Fake clock: each call advances by _SIDECAR_POLL_INTERVAL so deadline is never hit
+        tick = [0.0]
+
+        def _monotonic():
+            v = tick[0]
+            tick[0] += adapter._SIDECAR_POLL_INTERVAL
+            return v
+
+        monkeypatch.setattr(adapter, "_SIDECAR_RETRY_SECS", 10.0)
+        monkeypatch.setattr(adapter.time, "monotonic", _monotonic)
+        sleep_calls = []
+        monkeypatch.setattr(adapter.time, "sleep", lambda s: sleep_calls.append(s))
+
+        sid = "late-metering"
+        no_metering = copy.deepcopy(sidecar_complete)
+        del no_metering["session_state"]["conversation_metadata"]["user_turn_metadatas"][0]["metering_usage"]
+        path = sidecar_dir / f"{sid}.json"
+
+        # First two reads return no-metering; third returns complete sidecar
+        read_count = [0]
+
+        def _read_text(self, *a, **kw):
+            read_count[0] += 1
+            if read_count[0] < 3:
+                return json.dumps(no_metering)
+            return json.dumps(sidecar_complete)
+
+        monkeypatch.setattr(path.__class__, "read_text", _read_text)
+        path.write_text(json.dumps(no_metering))  # file must exist for path resolution
+
+        result = adapter.load_session_sidecar(sid)
+        assert result is not None
+        turns = result["session_state"]["conversation_metadata"]["user_turn_metadatas"]
+        assert turns[0].get("metering_usage")
+        assert len(sleep_calls) == 2  # slept twice before metering arrived
+
+    def test_fallback_returns_partial_data_when_metering_never_arrives(
+        self, sidecar_dir, sidecar_complete, monkeypatch
+    ):
+        """When deadline expires without metering, returns last valid JSON without sleeping again."""
+        import copy
+
+        # Clock starts at 0; second call returns past the deadline
+        times = iter([0.0, 999.0])
+        monkeypatch.setattr(adapter.time, "monotonic", lambda: next(times))
+        monkeypatch.setattr(adapter.time, "sleep", lambda s: None)
+
+        sid = "no-metering-timeout"
+        no_metering = copy.deepcopy(sidecar_complete)
+        del no_metering["session_state"]["conversation_metadata"]["user_turn_metadatas"][0]["metering_usage"]
+        (sidecar_dir / f"{sid}.json").write_text(json.dumps(no_metering))
+
         result = adapter.load_session_sidecar(sid)
         assert isinstance(result, dict)
         assert "session_state" in result

@@ -26,6 +26,8 @@ from tracing.kiro.constants import HARNESS_NAME, KIRO_SESSIONS_DIR
 STATE_DIR: Path = STATE_BASE_DIR / HARNESS_NAME
 SCOPE_NAME = "arize-kiro-plugin"
 SERVICE_NAME = HARNESS_NAME
+_SIDECAR_RETRY_SECS = 1.0
+_SIDECAR_POLL_INTERVAL = 0.1
 
 # Route hook stderr to a per-harness log file unless ARIZE_LOG_FILE is set.
 os.environ.setdefault(
@@ -114,21 +116,42 @@ def gc_stale_state_files() -> None:
 def load_session_sidecar(session_id: str) -> dict | None:
     """Load `~/.kiro/sessions/cli/<session_id>.json`.
 
-    Returns the parsed dict, or None if the file is missing, malformed, or
-    not a JSON object. NEVER raises — callers rely on fail-soft semantics.
+    Retries for up to _SIDECAR_RETRY_SECS to handle the race where Kiro
+    flushes the sidecar after the stop hook fires. Stops early once metering
+    data is present. Returns None on any unrecoverable error.
     """
     if not session_id:
         return None
     path = KIRO_SESSIONS_DIR / f"{session_id}.json"
+    deadline = time.monotonic() + _SIDECAR_RETRY_SECS
+    last_exc: Exception | None = None
+    while True:
+        try:
+            data = json.loads(path.read_text())
+            if not isinstance(data, dict):
+                log(f"sidecar for {session_id} is not a JSON object")
+                return None
+            # Stop retrying once metering data has been flushed
+            turns = data.get("session_state", {}).get("conversation_metadata", {}).get("user_turn_metadatas", [])
+            if turns and turns[-1].get("metering_usage"):
+                return data
+        except (OSError, json.JSONDecodeError) as exc:
+            last_exc = exc
+
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_SIDECAR_POLL_INTERVAL)
+
+    if last_exc:
+        log(f"sidecar load failed for {session_id}: {last_exc!r}")
+    else:
+        log(f"sidecar for {session_id}: metering_usage not present after {_SIDECAR_RETRY_SECS}s")
+    # Return whatever we last successfully parsed (may lack metering), or None
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        log(f"sidecar load failed for {session_id}: {exc!r}")
+        return data if isinstance(data, dict) else None
+    except Exception:
         return None
-    if not isinstance(data, dict):
-        log(f"sidecar for {session_id} is not a JSON object")
-        return None
-    return data
 
 
 def extract_sidecar_attrs(sidecar: dict | None, turn_index: int = -1) -> dict[str, Any]:
