@@ -888,8 +888,9 @@ def _handle_stop(input_json: dict) -> None:
                                 if isinstance(event_id, str) and isinstance(span_id, str) and span_id
                             }
                         )
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    pass
+                except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                    # Persisted span-id state can be malformed; ignore and regenerate IDs below.
+                    log(f"invalid high_fidelity_span_ids state; regenerating span IDs: {exc}")
             for event in graph.events:
                 span_id_overrides.setdefault(event.event_id, generate_span_id())
             state.set("high_fidelity_span_ids", json.dumps(span_id_overrides, sort_keys=True))
