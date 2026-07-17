@@ -28,8 +28,14 @@ def uninstall() -> None:
     _install_mod.uninstall()
 
 
-def _write_env_file(env_path: Path, target: str, credentials: dict, project_name: str = "codex") -> None:
-    """Write ~/.codex/arize-env.sh with export statements."""
+def _write_env_file(env_path: Path, target: str, credentials: dict) -> None:
+    """Write ~/.codex/arize-env.sh with export statements.
+
+    The project name is intentionally NOT baked here — it lives in config.json
+    (harnesses.codex.project_name) so edits take effect, and a baked
+    ARIZE_PROJECT_NAME would shadow config and leak into the Phoenix backend
+    (which honors PHOENIX_PROJECT instead) — see issue #74.
+    """
     env_path.parent.mkdir(parents=True, exist_ok=True)
 
     lines = ["# Arize Codex tracing environment (auto-generated)"]
@@ -44,8 +50,6 @@ def _write_env_file(env_path: Path, target: str, credentials: dict, project_name
         lines.append(f'export ARIZE_API_KEY="{credentials.get("api_key", "")}"')
         lines.append(f'export ARIZE_SPACE_ID="{credentials.get("space_id", "")}"')
         lines.append(f'export ARIZE_OTLP_ENDPOINT="{credentials.get("endpoint", "otlp.arize.com:443")}"')
-
-    lines.append(f'export ARIZE_PROJECT_NAME="{project_name}"')
 
     env_path.write_text("\n".join(lines) + "\n")
 
@@ -144,7 +148,7 @@ def _run() -> None:
             err(f"Unknown target in config: {target}")
             sys.exit(1)
 
-        _write_env_file(env_file, target, creds, project_name)
+        _write_env_file(env_file, target, creds)
         info(f"Wrote credentials to {env_file}")
     else:
         # No existing config — prompt for backend
@@ -159,7 +163,7 @@ def _run() -> None:
         info("Wrote config to ~/.arize/harness/config.json")
 
         # Write env file
-        _write_env_file(env_file, target, credentials, project_name)
+        _write_env_file(env_file, target, credentials)
         info(f"Wrote credentials to {env_file}")
 
     # Configure OTLP exporter in ~/.codex/config.toml

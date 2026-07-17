@@ -218,6 +218,8 @@ install_harness() {
     install_repo
     setup_venv "$python_cmd"
     local vp; vp=$(venv_python) || { err "Venv python not found after setup"; exit 1; }
+    info "Migrating legacy config.yaml to config.json (if present)..."
+    "$vp" -m core.config migrate || true
     local install_py="${INSTALL_DIR}/${dir}/install.py"
     [[ -f "$install_py" ]] || { err "Harness install script not found: ${install_py}"; exit 1; }
     if [[ "$skills" == true ]]; then
@@ -318,6 +320,8 @@ main() {
             info "Reinstalling coding-harness-tracing..."
             "$pip" install --quiet -U "$INSTALL_DIR" 2>/dev/null || { err "Failed to reinstall package"; exit 1; }
             local vp; vp=$(venv_python) || { err "venv python not found"; exit 1; }
+            info "Migrating legacy config.yaml to config.json (if present)..."
+            "$vp" -m core.config migrate || true
             local harnesses
             harnesses=$("$vp" -c 'from core.setup import list_installed_harnesses as L; print("\n".join(L()))' 2>/dev/null) || true
             if [[ -n "$harnesses" ]]; then

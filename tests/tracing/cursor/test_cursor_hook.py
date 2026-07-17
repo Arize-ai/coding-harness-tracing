@@ -2330,3 +2330,68 @@ class TestDeferredLlmSpan:
         assert llm_attrs["session.id"]["stringValue"] == "conv-abc"
         assert llm_attrs["cursor.conversation.id"]["stringValue"] == "conv-abc"
         assert llm_attrs["user.id"]["stringValue"] == "alice@example.com"
+
+
+# ---------------------------------------------------------------------------
+# project.name injection
+# ---------------------------------------------------------------------------
+
+
+class TestProjectNameInjection:
+    """project.name is injected onto every Cursor span, target-aware (issue #74)."""
+
+    def _drive_and_capture(self, monkeypatch, event="beforeSubmitPrompt"):
+        """Run a handler with the inner backend sender mocked so the send_span
+        wrapper (which injects project.name) actually runs, and return the spans."""
+        sent = []
+        with (
+            mock.patch(
+                "tracing.cursor.hooks.handlers._send_span_to_backend",
+                side_effect=lambda s: sent.append(s) or True,
+            ),
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000),
+        ):
+            _dispatch(
+                event,
+                {
+                    "hookEventName": event,
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                    "prompt": "hi",
+                },
+            )
+        return sent
+
+    def test_project_name_from_config_injected(self, monkeypatch):
+        """config.json project_name lands on the span when no env override is set."""
+        from core.common import env as core_env
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        cfg = {"harnesses": {"cursor": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        sent = self._drive_and_capture(monkeypatch)
+
+        assert len(sent) == 1
+        span = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert attrs["project.name"]["stringValue"] == "from-config"
+
+    def test_phoenix_project_env_injected(self, monkeypatch):
+        """On the Phoenix backend, PHOENIX_PROJECT wins over config project_name."""
+        from core.common import env as core_env
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        monkeypatch.setenv("PHOENIX_PROJECT", "from-phoenix-env")
+        cfg = {"harnesses": {"cursor": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        sent = self._drive_and_capture(monkeypatch)
+
+        span = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert attrs["project.name"]["stringValue"] == "from-phoenix-env"

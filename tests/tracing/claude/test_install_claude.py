@@ -134,7 +134,9 @@ class TestFreshInstall:
 
         env = settings.get("env", {})
         assert env.get("ARIZE_TRACE_ENABLED") == "true"
-        assert env.get("ARIZE_PROJECT_NAME") == "claude-code"
+        # project_name lives in config.json only; baking ARIZE_PROJECT_NAME here
+        # used to shadow config.json edits and leak into the Phoenix backend (#74).
+        assert "ARIZE_PROJECT_NAME" not in env
 
     def test_install_fresh_writes_flat_harness_entry(self, fake_home, monkeypatch):
         """Fresh install writes all backend fields directly under harnesses.claude-code."""

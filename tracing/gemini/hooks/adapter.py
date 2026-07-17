@@ -143,7 +143,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     )
 
     # project_name
-    project_name = env.project_name
+    project_name = env.project_name_for(SERVICE_NAME)
     if not project_name:
         cwd = input_json.get("projectDir") or input_json.get("cwd", "")
         project_name = os.path.basename(cwd) if cwd else os.path.basename(os.getcwd())

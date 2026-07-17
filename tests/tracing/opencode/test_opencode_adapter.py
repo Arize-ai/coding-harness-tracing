@@ -212,6 +212,32 @@ class TestEnsureSessionInitialized:
         adapter.ensure_session_initialized(sm, payload)
         assert sm.get("project_name") == "my-env-project"
 
+    def test_project_name_from_config(self, opencode_state_dir, monkeypatch):
+        """config.json project_name is honored when no env override is set (#74)."""
+        from core.common import env as core_env
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        cfg = {"harnesses": {"opencode": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        sm = self._make_state(opencode_state_dir, "proj-config")
+        payload = {
+            "sessionID": "ses_cfg",
+            "messages": [
+                {
+                    "info": {
+                        "role": "assistant",
+                        "path": {"cwd": "/home/user/other-project", "root": "/home/user"},
+                    },
+                    "parts": [],
+                }
+            ],
+        }
+        adapter.ensure_session_initialized(sm, payload)
+        assert sm.get("project_name") == "from-config"
+
     def test_project_name_from_snapshot_cwd(self, opencode_state_dir, disable_env_vars):
         """project_name uses basename of the snapshot message path.cwd."""
         sm = self._make_state(opencode_state_dir, "proj-cwd")

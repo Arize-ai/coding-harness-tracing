@@ -336,7 +336,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 
 def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
     """Assemble the LLM + TOOL spans from an extracted turn and ship them."""
-    project_name = env.project_name or "codex"
+    project_name = env.project_name_for(SERVICE_NAME) or "codex"
     user_id = env.get_user_id(SERVICE_NAME) or ""
 
     trace_id = generate_trace_id()
@@ -494,7 +494,7 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
 
     attrs = {
         "session.id": thread_id,
-        "project.name": env.project_name or "codex",
+        "project.name": env.project_name_for(SERVICE_NAME) or "codex",
         "openinference.span.kind": "LLM",
         "input.value": user_prompt,
         "output.value": final_output,
