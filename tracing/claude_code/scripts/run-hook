@@ -1,107 +1,27 @@
 #!/bin/sh
-# Arize tracing hook dispatcher.
-# Called by every Claude Code hook. Bootstraps the venv on first run,
-# then dispatches to the named entry point.
+# Arize tracing hook dispatcher for the Claude Code plugin.
+#
+# Thin wrapper over the shared bootstrap-venv script (reached via the plugin's
+# core symlink). Claude Code sets CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA for
+# plugin hooks; the entry-point name is passed as $1.
 #
 # Usage: run-hook <entry-point-name>
 #   e.g. run-hook arize-hook-session-start
 #
-# Requires CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA env vars
-# (set automatically by Claude Code for plugin hooks).
+# Claude passes the hook payload on stdin (inherited through exec); stdout is
+# reserved for Claude's hook protocol. Any failure exits 0 so tracing never
+# blocks Claude Code.
 set -e
 
-HOOK_NAME="${1:?usage: run-hook <entry-point-name>}"
+ENTRY_POINT="${1:?usage: run-hook <entry-point-name>}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT not set}"
 DATA_DIR="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 VENV_DIR="$DATA_DIR/venv"
-MARKER="$DATA_DIR/.pyproject.sha256"
+BOOTSTRAP="$PLUGIN_ROOT/core/scripts/bootstrap-venv"
 
-# --- Find the entry point binary ---
-find_entry_point() {
-    if [ -x "$VENV_DIR/bin/$HOOK_NAME" ]; then
-        echo "$VENV_DIR/bin/$HOOK_NAME"
-    elif [ -x "$VENV_DIR/Scripts/$HOOK_NAME" ]; then
-        echo "$VENV_DIR/Scripts/$HOOK_NAME"
-    elif [ -x "$VENV_DIR/Scripts/${HOOK_NAME}.exe" ]; then
-        echo "$VENV_DIR/Scripts/${HOOK_NAME}.exe"
-    else
-        return 1
-    fi
-}
-
-# --- Find Python 3.9+ ---
-find_python() {
-    for p in python3 python py; do
-        if "$p" -c "import sys; sys.exit(0 if sys.version_info>=(3,9) else 1)" 2>/dev/null; then
-            echo "$p"
-            return 0
-        fi
-    done
-    return 1
-}
-
-# --- Check if (re)install is needed ---
-needs_install() {
-    [ ! -d "$VENV_DIR" ] && return 0
-    [ ! -f "$MARKER" ] && return 0
-    # Compare pyproject.toml hash
-    current=$("$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PLUGIN_ROOT/pyproject.toml" 2>/dev/null) || return 0
-    stored=$(cat "$MARKER" 2>/dev/null) || return 0
-    [ "$current" != "$stored" ]
-}
-
-# --- Bootstrap venv ---
-bootstrap() {
-    PYTHON_CMD=$(find_python) || {
-        echo "[arize] No Python 3.9+ found — tracing will not be available" >&2
-        return 1
-    }
-
-    if ! needs_install; then
-        return 0
-    fi
-
-    echo "[arize] Setting up tracing venv..." >&2
-    mkdir -p "$DATA_DIR"
-
-    "$PYTHON_CMD" -m venv "$VENV_DIR" 2>&1 | tail -3 >&2 || {
-        echo "[arize] Failed to create venv" >&2
-        return 1
-    }
-
-    # Find pip in the new venv
-    PIP=""
-    if [ -x "$VENV_DIR/bin/pip" ]; then PIP="$VENV_DIR/bin/pip"
-    elif [ -x "$VENV_DIR/Scripts/pip" ]; then PIP="$VENV_DIR/Scripts/pip"
-    elif [ -x "$VENV_DIR/Scripts/pip.exe" ]; then PIP="$VENV_DIR/Scripts/pip.exe"
-    fi
-    if [ -z "$PIP" ]; then
-        echo "[arize] pip not found in venv" >&2
-        return 1
-    fi
-
-    echo "[arize] Installing claude-code-tracing from $PLUGIN_ROOT..." >&2
-    if ! "$PIP" install --quiet "$PLUGIN_ROOT" >&2; then
-        echo "[arize] pip install failed" >&2
-        rm -f "$MARKER"
-        return 1
-    fi
-
-    # Save hash marker
-    "$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" \
-        "$PLUGIN_ROOT/pyproject.toml" > "$MARKER"
-
-    echo "[arize] Tracing venv ready" >&2
-}
-
-# --- Main ---
-# Bootstrap if needed (only does work on first run or after update)
-bootstrap || exit 0
-
-# Find and exec the entry point
-EP=$(find_entry_point) || {
-    echo "[arize] Entry point '$HOOK_NAME' not found in venv" >&2
+if [ ! -x "$BOOTSTRAP" ]; then
+    echo "[arize] shared bootstrap script not found at $BOOTSTRAP" >&2
     exit 0
-}
+fi
 
-exec "$EP"
+exec "$BOOTSTRAP" "$PLUGIN_ROOT" "$VENV_DIR" "$ENTRY_POINT"
