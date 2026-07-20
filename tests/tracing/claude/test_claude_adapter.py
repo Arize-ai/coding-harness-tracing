@@ -139,6 +139,49 @@ class TestEnsureSessionInitialized:
         adapter.ensure_session_initialized(sm, {"cwd": "/home/user/my-project"})
         assert sm.get("project_name") == "my-project"
 
+    def test_project_name_from_config(self, claude_state_dir, monkeypatch):
+        """config.json project_name is used when no env override is set (issue #74)."""
+        from core.common import env as core_env
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        cfg = {"harnesses": {"claude-code": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        sm = self._make_state(claude_state_dir, "proj-config")
+        adapter.ensure_session_initialized(sm, {"cwd": "/home/user/other-project"})
+        assert sm.get("project_name") == "from-config"
+
+    def test_phoenix_project_env_used_on_phoenix_config(self, claude_state_dir, monkeypatch):
+        """On the Phoenix backend, PHOENIX_PROJECT wins over config project_name."""
+        from core.common import env as core_env
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        monkeypatch.setenv("PHOENIX_PROJECT", "from-phoenix-env")
+        cfg = {"harnesses": {"claude-code": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        sm = self._make_state(claude_state_dir, "proj-phoenix-env")
+        adapter.ensure_session_initialized(sm, {"cwd": "/home/user/other-project"})
+        assert sm.get("project_name") == "from-phoenix-env"
+
+    def test_arize_project_name_ignored_on_phoenix_config(self, claude_state_dir, monkeypatch):
+        """A baked ARIZE_PROJECT_NAME does not shadow config on the Phoenix backend (issue #74)."""
+        from core.common import env as core_env
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "claude-code")  # installer's baked default
+        cfg = {"harnesses": {"claude-code": {"project_name": "my-phoenix-project", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        sm = self._make_state(claude_state_dir, "proj-arize-ignored")
+        adapter.ensure_session_initialized(sm, {"cwd": "/home/user/other-project"})
+        assert sm.get("project_name") == "my-phoenix-project"
+
     def test_user_id_from_env(self, claude_state_dir, monkeypatch):
         """ARIZE_USER_ID env var takes priority over input."""
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")

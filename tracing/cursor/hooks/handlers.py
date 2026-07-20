@@ -8,9 +8,11 @@ stdout: MUST print permissive JSON response, even on error.
 stderr: redirected to ARIZE_LOG_FILE before dispatch.
 """
 import json
+import os
 import sys
 
-from core.common import build_span, env, error, get_timestamp_ms, log, redact_content, send_span
+from core.common import build_span, env, error, get_timestamp_ms, log, redact_content
+from core.common import send_span as _send_span_to_backend
 from tracing.cursor.hooks.adapter import (
     SCOPE_NAME,
     SERVICE_NAME,
@@ -24,6 +26,37 @@ from tracing.cursor.hooks.adapter import (
     state_push,
     trace_id_from_generation,
 )
+
+# ---------------------------------------------------------------------------
+# Span send (with project.name injection)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_project_name() -> str:
+    """Project name for Cursor spans: framework env override or config.json,
+    else cwd basename, else the service name.
+
+    Cursor builds many span dicts across 15 handlers and keeps no per-session
+    project state, so it resolves the project centrally at send time — matching
+    the framework-scoped resolution the other harnesses do in their adapters.
+    """
+    return env.project_name_for(SERVICE_NAME) or os.path.basename(os.getcwd()) or SERVICE_NAME
+
+
+def send_span(payload: dict) -> bool:
+    """Inject ``project.name`` onto every span in the payload, then send.
+
+    Wraps ``core.common.send_span`` so all handler send sites get the attribute
+    without threading project name through each attrs dict.
+    """
+    project_name = _resolve_project_name()
+    attr = {"key": "project.name", "value": {"stringValue": project_name}}
+    for rs in payload.get("resourceSpans", []):
+        for ss in rs.get("scopeSpans", []):
+            for span in ss.get("spans", []):
+                span.setdefault("attributes", []).append(attr)
+    return _send_span_to_backend(payload)
+
 
 # ---------------------------------------------------------------------------
 # Helpers

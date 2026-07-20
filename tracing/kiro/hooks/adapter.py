@@ -78,7 +78,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     # users find a Kiro session in Arize. NEVER substitute a fresh trace ID.
     session_id = input_json.get("session_id") or os.environ.get("KIRO_SESSION_ID") or ""
 
-    project_name = env.project_name
+    project_name = env.project_name_for(SERVICE_NAME)
     if not project_name:
         cwd = input_json.get("cwd", "") or os.getcwd()
         project_name = os.path.basename(cwd) if cwd else HARNESS_NAME

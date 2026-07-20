@@ -7,6 +7,23 @@ The installer prompts for your backend (Phoenix or Arize AX) and project name, w
 
 Pass `--with-skills` to also symlink the `manage-cursor-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Cursor tracing configuration.
 
+### Plugin install
+
+Cursor 2.5+ users can install via the Cursor marketplace instead of running `install.sh`. The plugin auto-registers every hook event and lazily bootstraps a dedicated Python venv on first hook fire into `~/.arize/harness/cursor-plugin-venv` (kept separate from the `install.sh`-managed `~/.arize/harness/venv` to avoid pip file-ownership conflicts).
+
+```text
+/add-plugin Arize-ai/coding-harness-tracing
+```
+
+(Or point at your own team / private marketplace that mirrors this repo.)
+
+**Credentials.** The plugin skips the interactive wizard, so configure the backend one of two ways:
+
+- **Recommended:** run the bundled `manage-cursor-tracing` skill once from any agent session — it writes `~/.arize/harness/config.json` for you.
+- **Or** export `ARIZE_API_KEY` + `ARIZE_SPACE_ID` (Arize AX) or `PHOENIX_ENDPOINT` (Phoenix) in the environment Cursor launches from. macOS GUI caveat: a GUI-launched Cursor may not inherit exports from your shell profile, so the config.json route is more reliable than env vars on macOS.
+
+If no backend is configured, hooks fail open (no-op) — they never block Cursor.
+
 ### Remote setup
 
 #### macOS / Linux
