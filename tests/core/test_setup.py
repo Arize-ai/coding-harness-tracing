@@ -520,7 +520,8 @@ class TestClaudeSetup:
         # settings.json should have hooks and env vars
         result = json.loads(settings_file.read_text())
         assert result["env"]["ARIZE_TRACE_ENABLED"] == "true"
-        assert result["env"]["ARIZE_PROJECT_NAME"] == "claude-code"
+        # project_name lives in config.json only; not baked into settings.json (#74).
+        assert "ARIZE_PROJECT_NAME" not in result["env"]
         assert len(result.get("hooks", {})) == 16
 
     def test_run_arize_flow(self, tmp_path, monkeypatch):
@@ -567,7 +568,8 @@ class TestCodexWriteEnvFile:
         assert "export ARIZE_TRACE_ENABLED=true" in content
         assert 'export PHOENIX_ENDPOINT="http://localhost:6006"' in content
         assert "PHOENIX_API_KEY" not in content  # empty api_key should be skipped
-        assert 'export ARIZE_PROJECT_NAME="codex"' in content
+        # project_name lives in config.json only; not baked into the env file (#74).
+        assert "ARIZE_PROJECT_NAME" not in content
 
     def test_phoenix_env_file_with_api_key(self, tmp_path):
         """Env file for Phoenix with API key includes it."""
@@ -599,7 +601,8 @@ class TestCodexWriteEnvFile:
         assert 'export ARIZE_API_KEY="test-key"' in content
         assert 'export ARIZE_SPACE_ID="test-space"' in content
         assert 'export ARIZE_OTLP_ENDPOINT="otlp.arize.com:443"' in content
-        assert 'export ARIZE_PROJECT_NAME="codex"' in content
+        # project_name lives in config.json only; not baked into the env file (#74).
+        assert "ARIZE_PROJECT_NAME" not in content
 
     def test_env_file_creates_parent_dir(self, tmp_path):
         """_write_env_file creates parent directories."""

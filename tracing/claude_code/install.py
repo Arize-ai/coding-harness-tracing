@@ -75,7 +75,7 @@ def install(with_skills: bool = False) -> None:
     else:
         info("Using existing logging settings from config.json")
 
-    _register_claude_hooks(project_name)
+    _register_claude_hooks()
     if with_skills:
         symlink_skills(HARNESS_NAME)
     info(f"Claude Code tracing installed ({SETTINGS_FILE})")
@@ -105,7 +105,7 @@ def _save_settings(settings: dict) -> None:
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")
 
 
-def _register_claude_hooks(project_name: str = HARNESS_NAME) -> None:
+def _register_claude_hooks() -> None:
     """Read SETTINGS_FILE (or init to {}), add plugin reference + hook commands.
 
     Registering the local plugin (path → ~/.arize/harness/tracing/claude_code)
@@ -129,10 +129,12 @@ def _register_claude_hooks(project_name: str = HARNESS_NAME) -> None:
     if not has_plugin:
         plugins.append({"type": "local", "path": plugin_dir})
 
-    # Set env vars (only if absent)
+    # Set env vars (only if absent). We deliberately do NOT bake
+    # ARIZE_PROJECT_NAME here: the project name lives in config.json
+    # (harnesses.claude-code.project_name) so edits there take effect, and a
+    # baked env var would otherwise shadow config and leak into the Phoenix
+    # backend (which honors PHOENIX_PROJECT instead) — see issue #74.
     env_block = settings.setdefault("env", {})
-    if not env_block.get("ARIZE_PROJECT_NAME"):
-        env_block["ARIZE_PROJECT_NAME"] = project_name
     env_block.setdefault("ARIZE_TRACE_ENABLED", "true")
 
     # Register hooks

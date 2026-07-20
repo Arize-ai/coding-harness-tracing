@@ -83,7 +83,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
 
     session_id = input_json.get("sessionID") or "unknown"
 
-    project_name = env.project_name
+    project_name = env.project_name_for(SERVICE_NAME)
     if not project_name:
         project_name = _project_name_from_snapshot(input_json) or os.path.basename(os.getcwd())
 

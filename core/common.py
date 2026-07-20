@@ -67,6 +67,38 @@ class _Env:
     def user_id(self) -> str:
         return self.get_user_id()
 
+    def _resolve_target(self, harness_cfg: dict) -> str:
+        """Resolve the backend target: env-derived wins over the config target.
+
+        ``PHOENIX_ENDPOINT`` → phoenix; ``ARIZE_API_KEY``+``ARIZE_SPACE_ID`` →
+        arize; otherwise ``harness_cfg['target']`` (``""`` if unset). Mirrors the
+        precedence in :func:`resolve_backend` so project-name resolution stays in
+        sync with the backend actually chosen.
+        """
+        if self.phoenix_endpoint:
+            return "phoenix"
+        if self.api_key and self.space_id:
+            return "arize"
+        return harness_cfg.get("target", "") if isinstance(harness_cfg, dict) else ""
+
+    def project_name_for(self, service_name: str = "") -> str:
+        """Resolve a harness's project name from env + config.json, target-aware.
+
+        Determines the backend target (env-derived, else the config entry) and
+        returns the framework-scoped env override (``PHOENIX_PROJECT`` /
+        ``PHOENIX_PROJECT_NAME`` on Phoenix, ``ARIZE_PROJECT_NAME`` on Arize),
+        else the config ``project_name``, else ``""``. Adapters supply their own
+        fallback (service name or cwd basename) when this returns empty.
+        """
+        harness_cfg: dict = {}
+        harnesses = self._top_level_config.get("harnesses")
+        if isinstance(harnesses, dict):
+            entry = harnesses.get(service_name)
+            if isinstance(entry, dict):
+                harness_cfg = entry
+        target = self._resolve_target(harness_cfg)
+        return resolve_project_name(target, harness_cfg)
+
     @property
     def verbose(self) -> bool:
         return os.environ.get("ARIZE_VERBOSE", "").lower() == "true"
@@ -91,6 +123,13 @@ class _Env:
     @property
     def phoenix_endpoint(self) -> str:
         return os.environ.get("PHOENIX_ENDPOINT", "")
+
+    @property
+    def phoenix_project_name(self) -> str:
+        # Phoenix-native project override, consulted only on the Phoenix backend.
+        # PHOENIX_PROJECT is the var users reach for; PHOENIX_PROJECT_NAME mirrors
+        # the Phoenix SDK's own env var. PHOENIX_PROJECT wins if both are set.
+        return os.environ.get("PHOENIX_PROJECT", "") or os.environ.get("PHOENIX_PROJECT_NAME", "")
 
     @property
     def phoenix_api_key(self) -> str:
@@ -386,6 +425,31 @@ def get_target() -> str:
     return "none"
 
 
+def resolve_project_name(target: str, harness_cfg: dict, fallback: str = "") -> str:
+    """Resolve the project name for a resolved backend target.
+
+    The env override is framework-scoped so a value configured for one backend
+    never leaks into another: the Phoenix backend honors ``PHOENIX_PROJECT``
+    then ``PHOENIX_PROJECT_NAME``; the Arize backend honors
+    ``ARIZE_PROJECT_NAME``. When the target is unknown, either generic var is
+    accepted for backward compatibility.
+
+    This is why, on the Phoenix backend, the ``ARIZE_PROJECT_NAME`` the Claude
+    Code installer historically baked into ``settings.json`` is ignored — see
+    GitHub issue #74.
+
+    Precedence: framework env var > ``harness_cfg['project_name']`` > fallback.
+    """
+    if target == "phoenix":
+        env_override = env.phoenix_project_name
+    elif target == "arize":
+        env_override = env.project_name
+    else:
+        env_override = env.project_name or env.phoenix_project_name
+    cfg_val = harness_cfg.get("project_name", "") if isinstance(harness_cfg, dict) else ""
+    return env_override or cfg_val or fallback
+
+
 def resolve_backend(span_dict: dict) -> dict:
     """Resolve backend config for a span payload.
 
@@ -395,10 +459,12 @@ def resolve_backend(span_dict: dict) -> dict:
     purely via the runtime env block in ~/.claude/settings.json.
 
     Env vars consulted:
-      - PHOENIX_ENDPOINT     → target=phoenix (overrides config target)
-      - ARIZE_API_KEY        → target=arize when paired with ARIZE_SPACE_ID
-      - ARIZE_SPACE_ID       → required for arize when env-only
-      - ARIZE_PROJECT_NAME   → project_name override
+      - PHOENIX_ENDPOINT      → target=phoenix (overrides config target)
+      - ARIZE_API_KEY         → target=arize when paired with ARIZE_SPACE_ID
+      - ARIZE_SPACE_ID        → required for arize when env-only
+      - ARIZE_PROJECT_NAME    → project_name override (Arize backend only)
+      - PHOENIX_PROJECT /
+        PHOENIX_PROJECT_NAME  → project_name override (Phoenix backend only)
 
     service_name is pulled from the span's resource attributes
     (resource.attributes[service.name]).
@@ -436,16 +502,13 @@ def resolve_backend(span_dict: dict) -> dict:
 
     harness_cfg = cfg.get("harnesses", {}).get(service_name) or {}
 
-    # Resolve project_name: env > config > service_name
-    project_name = env.project_name or harness_cfg.get("project_name", "") or service_name
+    # Resolve target first: env-derived backend takes precedence over config target
+    target = env._resolve_target(harness_cfg)
 
-    # Resolve target: env-derived backend takes precedence over config target
-    if env.phoenix_endpoint:
-        target = "phoenix"
-    elif env.api_key and env.space_id:
-        target = "arize"
-    else:
-        target = harness_cfg.get("target", "")
+    # Resolve project_name (target-aware): framework env var > config > service_name.
+    # Env override is framework-scoped so ARIZE_PROJECT_NAME can't shadow a Phoenix
+    # project (and vice versa) — see resolve_project_name / issue #74.
+    project_name = resolve_project_name(target, harness_cfg, service_name)
 
     if not target:
         error(

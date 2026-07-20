@@ -12,6 +12,7 @@ Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response 
 | [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | [Claude Plugin](tracing/claude_code/README.md#claude-code-marketplace) | `claude-code-tracing` |
 | [OpenAI Codex CLI](tracing/codex/README.md) | [macOS / Linux](tracing/codex/README.md#macos--linux) · [Windows](tracing/codex/README.md#windows-powershell) | `codex` |
 | [Cursor IDE / CLI](tracing/cursor/README.md) | [macOS / Linux](tracing/cursor/README.md#macos--linux) · [Windows](tracing/cursor/README.md#windows-powershell) | `cursor` |
+| [Cursor IDE / CLI](tracing/cursor/README.md) | [Cursor Plugin](tracing/cursor/README.md#plugin-install) | `cursor-tracing` |
 | [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | [macOS / Linux](tracing/copilot/README.md#macos--linux) · [Windows](tracing/copilot/README.md#windows-powershell) | `copilot` |
 | [Gemini CLI](tracing/gemini/README.md) | [macOS / Linux](tracing/gemini/README.md#macos--linux) · [Windows](tracing/gemini/README.md#windows-powershell) | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | [macOS / Linux](tracing/kiro/README.md#macos--linux) · [Windows](tracing/kiro/README.md#windows-powershell) | `kiro` |
@@ -21,6 +22,8 @@ Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response 
 > **Each install link opens the ready-to-paste command for your OS — copy it and run it in a terminal**
 
 > Installing Claude Code tracing via the Claude marketplace? See [Claude Code Tracing](tracing/claude_code/README.md#claude-code-marketplace) for the marketplace-specific flow — backend credentials must be set directly in `~/.claude/settings.json` since the install wizard is skipped.
+
+> Installing Cursor tracing via the Cursor marketplace? The `cursor-tracing` plugin registers all hook events automatically; run the bundled `manage-cursor-tracing` skill once after install to write backend credentials to `~/.arize/harness/config.json`. See [Cursor IDE Tracing](tracing/cursor/README.md#plugin-install) for the full flow.
 
 ### Setup walkthrough
 
@@ -75,7 +78,7 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 | `ARIZE_VERBOSE` | `false` | Enables `[arize] ...` log lines in `~/.arize/harness/logs/<harness>.log`. Errors are always logged; verbose adds routine activity (hook fires, span emits, state transitions). |
 | `ARIZE_DRY_RUN` | `false` | Build spans but skip the backend send. Useful for confirming hook wiring without writing data. |
 | `ARIZE_USER_ID` | — | Attached to every span as `user.id`. Mirrors the `user_id` field in `config.json`; env wins if both are set. |
-| `ARIZE_PROJECT_NAME` | per-harness | Overrides `harnesses.<name>.project_name` from `config.json` for a single session. |
+| `ARIZE_PROJECT_NAME` | per-harness | Overrides `harnesses.<name>.project_name` from `config.json` for a single session. **Arize backend only** — ignored on the Phoenix backend (use `PHOENIX_PROJECT` there). |
 | `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. |
 | `ARIZE_TRACE_DEBUG` | `false` | Dump raw hook payloads as JSON under `~/.arize/harness/state/<harness>/debug/`. Codex hooks use this for span-tree inspection. |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Standard OTel attribute string (`team=payments,environment=prod`) added to every span. Overrides `config.json` `attributes`/`harnesses.<name>.attributes` on key collision; set per-harness by placing it in that harness's settings env block. |
@@ -86,6 +89,7 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 |----------|-------------|
 | `ARIZE_API_KEY`, `ARIZE_SPACE_ID`, `ARIZE_OTLP_ENDPOINT` | Arize AX credentials and endpoint. |
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | Phoenix endpoint and (optional) API key. |
+| `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | Project override on the **Phoenix backend** (mirrors `ARIZE_PROJECT_NAME` for Arize). `PHOENIX_PROJECT` wins if both are set; both override `harnesses.<name>.project_name`. |
 
 > Claude Code plugin reads env vars from `~/.claude/settings.json` under the `env` block
 
