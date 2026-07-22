@@ -899,7 +899,7 @@ class FileLock:
     def _release_msvcrt(self) -> None:
         if self._fd is not None:
             try:
-                msvcrt.locking(self._fd.fileno(), msvcrt.LK_UNLOCK, 1)  # type: ignore[attr-defined]
+                msvcrt.locking(self._fd.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
             except OSError:
                 pass
             try:
