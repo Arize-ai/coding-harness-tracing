@@ -2,6 +2,8 @@
 
 Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix) with [OpenInference](https://github.com/Arize-ai/openinference) spans. Each harness integration emits spans for prompts, tool calls, model responses, and session lifecycle events.
 
+Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response `LLM` spans, correlated `TOOL` spans, and a foreground subagent `AGENT` subtree when available. See [Claude Code trace structure and current limitations](tracing/claude_code/README.md#trace-structure) for details.
+
 ## Supported Harnesses
 
 | Harness Integration | Install command | Name |

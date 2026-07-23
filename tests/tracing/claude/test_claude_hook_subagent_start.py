@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for SubagentStart handler and its interaction with SubagentStop."""
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -8,6 +9,8 @@ import pytest
 
 from core.common import StateManager
 from tracing.claude_code.hooks.handlers import _handle_subagent_start, _handle_subagent_stop
+
+HOOKS_JSON = Path(__file__).parents[3] / "tracing" / "claude_code" / "hooks" / "hooks.json"
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -55,6 +58,12 @@ def captured_spans():
 # ---------------------------------------------------------------------------
 # SubagentStart tests
 # ---------------------------------------------------------------------------
+
+
+def test_hooks_json_registers_subagent_start():
+    hooks = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))["hooks"]
+    commands = [entry["command"] for matcher in hooks["SubagentStart"] for entry in matcher["hooks"]]
+    assert any("arize-hook-subagent-start" in command for command in commands)
 
 
 class TestSubagentStart:
