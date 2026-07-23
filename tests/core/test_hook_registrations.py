@@ -9,7 +9,10 @@ Validates that:
 """
 
 import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -118,13 +121,15 @@ class TestHooksJson:
         assert "hooks" in hooks_data
 
     def test_all_claude_events_registered(self, hooks_data):
-        """All 10 Claude hook events must be present."""
+        """All 12 Claude hook events must be present."""
         expected_events = {
             "SessionStart",
             "UserPromptSubmit",
             "PreToolUse",
             "PostToolUse",
+            "PostToolUseFailure",
             "Stop",
+            "SubagentStart",
             "SubagentStop",
             "StopFailure",
             "Notification",
@@ -221,6 +226,79 @@ class TestRunHookScript:
         text = (REPO_ROOT / "tracing" / "claude_code" / "scripts" / "run-hook").read_text()
         assert "CLAUDE_PLUGIN_ROOT" in text
         assert "CLAUDE_PLUGIN_DATA" in text
+
+    def test_run_hook_avoids_runtime_package_build(self):
+        """Hook bootstrap must not require pip, a build backend, or network access."""
+        text = (REPO_ROOT / "tracing" / "claude_code" / "scripts" / "run-hook").read_text()
+        assert "pip install" not in text
+        assert "source launchers" in text.lower()
+
+    def test_run_hook_bootstraps_on_python312_without_setuptools(self, tmp_path):
+        python312 = shutil.which("python3.12")
+        if python312 is None:
+            pytest.skip("Python 3.12 is not installed")
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "python3").symlink_to(python312)
+        data_dir = tmp_path / "data"
+        plugin_root = REPO_ROOT / "tracing" / "claude_code"
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "PIP_NO_INDEX": "1",
+            "CLAUDE_PLUGIN_ROOT": str(plugin_root),
+            "CLAUDE_PLUGIN_DATA": str(data_dir),
+        }
+
+        result = subprocess.run(
+            [str(plugin_root / "scripts" / "run-hook"), "arize-hook-stop"],
+            input="{}",
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, result.stderr
+        launcher = data_dir / "venv" / "bin" / "arize-hook-stop"
+        assert launcher.is_file() and os.access(launcher, os.X_OK)
+        assert "pip install" not in result.stderr
+        assert "Traceback" not in result.stderr
+        marker = data_dir / ".bootstrap.sha256"
+        assert re.fullmatch(r"[0-9a-f]{64}\n?", marker.read_text())
+        second = subprocess.run(
+            [str(plugin_root / "scripts" / "run-hook"), "arize-hook-stop"],
+            input="{}",
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30,
+        )
+        assert second.returncode == 0, second.stderr
+        assert "Setting up tracing venv" not in second.stderr
+        for name, target in EXPECTED_ENTRY_POINTS.items():
+            if not target.startswith("tracing.claude_code.hooks.handlers:"):
+                continue
+            hook_launcher = data_dir / "venv" / "bin" / name
+            assert hook_launcher.is_file() and os.access(hook_launcher, os.X_OK), name
+            assert target.split(":", 1)[1] in hook_launcher.read_text()
+
+        # An installation created by the previous pip-based bootstrap only has
+        # the old marker.  It must be migrated instead of reusing stale copied code.
+        launcher.write_text("#!/bin/sh\nexit 23\n")
+        launcher.chmod(0o755)
+        marker.unlink()
+        (data_dir / ".pyproject.sha256").write_text("legacy-marker")
+        migrated = subprocess.run(
+            [str(plugin_root / "scripts" / "run-hook"), "arize-hook-stop"],
+            input="{}",
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        assert "from hooks.handlers import stop" in launcher.read_text()
 
 
 # --- No bash/jq/curl references in docs ---

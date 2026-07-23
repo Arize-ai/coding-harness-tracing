@@ -14,7 +14,8 @@ HOOK_NAME="${1:?usage: run-hook <entry-point-name>}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT not set}"
 DATA_DIR="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 VENV_DIR="$DATA_DIR/venv"
-MARKER="$DATA_DIR/.pyproject.sha256"
+MARKER="$DATA_DIR/.bootstrap.sha256"
+BOOTSTRAP_SCRIPT="$PLUGIN_ROOT/scripts/run-hook"
 
 # --- Find the entry point binary ---
 find_entry_point() {
@@ -44,8 +45,8 @@ find_python() {
 needs_install() {
     [ ! -d "$VENV_DIR" ] && return 0
     [ ! -f "$MARKER" ] && return 0
-    # Compare pyproject.toml hash
-    current=$("$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PLUGIN_ROOT/pyproject.toml" 2>/dev/null) || return 0
+    # Compare the package manifest and dispatcher implementation fingerprint.
+    current=$("$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(b''.join(open(path,'rb').read() for path in sys.argv[1:])).hexdigest())" "$PLUGIN_ROOT/pyproject.toml" "$BOOTSTRAP_SCRIPT" 2>/dev/null) || return 0
     stored=$(cat "$MARKER" 2>/dev/null) || return 0
     [ "$current" != "$stored" ]
 }
@@ -69,27 +70,48 @@ bootstrap() {
         return 1
     }
 
-    # Find pip in the new venv
-    PIP=""
-    if [ -x "$VENV_DIR/bin/pip" ]; then PIP="$VENV_DIR/bin/pip"
-    elif [ -x "$VENV_DIR/Scripts/pip" ]; then PIP="$VENV_DIR/Scripts/pip"
-    elif [ -x "$VENV_DIR/Scripts/pip.exe" ]; then PIP="$VENV_DIR/Scripts/pip.exe"
-    fi
-    if [ -z "$PIP" ]; then
-        echo "[arize] pip not found in venv" >&2
+    # Runtime dependencies are intentionally empty.  Avoid invoking a build
+    # backend here: Python 3.12 venvs do not include setuptools, and hooks must
+    # bootstrap without network access.  Source launchers also pick up plugin
+    # updates immediately instead of copying stale code into the venv.
+    #
+    # Standing invariant: nothing is pip-installed into this venv.  Each launcher
+    # below runs `python -c "from hooks.handlers import ..."` with
+    # PYTHONPATH=$CLAUDE_PLUGIN_ROOT, so every runtime import must resolve from
+    # the plugin tree alone -- the `hooks.*` package and `core.*` (reachable via
+    # the tracing/claude_code/core symlink) -- using only the standard library.
+    # No code reachable from a hook may import `tracing.*` or any third-party
+    # package: it would resolve on the pip-installed path but break on the
+    # plugin path only, where tests do not exercise it.
+    if [ -x "$VENV_DIR/bin/python" ]; then VENV_PYTHON="$VENV_DIR/bin/python"
+    elif [ -x "$VENV_DIR/Scripts/python.exe" ]; then VENV_PYTHON="$VENV_DIR/Scripts/python.exe"
+    else
+        echo "[arize] Python not found in venv" >&2
         return 1
     fi
+    LAUNCHER_DIR=${VENV_PYTHON%/*}
 
-    echo "[arize] Installing claude-code-tracing from $PLUGIN_ROOT..." >&2
-    if ! "$PIP" install --quiet "$PLUGIN_ROOT" >&2; then
-        echo "[arize] pip install failed" >&2
-        rm -f "$MARKER"
-        return 1
-    fi
+    for spec in \
+        session-start:session_start session-end:session_end stop:stop \
+        stop-failure:stop_failure subagent-start:subagent_start \
+        subagent-stop:subagent_stop notification:notification \
+        permission-request:permission_request pre-tool-use:pre_tool_use \
+        post-tool-use:post_tool_use post-tool-use-failure:post_tool_use_failure \
+        user-prompt-submit:user_prompt_submit user-prompt-expansion:user_prompt_expansion \
+        pre-compact:pre_compact post-compact:post_compact \
+        permission-denied:permission_denied; do
+        suffix=${spec%%:*}
+        function_name=${spec#*:}
+        launcher="$LAUNCHER_DIR/arize-hook-$suffix"
+        printf '%s\n' '#!/bin/sh' \
+            "PYTHONPATH=\"\$CLAUDE_PLUGIN_ROOT\${PYTHONPATH:+:\$PYTHONPATH}\" exec \"$VENV_PYTHON\" -c 'from hooks.handlers import $function_name; $function_name()'" \
+            > "$launcher"
+        chmod +x "$launcher"
+    done
 
-    # Save hash marker
-    "$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" \
-        "$PLUGIN_ROOT/pyproject.toml" > "$MARKER"
+    # Save bootstrap fingerprint.
+    "$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(b''.join(open(path,'rb').read() for path in sys.argv[1:])).hexdigest())" \
+        "$PLUGIN_ROOT/pyproject.toml" "$BOOTSTRAP_SCRIPT" > "$MARKER"
 
     echo "[arize] Tracing venv ready" >&2
 }
