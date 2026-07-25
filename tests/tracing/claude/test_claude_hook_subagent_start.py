@@ -145,7 +145,7 @@ class TestSubagentStopWithStoredState:
         assert state.get("subagent_a1_prompt") is None
 
     def test_subagent_stop_uses_stored_prompt_as_input(self, mock_resolve, state, captured_spans):
-        """Stored prompt appears as input.value on the CHAIN span."""
+        """Stored prompt appears as input.value on the AGENT span."""
         state.set("current_trace_id", "t" * 32)
         state.set("current_trace_span_id", "s" * 16)
         state.set("subagent_a1_prompt", "do work")
@@ -154,4 +154,5 @@ class TestSubagentStopWithStoredState:
         assert len(captured_spans) == 1
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert attrs["openinference.span.kind"]["stringValue"] == "AGENT"
         assert attrs["input.value"]["stringValue"] == "do work"

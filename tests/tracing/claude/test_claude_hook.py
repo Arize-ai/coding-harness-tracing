@@ -970,7 +970,7 @@ class TestSubagentStop:
         assert len(captured_spans) == 1
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
-        assert attrs["openinference.span.kind"]["stringValue"] == "CHAIN"
+        assert attrs["openinference.span.kind"]["stringValue"] == "AGENT"
         assert attrs["subagent.type"]["stringValue"] == "code-review"
         assert "I found the issue." in attrs["output.value"]["stringValue"]
 
