@@ -990,7 +990,7 @@ def _handle_subagent_start(input_json: dict) -> None:
 
 
 def _handle_subagent_stop(input_json: dict) -> None:
-    """Handle subagent_stop: parse subagent transcript and send CHAIN span."""
+    """Handle subagent_stop: parse subagent transcript and send AGENT span."""
     state = resolve_session(input_json)
     trace_id = state.get("current_trace_id")
     if trace_id is None:
@@ -1049,7 +1049,7 @@ def _handle_subagent_stop(input_json: dict) -> None:
     # Build attributes
     attrs = {
         "session.id": session_id,
-        "openinference.span.kind": "CHAIN",
+        "openinference.span.kind": "AGENT",
         "subagent.id": agent_id,
         "subagent.type": agent_type,
         "llm.model_name": model,
@@ -1065,7 +1065,7 @@ def _handle_subagent_stop(input_json: dict) -> None:
 
     span = build_span(
         f"Subagent: {agent_type}",
-        "CHAIN",
+        "AGENT",
         span_id,
         trace_id,
         parent or "",
