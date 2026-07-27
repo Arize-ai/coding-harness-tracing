@@ -46,6 +46,9 @@ jobs:
             build-mode: none
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Don't leave the job's git token in .git/config after checkout.
+          persist-credentials: false
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3.37.3
