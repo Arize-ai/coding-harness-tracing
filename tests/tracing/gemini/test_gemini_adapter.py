@@ -185,6 +185,21 @@ class TestEnsureSessionInitialized:
         adapter.ensure_session_initialized(sm, {"cwd": "/home/user/other-project"})
         assert sm.get("project_name") == "my-env-project"
 
+    def test_project_name_from_config(self, gemini_state_dir, monkeypatch):
+        """config.json project_name is honored when no env override is set (#74)."""
+        from core.common import env as core_env
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
+        cfg = {"harnesses": {"gemini": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        sm = self._make_state(gemini_state_dir, "proj-config")
+        adapter.ensure_session_initialized(sm, {"cwd": "/home/user/other-project"})
+        assert sm.get("project_name") == "from-config"
+
     def test_project_name_from_cwd(self, gemini_state_dir, disable_env_vars):
         """project_name falls back to basename of cwd."""
         sm = self._make_state(gemini_state_dir, "proj-cwd")

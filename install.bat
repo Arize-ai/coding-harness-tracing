@@ -28,11 +28,11 @@ if /i "%~1"=="--help"    goto :usage
 if /i "%~1"=="help"      goto :usage
 if /i "%~1"=="--with-skills" ( set "WITH_SKILLS=--with-skills" & shift & goto :parse_args )
 if /i "%~1"=="--branch" ( set "INSTALL_BRANCH=%~2" & set "TARBALL_URL=https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/%~2.tar.gz" & shift & shift & goto :parse_args )
-for %%C in (claude codex copilot cursor gemini kiro antigravity opencode) do if /i "%~1"=="%%C" ( set "COMMAND=%%C" & shift & goto :parse_args )
+for %%C in (claude codex copilot cursor gemini kiro antigravity opencode omp) do if /i "%~1"=="%%C" ( set "COMMAND=%%C" & shift & goto :parse_args )
 if /i "%~1"=="update" ( set "COMMAND=update" & shift & goto :parse_args )
 if /i "%~1"=="uninstall" (
     set "COMMAND=uninstall" & shift
-    for %%C in (claude codex copilot cursor gemini kiro antigravity opencode) do if /i "%~1"=="%%C" ( set "UNINSTALL_HARNESS=%%C" & shift )
+    for %%C in (claude codex copilot cursor gemini kiro antigravity opencode omp) do if /i "%~1"=="%%C" ( set "UNINSTALL_HARNESS=%%C" & shift )
     goto :parse_args
 )
 echo [arize] Unknown argument: %~1 >&2
@@ -41,7 +41,7 @@ goto :usage
 if "%COMMAND%"=="" ( echo [arize] No command specified >&2 & goto :usage )
 
 REM --- Harness name -> directory mapping ---
-REM claude->tracing\claude_code  codex->tracing\codex  copilot->tracing\copilot  cursor->tracing\cursor  gemini->tracing\gemini  kiro->tracing\kiro  antigravity->tracing\antigravity  opencode->tracing\opencode
+REM claude->tracing\claude_code  codex->tracing\codex  copilot->tracing\copilot  cursor->tracing\cursor  gemini->tracing\gemini  kiro->tracing\kiro  antigravity->tracing\antigravity  opencode->tracing\opencode  omp->tracing\omp
 
 REM --- Dispatch ---
 if "%COMMAND%"=="update"    goto :cmd_update
@@ -55,6 +55,8 @@ call :bootstrap_repo
 if %ERRORLEVEL% neq 0 exit /b 1
 call :setup_venv
 if %ERRORLEVEL% neq 0 exit /b 1
+REM Migrate legacy config.yaml -> config.json (no-op if nothing to migrate)
+if exist "%VENV_PYTHON%" "%VENV_PYTHON%" -m core.config migrate
 call :resolve_dir "%COMMAND%"
 set "_PY=%INSTALL_DIR%\%HARNESS_DIR%\install.py"
 if not exist "%_PY%" ( echo [arize] install.py not found at %_PY% >&2 & exit /b 1 )
@@ -92,6 +94,8 @@ if "!_UPDATE_NEED_VENV!"=="1" (
     echo [arize] Reinstalling package...
     "%VENV_PIP%" install --quiet "%INSTALL_DIR%" >nul 2>&1
 )
+REM Migrate legacy config.yaml -> config.json (no-op if nothing to migrate)
+if exist "%VENV_PYTHON%" "%VENV_PYTHON%" -m core.config migrate
 if exist "%VENV_PYTHON%" (
     for /f "usebackq delims=" %%H in (`"%VENV_PYTHON%" -c "from core.setup import list_installed_harnesses; [print(h) for h in list_installed_harnesses()]" 2^>nul`) do (
         call :resolve_dir "%%H"
@@ -208,6 +212,7 @@ if /i "%~1"=="gemini"      set "HARNESS_DIR=tracing\gemini"
 if /i "%~1"=="kiro"        set "HARNESS_DIR=tracing\kiro"
 if /i "%~1"=="antigravity" set "HARNESS_DIR=tracing\antigravity"
 if /i "%~1"=="opencode"    set "HARNESS_DIR=tracing\opencode"
+if /i "%~1"=="omp"         set "HARNESS_DIR=tracing\omp"
 if "%HARNESS_DIR%"=="" ( echo [arize] Unknown harness: %~1 >&2 & exit /b 1 )
 goto :eof
 
@@ -227,6 +232,7 @@ echo     gemini              Install tracing for Gemini CLI
 echo     kiro                Install tracing for Kiro CLI
 echo     antigravity         Install tracing for Google Antigravity CLI/IDE
 echo     opencode            Install tracing for opencode
+echo     omp                 Install tracing for Oh My Pi (omp)
 echo     update              Update to latest and reinstall all harnesses
 echo     uninstall [harness] Remove one harness or full wipe
 echo.

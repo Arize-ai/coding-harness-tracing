@@ -1,0 +1,5 @@
+{
+  "type": "before_agent_start",
+  "sessionId": "omp_sess_1",
+  "prompt": "list files and edit main.py"
+}

@@ -181,13 +181,11 @@ def _handle_stop(input_json: dict, state: StateManager) -> None:
     if user_id:
         attrs["user.id"] = user_id
 
-    # Enrich with sidecar data
-    try:
-        turn_index = max(int(trace_count) - 1, -1)
-    except (TypeError, ValueError):
-        turn_index = -1
+    # Enrich with sidecar data — always use -1 (most recent turn).
+    # trace_count can drift from the sidecar turn count, so a fixed index
+    # would pick the wrong turn or go out of bounds.
     sidecar = load_session_sidecar(session_id)
-    attrs.update(extract_sidecar_attrs(sidecar, turn_index=turn_index))
+    attrs.update(extract_sidecar_attrs(sidecar, turn_index=-1))
 
     span = build_span(
         f"Turn {trace_count}",

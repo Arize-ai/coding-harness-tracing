@@ -139,6 +139,9 @@ class TestHarnessMapping:
     def test_opencode_maps_to_tracing_opencode(self):
         assert "opencode)" in self.text and '"tracing/opencode"' in self.text
 
+    def test_omp_maps_to_tracing_omp(self):
+        assert "omp)" in self.text and '"tracing/omp"' in self.text
+
 
 # ---------------------------------------------------------------------------
 # Usage output tests
@@ -157,7 +160,7 @@ class TestUsageOutput:
 
     @pytest.mark.parametrize(
         "cmd",
-        ["claude", "codex", "copilot", "cursor", "opencode", "update", "uninstall"],
+        ["claude", "codex", "copilot", "cursor", "opencode", "omp", "update", "uninstall"],
     )
     def test_command_listed(self, cmd):
         assert cmd in self.text
@@ -239,7 +242,7 @@ class TestDispatchLogic:
 
     def test_dispatches_harness_commands(self):
         """claude|codex|copilot|cursor|gemini|kiro (+ any later additions) should be dispatched."""
-        # Match the alternation prefix and any tail of extra harnesses (e.g. ``|antigravity|opencode``).
+        # Match the alternation prefix and any tail of extra harnesses (e.g. ``|antigravity|opencode|omp``).
         assert re.search(
             r"claude\|codex\|copilot\|cursor\|gemini\|kiro(\)|\|[a-z|]+\))", self.text
         ), "main() case dispatch must include the core six harnesses in order"

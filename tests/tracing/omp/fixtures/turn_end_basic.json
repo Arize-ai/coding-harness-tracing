@@ -1,0 +1,47 @@
+{
+  "type": "turn_end",
+  "sessionId": "s_basic",
+  "turnIndex": 0,
+  "message": {
+    "role": "assistant",
+    "content": [
+      { "type": "text", "text": "I'll list files then edit." },
+      { "type": "thinking", "text": "private reasoning" },
+      { "type": "toolCall", "id": "call_bash_1", "name": "bash", "arguments": { "command": "ls -la" } },
+      { "type": "toolCall", "id": "call_edit_1", "name": "edit", "arguments": { "filePath": "/tmp/main.py" } }
+    ],
+    "api": "messages",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4",
+    "usage": {
+      "input": 100,
+      "output": 50,
+      "cacheRead": 30,
+      "cacheWrite": 5,
+      "totalTokens": 185,
+      "reasoningTokens": 7,
+      "cost": { "input": 0.001, "output": 0.002, "cacheRead": 0.0001, "cacheWrite": 0.00005, "total": 0.0125 }
+    },
+    "stopReason": "tool_use",
+    "timestamp": 5000,
+    "duration": 3000
+  },
+  "toolResults": [
+    {
+      "role": "toolResult",
+      "toolCallId": "call_bash_1",
+      "toolName": "bash",
+      "content": [{ "type": "text", "text": "total 4\nfile.py" }],
+      "isError": false,
+      "timestamp": 5100
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_edit_1",
+      "toolName": "edit",
+      "content": [{ "type": "text", "text": "edited main.py" }],
+      "isError": false,
+      "timestamp": 5200
+    }
+  ]
+}
