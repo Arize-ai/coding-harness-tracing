@@ -14,14 +14,17 @@ Payload shape:
 message ID and tool callID. `close` does the same and then emits the
 Turn CHAIN root for the pending turn.
 """
+
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from typing import Any, Optional
 
 from core.common import (
+    FileLock,
     StateManager,
     build_span,
     debug_dump,
@@ -116,20 +119,116 @@ def _send_span_async(span_dict: dict) -> None:
 
 
 def _text_of(parts: list) -> str:
-    """Concatenate the text of all TextPart entries in `parts`."""
+    """Concatenate well-formed TextPart strings, skipping malformed leaves."""
     chunks = []
     for p in parts or []:
         if not isinstance(p, dict):
             continue
         if p.get("type") == "text":
-            t = p.get("text") or ""
-            if t:
-                chunks.append(t)
+            text = p.get("text")
+            if isinstance(text, str) and text:
+                chunks.append(text)
     return "".join(chunks)
+
+
+def _string_value(value: Any, default: str = "") -> str:
+    """Return a safe string representation for an untrusted SDK leaf value."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return default
+    try:
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        return default
+
+
+def _timestamp_value(value: Any, default: Optional[int] = None) -> Optional[int]:
+    """Coerce an SDK timestamp without allowing malformed leaves to abort close."""
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _integer_value(value: Any, default: int = 0) -> int:
+    """Coerce an integer counter, rejecting malformed and non-finite leaves."""
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _tool_parts(parts: list) -> list:
     return [p for p in (parts or []) if isinstance(p, dict) and p.get("type") == "tool"]
+
+
+def _validated_messages(messages: Any, session_id: str) -> Optional[list[dict]]:
+    """Return an SDK snapshot only when every record belongs to one session.
+
+    Snapshot ownership is a privacy boundary: never relabel foreign messages or
+    parts with the enclosing session ID. Nested containers used by the
+    reconciler are validated here as well so malformed SDK data fails closed.
+    """
+    if not session_id or not isinstance(messages, list):
+        return None
+    for message in messages:
+        if not isinstance(message, dict):
+            return None
+        info = message.get("info")
+        parts = message.get("parts")
+        if not isinstance(info, dict) or not isinstance(parts, list):
+            return None
+        message_id = info.get("id")
+        if not message_id or info.get("sessionID") != session_id:
+            return None
+        if not isinstance(info.get("time") or {}, dict):
+            return None
+        tokens = info.get("tokens") or {}
+        if not isinstance(tokens, dict) or not isinstance(tokens.get("cache") or {}, dict):
+            return None
+        for part in parts:
+            if not isinstance(part, dict):
+                return None
+            if part.get("sessionID") != session_id:
+                return None
+            state = part.get("state") or {}
+            if not isinstance(state, dict) or not isinstance(state.get("time") or {}, dict):
+                return None
+    return messages
+
+
+def _message_span_id(state: StateManager, message_id: str) -> str:
+    """Return the stable span ID reserved for an OpenCode assistant message."""
+    key = f"span_msg_{message_id}"
+    existing = state.get(key)
+    if existing:
+        return existing
+    span_id = generate_span_id()
+    state.set(key, span_id)
+    return span_id
+
+
+def _tool_span_id(state: StateManager, call_id: str) -> str:
+    """Return the stable span ID reserved for one OpenCode tool call."""
+    key = f"span_tool_{call_id}"
+    existing = state.get(key)
+    if existing:
+        return existing
+    span_id = generate_span_id()
+    state.set(key, span_id)
+    return span_id
+
+
+def _agent_span_id(state: StateManager, session_id: str) -> str:
+    """Return the stable span ID reserved for one child session."""
+    key = f"span_agent_{session_id}"
+    existing = state.get(key)
+    if existing:
+        return existing
+    span_id = generate_span_id()
+    state.set(key, span_id)
+    return span_id
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +311,8 @@ def _open_turn_if_new(state: StateManager, user_info: dict, user_parts: list) ->
     state.set("current_trace_id", generate_trace_id())
     state.set("current_trace_span_id", generate_span_id())
 
-    t_created = (user_info.get("time") or {}).get("created")
-    start_ms = str(t_created) if t_created is not None else str(get_timestamp_ms())
+    t_created = _timestamp_value((user_info.get("time") or {}).get("created"), get_timestamp_ms())
+    start_ms = str(t_created)
     state.set("current_trace_start_time", start_ms)
     state.set("current_trace_prompt", _text_of(user_parts))
     state.increment("trace_count")
@@ -257,60 +356,56 @@ def _per_tool_attrs(tool_name: str, tool_input: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _emit_llm_span(state: StateManager, info: dict, parts: list) -> None:
-    msg_id = info.get("id") or ""
+def _emit_llm_span(
+    state: StateManager,
+    info: dict,
+    parts: list,
+    *,
+    parent_span_id_override: str = "",
+    trace_id_override: str = "",
+    session_id_override: str = "",
+    prompt_override: Optional[str] = None,
+) -> None:
+    msg_id = info.get("id") if isinstance(info.get("id"), str) else ""
     if not msg_id:
         return
     if state.get(f"emitted_msg_{msg_id}") is not None:
         return
 
-    trace_id = state.get("current_trace_id")
-    parent_span_id = state.get("current_trace_span_id")
+    trace_id = trace_id_override or state.get("current_trace_id")
+    parent_span_id = parent_span_id_override or state.get("current_trace_span_id")
     if not trace_id or not parent_span_id:
         return
 
-    session_id = state.get("session_id") or ""
+    session_id = session_id_override or state.get("session_id") or ""
     project_name = state.get("project_name") or ""
     user_id = state.get("user_id") or ""
 
-    model_id = info.get("modelID") or ""
-    provider_id = info.get("providerID") or ""
+    model_id = _string_value(info.get("modelID"))
+    provider_id = _string_value(info.get("providerID"))
     tokens = info.get("tokens") or {}
     cache = tokens.get("cache") or {}
-    try:
-        input_tokens = int(tokens.get("input") or 0)
-    except (TypeError, ValueError):
-        input_tokens = 0
-    try:
-        output_tokens = int(tokens.get("output") or 0)
-    except (TypeError, ValueError):
-        output_tokens = 0
-    try:
-        reasoning_tokens = int(tokens.get("reasoning") or 0)
-    except (TypeError, ValueError):
-        reasoning_tokens = 0
-    try:
-        cache_read = int(cache.get("read") or 0)
-    except (TypeError, ValueError):
-        cache_read = 0
-    try:
-        cache_write = int(cache.get("write") or 0)
-    except (TypeError, ValueError):
-        cache_write = 0
+    input_tokens = _integer_value(tokens.get("input"))
+    output_tokens = _integer_value(tokens.get("output"))
+    reasoning_tokens = _integer_value(tokens.get("reasoning"))
+    cache_read = _integer_value(cache.get("read"))
+    cache_write = _integer_value(cache.get("write"))
     try:
         cost = float(info.get("cost") or 0)
     except (TypeError, ValueError):
         cost = 0.0
+    if not math.isfinite(cost):
+        cost = 0.0
 
     time_block = info.get("time") or {}
-    start_ms = time_block.get("created")
-    end_ms = time_block.get("completed")
+    start_ms = _timestamp_value(time_block.get("created"))
     if start_ms is None:
         start_ms = get_timestamp_ms()
+    end_ms = _timestamp_value(time_block.get("completed"))
     if end_ms is None:
         end_ms = start_ms
 
-    prompt = state.get("current_trace_prompt") or ""
+    prompt = (state.get("current_trace_prompt") or "") if prompt_override is None else prompt_override
     output_text = _text_of(parts)
 
     # OpenInference: ``prompt`` is the total prompt and the cache buckets are
@@ -324,6 +419,7 @@ def _emit_llm_span(state: StateManager, info: dict, parts: list) -> None:
         "session.id": session_id,
         "project.name": project_name,
         "openinference.span.kind": "LLM",
+        "llm.message_id": msg_id,
         "llm.model_name": model_id,
         "llm.provider": provider_id,
         "llm.token_count.prompt": prompt_tokens,
@@ -344,10 +440,11 @@ def _emit_llm_span(state: StateManager, info: dict, parts: list) -> None:
         attrs["user.id"] = user_id
 
     span_name = f"LLM: {model_id}" if model_id else "LLM"
+    span_id = _message_span_id(state, msg_id)
     span = build_span(
         span_name,
         "LLM",
-        generate_span_id(),
+        span_id,
         trace_id,
         parent_span_id,
         start_ms,
@@ -365,8 +462,17 @@ def _emit_llm_span(state: StateManager, info: dict, parts: list) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _emit_tool_span(state: StateManager, tool_part: dict) -> None:
-    call_id = tool_part.get("callID") or ""
+def _emit_tool_span(
+    state: StateManager,
+    tool_part: dict,
+    assistant_message_id: str = "",
+    assistant_session_id: str = "",
+    *,
+    trace_id_override: str = "",
+    turn_span_id_override: str = "",
+    session_id_override: str = "",
+) -> None:
+    call_id = tool_part.get("callID") if isinstance(tool_part.get("callID"), str) else ""
     if not call_id:
         return
     if state.get(f"emitted_tool_{call_id}") is not None:
@@ -377,32 +483,50 @@ def _emit_tool_span(state: StateManager, tool_part: dict) -> None:
     if status not in ("completed", "error"):
         return
 
-    trace_id = state.get("current_trace_id")
-    parent_span_id = state.get("current_trace_span_id")
-    if not trace_id or not parent_span_id:
+    trace_id = trace_id_override or state.get("current_trace_id")
+    turn_span_id = turn_span_id_override or state.get("current_trace_span_id")
+    if not trace_id or not turn_span_id:
         return
 
-    session_id = state.get("session_id") or ""
+    # ToolPart.messageID is authoritative in the OpenCode SDK. Validate it
+    # against the containing assistant message before reserving an LLM parent;
+    # malformed or legacy payloads retain an honest Turn-root fallback.
+    tool_message_id = tool_part.get("messageID") if isinstance(tool_part.get("messageID"), str) else ""
+    tool_session_id = tool_part.get("sessionID") if isinstance(tool_part.get("sessionID"), str) else ""
+    message_link_is_authoritative = bool(
+        assistant_message_id
+        and assistant_session_id
+        and tool_message_id == assistant_message_id
+        and tool_session_id == assistant_session_id
+    )
+    if message_link_is_authoritative and state.get(f"emitted_msg_{tool_message_id}") is not None:
+        parent_span_id = _message_span_id(state, assistant_message_id)
+        parentage = "assistant_message"
+    else:
+        parent_span_id = turn_span_id
+        parentage = "turn_fallback"
+
+    session_id = session_id_override or state.get("session_id") or ""
     project_name = state.get("project_name") or ""
     user_id = state.get("user_id") or ""
 
-    tool_name = tool_part.get("tool") or "unknown"
+    tool_name = _string_value(tool_part.get("tool"), "unknown") or "unknown"
     tool_input = tstate.get("input") or {}
 
     time_block = tstate.get("time") or {}
-    start_ms = time_block.get("start")
-    end_ms = time_block.get("end")
+    start_ms = _timestamp_value(time_block.get("start"))
     if start_ms is None:
         start_ms = get_timestamp_ms()
+    end_ms = _timestamp_value(time_block.get("end"))
     if end_ms is None:
         end_ms = start_ms
 
     is_error = status == "error"
     if is_error:
-        output_raw = tstate.get("error") or ""
+        output_raw = _string_value(tstate.get("error"))
     else:
-        output_raw = tstate.get("output") or ""
-    title_raw = tstate.get("title") or ""
+        output_raw = _string_value(tstate.get("output"))
+    title_raw = _string_value(tstate.get("title"))
 
     input_json_str = json.dumps(tool_input) if isinstance(tool_input, (dict, list)) else str(tool_input)
 
@@ -413,6 +537,8 @@ def _emit_tool_span(state: StateManager, tool_part: dict) -> None:
         "project.name": project_name,
         "openinference.span.kind": "TOOL",
         "tool.name": tool_name,
+        "tool.call_id": call_id,
+        "tracing.parentage": parentage,
         "input.value": redact_content(env.log_tool_content, input_json_str),
         "output.value": redact_content(env.log_tool_content, output_raw),
     }
@@ -429,7 +555,7 @@ def _emit_tool_span(state: StateManager, tool_part: dict) -> None:
     span = build_span(
         tool_name,
         "TOOL",
-        generate_span_id(),
+        _tool_span_id(state, call_id),
         trace_id,
         parent_span_id,
         start_ms,
@@ -441,8 +567,197 @@ def _emit_tool_span(state: StateManager, tool_part: dict) -> None:
         status_message=status_message,
     )
     _send_span_async(span)
+    if message_link_is_authoritative:
+        state.set(f"tool_session_{call_id}", assistant_session_id)
+        state.set(f"tool_trace_{call_id}", trace_id)
+        state.set(f"tool_turn_span_{call_id}", turn_span_id)
     state.set(f"emitted_tool_{call_id}", "1")
     state.increment("tool_count")
+
+
+# ---------------------------------------------------------------------------
+# Child session / subagent spans
+# ---------------------------------------------------------------------------
+
+
+_PENDING_CHILD_FINALIZERS = "pending_child_finalizers"
+
+
+def _pending_child_finalizers(state: StateManager) -> dict[str, dict]:
+    raw = state.get(_PENDING_CHILD_FINALIZERS) or ""
+    try:
+        value = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _remember_child_finalizer(state: StateManager, child: dict, info: dict) -> None:
+    child_session_id = child.get("sessionID")
+    if not isinstance(child_session_id, str) or not child_session_id:
+        return
+    pending = _pending_child_finalizers(state)
+    pending[child_session_id] = {
+        "sessionID": child_session_id,
+        "parentSessionID": child.get("parentSessionID"),
+        "parentCallID": child.get("parentCallID"),
+        "info": {
+            "id": info.get("id"),
+            "parentID": info.get("parentID"),
+            "time": info.get("time") if isinstance(info.get("time"), dict) else {},
+            "agent": info.get("agent"),
+        },
+        "messages": [],
+    }
+    state.set(_PENDING_CHILD_FINALIZERS, json.dumps(pending, separators=(",", ":"), sort_keys=True))
+
+
+def _forget_child_finalizer(state: StateManager, child_session_id: str) -> None:
+    pending = _pending_child_finalizers(state)
+    if pending.pop(child_session_id, None) is None:
+        return
+    if pending:
+        state.set(_PENDING_CHILD_FINALIZERS, json.dumps(pending, separators=(",", ":"), sort_keys=True))
+    else:
+        state.delete(_PENDING_CHILD_FINALIZERS)
+
+
+def _emit_child_session(state: StateManager, child: dict, *, finalize_agent: bool = False) -> None:
+    """Emit one child AGENT subtree linked to its authoritative task call."""
+    child_session_id = child.get("sessionID") if isinstance(child.get("sessionID"), str) else ""
+    parent_call_id = child.get("parentCallID") if isinstance(child.get("parentCallID"), str) else ""
+    transport_parent_session = child.get("parentSessionID") if isinstance(child.get("parentSessionID"), str) else ""
+    if not child_session_id or not parent_call_id:
+        return
+    if state.get(f"emitted_tool_{parent_call_id}") is None:
+        return
+
+    info = child.get("info") or {}
+    if not isinstance(info, dict):
+        return
+    expected_parent_session = state.get(f"tool_session_{parent_call_id}") or ""
+    sdk_parent_session = info.get("parentID") if isinstance(info.get("parentID"), str) else ""
+    if (
+        not expected_parent_session
+        or transport_parent_session != expected_parent_session
+        or sdk_parent_session != expected_parent_session
+        or info.get("id") != child_session_id
+    ):
+        return
+
+    trace_id = state.get(f"tool_trace_{parent_call_id}") or ""
+    task_turn_span_id = state.get(f"tool_turn_span_{parent_call_id}") or ""
+    if not trace_id or not task_turn_span_id:
+        return
+
+    messages = _validated_messages(child.get("messages"), child_session_id)
+    if messages is None:
+        return
+    if not finalize_agent and state.get(f"emitted_agent_{child_session_id}") is None:
+        _remember_child_finalizer(state, child, info)
+    agent_span_id = _agent_span_id(state, child_session_id)
+    prompt = ""
+    final_output = ""
+    final_completed = None
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        message_info = message.get("info") or {}
+        parts = message.get("parts") or []
+        role = message_info.get("role")
+        if role == "user" and not prompt:
+            prompt = _text_of(parts)
+        elif role == "assistant":
+            completed = (message_info.get("time") or {}).get("completed")
+            if completed is not None:
+                final_output = _text_of(parts)
+                final_completed = completed
+
+    if finalize_agent and state.get(f"emitted_agent_{child_session_id}") is None:
+        time_block = info.get("time") or {}
+        start_ms = _timestamp_value(time_block.get("created"))
+        end_ms = _timestamp_value(time_block.get("updated")) or _timestamp_value(final_completed)
+        if start_ms is None:
+            start_ms = get_timestamp_ms()
+        if end_ms is None:
+            end_ms = start_ms
+        agent_name = _string_value(info.get("agent"), "subagent") or "subagent"
+        attrs: dict[str, Any] = {
+            "session.id": child_session_id,
+            "session.parent_id": child.get("parentSessionID") or info.get("parentID") or "",
+            "project.name": state.get("project_name") or "",
+            "openinference.span.kind": "AGENT",
+            "agent.name": agent_name,
+            "input.value": redact_content(env.log_prompts, prompt),
+            "output.value": redact_content(env.log_prompts, final_output),
+        }
+        user_id = state.get("user_id") or ""
+        if user_id:
+            attrs["user.id"] = user_id
+        span = build_span(
+            f"Agent: {agent_name}",
+            "AGENT",
+            agent_span_id,
+            trace_id,
+            _tool_span_id(state, parent_call_id),
+            start_ms,
+            end_ms,
+            attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
+        _send_span_async(span)
+        state.set(f"emitted_agent_{child_session_id}", "1")
+    if finalize_agent and state.get(f"emitted_agent_{child_session_id}") is not None:
+        _forget_child_finalizer(state, child_session_id)
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        message_info = message.get("info") or {}
+        parts = message.get("parts") or []
+        if message_info.get("role") != "assistant":
+            continue
+        if (message_info.get("time") or {}).get("completed") is not None:
+            _emit_llm_span(
+                state,
+                message_info,
+                parts,
+                parent_span_id_override=agent_span_id,
+                trace_id_override=trace_id,
+                session_id_override=child_session_id,
+                prompt_override=prompt,
+            )
+        for tool_part in _tool_parts(parts):
+            _emit_tool_span(
+                state,
+                tool_part,
+                message_info.get("id") or "",
+                message_info.get("sessionID") or "",
+                trace_id_override=trace_id,
+                turn_span_id_override=agent_span_id,
+                session_id_override=child_session_id,
+            )
+
+
+def _reconcile_child_sessions(state: StateManager, child_sessions: list, *, finalize_agents: bool = False) -> None:
+    if not isinstance(child_sessions, list):
+        return
+    for child in child_sessions:
+        if isinstance(child, dict):
+            try:
+                _emit_child_session(state, child, finalize_agent=finalize_agents)
+            except Exception:
+                # One malformed/vanished child must not prevent root close.
+                continue
+    if finalize_agents:
+        for child in list(_pending_child_finalizers(state).values()):
+            if isinstance(child, dict):
+                try:
+                    _emit_child_session(state, child, finalize_agent=True)
+                except Exception:
+                    continue
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +795,7 @@ def _reconcile_messages(state: StateManager, messages: list) -> Optional[dict]:
             # Always process the tool parts (they may be completed even if
             # the assistant message has not yet completed in some snapshots).
             for tp in _tool_parts(parts):
-                _emit_tool_span(state, tp)
+                _emit_tool_span(state, tp, info.get("id") or "", info.get("sessionID") or "")
 
     if final_assistant_info is None:
         return None
@@ -498,8 +813,12 @@ def _handle_reconcile(input_json: dict) -> None:
     state = resolve_session(input_json)
     ensure_session_initialized(state, input_json)
 
-    messages = input_json.get("messages") or []
+    snapshot_session_id = input_json.get("sessionID") or ""
+    messages = _validated_messages(input_json.get("messages"), snapshot_session_id)
+    if messages is None:
+        return
     _reconcile_messages(state, messages)
+    _reconcile_child_sessions(state, input_json.get("childSessions") or [])
 
 
 def _handle_close(input_json: dict) -> None:
@@ -508,8 +827,12 @@ def _handle_close(input_json: dict) -> None:
     state = resolve_session(input_json)
     ensure_session_initialized(state, input_json)
 
-    messages = input_json.get("messages") or []
+    snapshot_session_id = input_json.get("sessionID") or ""
+    messages = _validated_messages(input_json.get("messages"), snapshot_session_id)
+    if messages is None:
+        return
     final = _reconcile_messages(state, messages)
+    _reconcile_child_sessions(state, input_json.get("childSessions") or [], finalize_agents=True)
 
     trace_id = state.get("current_trace_id")
     span_id = state.get("current_trace_span_id")
@@ -572,19 +895,25 @@ def main() -> None:
         if not isinstance(input_json, dict) or not input_json:
             return
 
-        kind = input_json.get("type")
-        if kind == "reconcile":
-            try:
-                _handle_reconcile(input_json)
-            except Exception as exc:  # noqa: BLE001
-                error(f"opencode reconcile failed: {exc!r}")
-        elif kind == "close":
-            try:
-                _handle_close(input_json)
-            except Exception as exc:  # noqa: BLE001
-                error(f"opencode close failed: {exc!r}")
-        else:
-            log(f"opencode: unknown type {kind!r}")
+        lock_state = resolve_session(input_json, initialize=False)
+        if lock_state.state_file is None:
+            return
+        handler_lock = lock_state.state_file.with_name(lock_state.state_file.name + ".handler.lock")
+        with FileLock(handler_lock, timeout=30.0, break_on_timeout=False):
+            lock_state.init_state()
+            kind = input_json.get("type")
+            if kind == "reconcile":
+                try:
+                    _handle_reconcile(input_json)
+                except Exception as exc:  # noqa: BLE001
+                    error(f"opencode reconcile failed: {exc!r}")
+            elif kind == "close":
+                try:
+                    _handle_close(input_json)
+                except Exception as exc:  # noqa: BLE001
+                    error(f"opencode close failed: {exc!r}")
+            else:
+                log(f"opencode: unknown type {kind!r}")
     except Exception as exc:  # noqa: BLE001
         error(f"opencode main() crashed: {exc!r}")
 

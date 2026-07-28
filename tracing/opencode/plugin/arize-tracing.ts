@@ -16,7 +16,7 @@
 //
 // Forwarded payload contract (do not change without updating the Python
 // reconciler):
-//   { type: "reconcile" | "close", sessionID: string, messages: {info,parts}[] }
+//   { type, sessionID, messages, childSessions: {info,messages,parentCallID,...}[] }
 
 import { spawn } from "node:child_process"
 import { homedir, platform } from "node:os"
@@ -47,12 +47,76 @@ function forward(payload: unknown): void {
 export const ArizeTracing = async (ctx: any) => {
   const { client } = ctx
 
+  function successfulSession(response: any, expectedID: string): any | undefined {
+    if (response?.error) return undefined
+    const data = response?.data ?? response
+    return data?.id === expectedID ? data : undefined
+  }
+
+  function successfulMessages(response: any, expectedID: string): any[] | undefined {
+    if (response?.error) return undefined
+    const data = response?.data ?? response
+    if (!Array.isArray(data)) return undefined
+    for (const message of data) {
+      if (!message || typeof message !== "object" || Array.isArray(message)) return undefined
+      const info = message.info
+      const parts = message.parts
+      if (!info || typeof info !== "object" || Array.isArray(info) || !Array.isArray(parts)) return undefined
+      if (!info.id || info.sessionID !== expectedID) return undefined
+      for (const part of parts) {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return undefined
+        if (part.sessionID !== expectedID) return undefined
+      }
+    }
+    return data
+  }
+
+  async function fetchChildSessions(messages: any[], seen = new Set<string>()): Promise<any[]> {
+    const children: any[] = []
+    for (const message of messages ?? []) {
+      for (const part of message?.parts ?? []) {
+        const state = part?.state
+        const childSessionID = state?.metadata?.sessionId
+        if (part?.type !== "tool" || part?.tool !== "task" || !childSessionID || seen.has(childSessionID)) {
+          continue
+        }
+        seen.add(childSessionID)
+        try {
+          const [sessionRes, messagesRes] = await Promise.all([
+            client.session.get({ path: { id: childSessionID } }),
+            client.session.messages({ path: { id: childSessionID } }),
+          ])
+          const info = successfulSession(sessionRes, childSessionID)
+          const childMessages = successfulMessages(messagesRes, childSessionID)
+          if (!info || !childMessages || !info.parentID || info.parentID !== part?.sessionID) continue
+          children.push({
+            sessionID: childSessionID,
+            parentSessionID: info.parentID,
+            parentCallID: part?.callID ?? "",
+            info,
+            messages: childMessages,
+          })
+          children.push(...await fetchChildSessions(childMessages, seen))
+        } catch {
+          /* fail-soft: preserve the root snapshot if a child vanished */
+        }
+      }
+    }
+    return children
+  }
+
   async function snapshot(sessionID: string, kind: "reconcile" | "close"): Promise<void> {
     if (!sessionID) return
     try {
+      const sessionInfoRes = await client.session.get({ path: { id: sessionID } })
+      const sessionInfo = successfulSession(sessionInfoRes, sessionID)
+      if (!sessionInfo || sessionInfo.parentID) return
       const res = await client.session.messages({ path: { id: sessionID } })
-      const messages = (res as any)?.data ?? res
-      forward({ type: kind, sessionID, messages })
+      const messages = successfulMessages(res, sessionID)
+      if (!messages) return
+      const childSessions = await fetchChildSessions(messages)
+      const type = kind
+      forward({ type, sessionID, messages, childSessions })
     } catch {
       /* fail-soft */
     }

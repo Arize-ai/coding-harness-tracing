@@ -32,11 +32,12 @@ def check_requirements() -> bool:
     return True
 
 
-def resolve_session(input_json: dict) -> StateManager:
+def resolve_session(input_json: dict, *, initialize: bool = True) -> StateManager:
     """Build a StateManager keyed off the opencode ``sessionID`` payload field.
 
     Missing/empty sessionID falls back to the literal key ``"unknown"`` — opencode
-    adapters never use PID-based keys.
+    adapters never use PID-based keys. Pass ``initialize=False`` when the caller
+    must acquire a wider per-session lock before any state-file write.
     """
     key = input_json.get("sessionID") or "unknown"
 
@@ -48,7 +49,8 @@ def resolve_session(input_json: dict) -> StateManager:
         state_file=state_file,
         lock_path=lock_path,
     )
-    sm.init_state()
+    if initialize:
+        sm.init_state()
     return sm
 
 

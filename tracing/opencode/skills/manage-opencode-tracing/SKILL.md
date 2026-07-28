@@ -183,18 +183,21 @@ Tell the user:
 
 opencode is fundamentally different from every other harness in this repo: extensions are [plugins](https://opencode.ai/docs/plugins/) loaded **in-process** inside opencode's Bun runtime. The Arize integration is split into two pieces:
 
-1. **TypeScript plugin shim** at `~/.config/opencode/plugin/arize-tracing.ts`. A dumb bridge. On `message.updated` (assistant completed) and `session.idle` it pulls the authoritative session snapshot via `client.session.messages({ path: { id } })` (see the [opencode SDK docs](https://opencode.ai/docs/sdk/)), then spawns `arize-hook-opencode` detached and pipes the snapshot to stdin. The shim contains no tracing logic.
-2. **Python snapshot reconciler** (`arize-hook-opencode`). Reads the snapshot, walks `{info, parts}[]`, and emits any NEW `Turn`/`LLM`/`TOOL` spans deduped by message id and tool `callID`. opencode's `AssistantMessage` already carries final, cumulative `tokens` and `cost`, so no per-delta coalescing is needed.
+1. **TypeScript plugin bridge** at `~/.config/opencode/plugin/arize-tracing.ts`. On `message.updated` (assistant completed) and `session.idle` it pulls the authoritative root snapshot via `client.session.messages({ path: { id } })` (see the [opencode SDK docs](https://opencode.ai/docs/sdk/)), follows completed `task` metadata to fetch authoritative child-session snapshots, validates session ownership, then spawns `arize-hook-opencode` detached and pipes the combined snapshot to stdin.
+2. **Python snapshot reconciler** (`arize-hook-opencode`). Reads the snapshot, reconstructs `Turn → LLM → TOOL → AGENT → child LLM/TOOL`, and emits only new spans deduped by message ID, tool `callID`, and child session ID. opencode's `AssistantMessage` already carries final, cumulative `tokens` and `cost`, so no per-delta coalescing is needed.
 
 ## Span tree
 
-Each trace covers one **turn** (one user prompt → the assistant's response → `session.idle`). The tree is three levels deep:
+Each trace covers one **turn** (one user prompt → the assistant's response → `session.idle`) and preserves the requesting-message and subagent hierarchy:
 
 | Span | Kind | Description |
 |------|------|-------------|
-| `Turn` | CHAIN | Root span. `input.value` is the user prompt; `output.value` is the assistant's final text. Timestamps come from `message.time.created` / `time.completed`. |
-| `LLM: <model>` | LLM | Child of `Turn`. The assistant message. Carries `llm.model_name`, `llm.provider`, prompt/completion/reasoning token counts, cache read/write tokens, and `llm.cost`. |
-| `<tool>` | TOOL | Child of `Turn`. One per completed `ToolPart`. Records `tool.name`, redacted input/output, and `tool.command`/`tool.file_path`/`tool.query`/`tool.url` where applicable. Timestamps come from `toolPart.state.time.start` / `.end`. |
+| `Turn` | CHAIN | Root span. `input.value` is the user prompt; `output.value` is the assistant's final text. |
+| `LLM: <model>` | LLM | Child of `Turn` or a child-session `AGENT`. Carries message ID, model/provider, token counts, cache tokens, and cost. |
+| `<tool>` | TOOL | Child of the requesting `LLM`, correlated by `ToolPart.messageID`; falls back to `Turn` only when that relation is unavailable. |
+| `Agent: <name>` | AGENT | Child of a `task` TOOL when the SDK child session has the authoritative matching `Session.parentID`; child LLM/TOOL spans are nested below it. |
+
+Timestamps come from opencode's own message and tool clocks rather than tracing-process wall time.
 
 ## Troubleshoot
 
@@ -207,7 +210,7 @@ Common issues and fixes for opencode:
 | Reconciler entry point missing | The shim spawns the reconciler by absolute path; verify the binary exists at `~/.arize/harness/venv/bin/arize-hook-opencode` (or `~/.arize/harness/venv/Scripts/arize-hook-opencode.exe` on Windows). Rerun `./install.sh opencode` to reinstall the venv entry point. |
 | Spans appear partial / missing tool spans | Snapshots are pulled on `message.updated` (assistant complete) and `session.idle`. Pending or running tool parts won't emit a span until they reach `completed` or `error` state. Wait for the turn to finish. |
 | Duplicate spans | The reconciler dedupes by message id and tool `callID`. If you still see duplicates, set `ARIZE_VERBOSE=true` and check `~/.arize/harness/logs/opencode.log` for dedup hits to confirm state tracking is working. |
-| Sub-agent (`task` tool) trace not linked to parent | Known v1 limitation: opencode's built-in `task` tool spawns sub-agents with their own `sessionID`, which produce their own independent traces. They are not linked back to the parent session's trace. |
+| Sub-agent (`task` tool) trace not linked to parent | Wait for the parent session to reach `session.idle`. Linking requires a completed `task` part with `state.metadata.sessionId` plus an SDK child session whose `Session.parentID` matches the requesting session; mismatched or foreign snapshots are rejected. Sessions already active during an integration upgrade may need to be restarted. |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching opencode |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching opencode |

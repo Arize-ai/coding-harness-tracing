@@ -1,0 +1,75 @@
+# CodeQL code scanning (advanced setup).
+#
+# Replaces GitHub's "default setup", which does not analyze pull requests from
+# forks. This workflow runs on the `pull_request` event, so it also scans
+# external contributors' PRs (after the standard first-time-contributor
+# workflow approval), in addition to pushes to main and a weekly scheduled run.
+#
+# NOTE: default setup and advanced setup are mutually exclusive. Default setup
+# must be turned OFF in Settings -> Code security -> Code scanning before this
+# workflow will run; otherwise GitHub reports a conflicting-configuration error.
+#
+# DISABLED FOR NOW: default setup is enforced at the Arize-ai org level, so a
+# repo-level disable does not stick and every advanced-config run is rejected at
+# SARIF upload ("cannot be processed when the default setup is enabled"). The
+# automatic triggers are therefore removed and this is left as
+# `workflow_dispatch` only, so the config is preserved but never runs (and never
+# conflicts). To re-enable once default setup is turned off at the org level,
+# restore the push / pull_request / schedule triggers below — that is what gives
+# fork PRs coverage:
+#
+#   on:
+#     push:
+#       branches: [main]
+#     pull_request:
+#       branches: [main]
+#     schedule:
+#       - cron: '31 7 * * 1'   # weekly, Monday 07:31 UTC
+name: CodeQL
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Languages and build modes must match what was scanned under default
+        # setup: python, JS/TS, and GitHub Actions workflows. None require a
+        # build step, so build-mode is `none` for all three.
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Don't leave the job's git token in .git/config after checkout.
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3.37.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3.37.3
+        with:
+          # Category keeps this analysis's alerts distinct per language and
+          # matches the categories default setup used, preserving alert history.
+          category: "/language:${{ matrix.language }}"
