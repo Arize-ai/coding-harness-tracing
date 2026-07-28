@@ -4,13 +4,14 @@ Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for
 
 ## What gets traced
 
-One trace per **turn** (one user prompt → the assistant's response → `session.idle`). Each trace is a three-level tree:
+One trace per **turn** (one user prompt → the assistant's response → `session.idle`). Each trace preserves the requesting message and subagent hierarchy:
 
 | Span | Kind | Notes |
 |------|------|-------|
 | `Turn` | CHAIN | Root span. `input.value` is the user prompt; `output.value` is the assistant's final text. |
-| `LLM: <model>` | LLM | Child of `Turn`. Carries `llm.model_name`, `llm.provider`, prompt/completion/reasoning token counts, cache read/write tokens, and `llm.cost`. One per assistant message. |
-| `<tool>` | TOOL | Child of `Turn`. One per completed `ToolPart`. Records `tool.name`, redacted input/output, and tool-specific attributes (`tool.command`, `tool.file_path`, `tool.query`, `tool.url`). |
+| `LLM: <model>` | LLM | Child of `Turn` (or child subagent `AGENT`). Carries `llm.message_id`, model/provider, prompt/completion/reasoning token counts, cache read/write tokens, and cost. One per assistant message. |
+| `<tool>` | TOOL | Child of the requesting `LLM`, correlated by `ToolPart.messageID`; falls back to `Turn` only when that relation is unavailable. One per completed `callID`. |
+| `Agent: <name>` | AGENT | Child of a `task` TOOL for an authoritative child `Session.parentID`; child-session LLM and TOOL spans are nested beneath it. |
 
 Timestamps come from opencode's own millisecond clocks (`message.time.created` / `time.completed`, `toolPart.state.time.start` / `.end`) rather than wall-clock time on the tracing process.
 
@@ -18,8 +19,8 @@ Timestamps come from opencode's own millisecond clocks (`message.time.created` /
 
 opencode is fundamentally different from every other harness in this repo: extensions are [plugins](https://opencode.ai/docs/plugins/) that opencode loads **in-process** inside its Bun runtime — there is no per-event subprocess and no stdin payload. The integration is split into two pieces:
 
-1. **TypeScript plugin shim** (`~/.config/opencode/plugin/arize-tracing.ts`). A dumb bridge. On `message.updated` (assistant completed) and `session.idle` it pulls the authoritative session snapshot via `client.session.messages({ path: { id } })` (see the [opencode SDK docs](https://opencode.ai/docs/sdk/)), then spawns `arize-hook-opencode` detached and pipes the snapshot to stdin. The shim contains no tracing logic.
-2. **Python snapshot reconciler** (`arize-hook-opencode`). Reads the snapshot, walks `{info, parts}[]`, and emits any NEW `Turn`/`LLM`/`TOOL` spans deduped by message id and tool `callID`. opencode's `AssistantMessage` already carries final, cumulative `tokens` and `cost`, so no per-delta coalescing is needed.
+1. **TypeScript plugin shim** (`~/.config/opencode/plugin/arize-tracing.ts`). A bridge. On `message.updated` (assistant completed) and `session.idle` it pulls authoritative session snapshots through the SDK. Completed `task` parts are followed to their child sessions through `state.metadata.sessionId`; child lifecycle events are suppressed as independent roots and exported with their parent snapshot instead.
+2. **Python snapshot reconciler** (`arize-hook-opencode`). Reads the snapshot, reconstructs `Turn → LLM → TOOL → AGENT → child LLM`, and emits only new spans using stable IDs durably reserved under keys derived from message IDs, `callID`, and session IDs. Same-session hook processes are serialized to make dedup safe across concurrent lifecycle events.
 
 Snapshots repeat across firings — that's what dedup is for. There is no streaming-chunk forwarding.
 
@@ -107,7 +108,7 @@ Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts
 | Arize AX endpoint | `otlp.arize.com:443` |
 | Plugin file | `~/.config/opencode/plugin/arize-tracing.ts` |
 | Lifecycle events forwarded | `message.updated` (assistant completed), `session.idle` |
-| Span tree | `Turn` (CHAIN) → `LLM` → `TOOL` |
+| Span tree | `Turn` (CHAIN) → `LLM` → `TOOL`; task tools may contain `AGENT` → child `LLM`/`TOOL` |
 | Trace granularity | one trace per turn |
 | State directory | `~/.arize/harness/state/opencode/` |
 | Log file | `~/.arize/harness/logs/opencode.log` |
@@ -124,4 +125,4 @@ See the [main README's Environment variables section](../../README.md#environmen
 
 ## Limitations
 
-- **Sub-agent / `task` sessions trace independently.** opencode's built-in `task` tool spawns sub-agents that get their own `sessionID`. In v1 each sub-agent session produces its own independent trace; they are not linked back to the parent session's trace.
+- Child-session linking requires the authoritative `task.state.metadata.sessionId` and `Session.parentID` fields. When either relation is absent, the reconciler does not invent a subagent edge.
