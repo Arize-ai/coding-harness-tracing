@@ -125,6 +125,12 @@ class TestResolveSession:
         data = json.loads(sm.state_file.read_text())
         assert data == {}
 
+    def test_can_resolve_paths_without_initializing(self, opencode_state_dir, disable_env_vars):
+        sm = adapter.resolve_session({"sessionID": "ses_deferred"}, initialize=False)
+
+        assert sm.state_file == opencode_state_dir / "state_ses_deferred.json"
+        assert not sm.state_file.exists()
+
     def test_same_session_id_same_file(self, opencode_state_dir, disable_env_vars):
         """Calling resolve_session twice with same sessionID produces same file."""
         sm1 = adapter.resolve_session({"sessionID": "ses_stable"})

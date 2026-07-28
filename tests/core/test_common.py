@@ -224,6 +224,32 @@ class TestFileLock:
         released_event.set()
         t.join(timeout=5)
 
+    def test_timeout_without_breaking_preserves_original_holder(self, tmp_path):
+        """The opt-out mode times out without deleting another owner's lock."""
+        lock_path = tmp_path / "test.lock"
+        hold_event = threading.Event()
+        released_event = threading.Event()
+
+        def hold_forever():
+            with FileLock(lock_path, timeout=5.0):
+                hold_event.set()
+                released_event.wait(timeout=10)
+
+        t = threading.Thread(target=hold_forever, daemon=True)
+        t.start()
+        assert hold_event.wait(timeout=5)
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="timed out acquiring lock"):
+            with FileLock(lock_path, timeout=0.3, break_on_timeout=False):
+                pytest.fail("contending lock must not enter the critical section")
+
+        assert time.monotonic() - start >= 0.2
+        assert t.is_alive()
+        released_event.set()
+        t.join(timeout=5)
+        assert not t.is_alive()
+
     def test_creates_parent_directories(self, tmp_path):
         """FileLock creates parent directories if missing."""
         lock_path = tmp_path / "deep" / "nested" / "dir" / "test.lock"
