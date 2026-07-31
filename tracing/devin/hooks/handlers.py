@@ -174,7 +174,9 @@ def emit_interaction(session_id: str, steps: list[LlmStep], user_prompt: str, me
                 "session.id": session_id,
                 "openinference.span.kind": "TOOL",
                 "tool.name": tc.name,
-                "input.value": redact_content(env.log_tool_content, json.dumps(tc.arguments)),
+                # Arguments are what the tool was asked to do -> tool_details;
+                # the result is what it returned -> tool_content.
+                "input.value": redact_content(env.log_tool_details, json.dumps(tc.arguments)),
                 "output.value": redact_content(env.log_tool_content, tc.result),
             }
             tool_span = build_span(

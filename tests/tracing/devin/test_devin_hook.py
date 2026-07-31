@@ -207,6 +207,40 @@ class TestEmitInteraction:
         tool = next(s for s in captured_spans if _kind(s) == "TOOL")
         assert _span_obj(tool)["parentSpanId"] == _span_obj(llm)["spanId"]
 
+    def test_tool_input_gated_by_tool_details_flag(self, captured_spans, monkeypatch):
+        """Arguments are what the tool was asked to do -> ARIZE_LOG_TOOL_DETAILS."""
+        monkeypatch.setenv("ARIZE_LOG_TOOL_DETAILS", "false")
+        monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "true")
+        env.invalidate_caches()
+        steps = [
+            _step("A", content="c", prompt=1, completion=1, tools=[ToolCall("t", "bash", {"cmd": "secret"}, "out")])
+        ]
+
+        self._emit(captured_spans, steps)
+
+        tool = _span_attrs(next(s for s in captured_spans if _kind(s) == "TOOL"))
+        assert "secret" not in tool["input.value"]
+        assert tool["input.value"].startswith("<redacted (")
+        assert tool["output.value"] == "out"
+
+    def test_tool_output_gated_by_tool_content_flag(self, captured_spans, monkeypatch):
+        """Results are what the tool returned -> ARIZE_LOG_TOOL_CONTENT."""
+        monkeypatch.setenv("ARIZE_LOG_TOOL_DETAILS", "true")
+        monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "false")
+        env.invalidate_caches()
+        steps = [
+            _step(
+                "A", content="c", prompt=1, completion=1, tools=[ToolCall("t", "bash", {"cmd": "ls"}, "file contents")]
+            )
+        ]
+
+        self._emit(captured_spans, steps)
+
+        tool = _span_attrs(next(s for s in captured_spans if _kind(s) == "TOOL"))
+        assert json.loads(tool["input.value"]) == {"cmd": "ls"}
+        assert "file contents" not in tool["output.value"]
+        assert tool["output.value"].startswith("<redacted (")
+
     def test_root_token_totals_summed(self, captured_spans):
         steps = [
             _step("A", content="x", prompt=100, completion=10, cache_read=40),

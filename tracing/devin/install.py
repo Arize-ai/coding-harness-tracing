@@ -1,8 +1,14 @@
 """Devin harness install/uninstall, invoked by the installer router.
 
-Registers/removes our SessionEnd command hook in Devin's global config at
-``~/.config/devin/config.json`` (Devin hooks are Claude-Code-compatible command
-hooks). All config mutation uses stdlib ``json`` and preserves unrelated keys.
+Registers/removes our Stop/SessionEnd command hooks in Devin's user config
+(``~/.config/devin/config.json``, ``%APPDATA%\\devin\\config.json`` on Windows —
+see ``constants.config_dir``). Devin hooks are Claude-Code-compatible command
+hooks.
+
+All config mutation uses stdlib ``json`` and preserves unrelated keys. Devin
+accepts comments in its config; we strip them to parse, so a config we rewrite
+comes back as plain JSON without its comments. Anything we cannot parse is left
+alone rather than rebuilt, so a hand-edited config is never silently wiped.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from core.setup import (
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
+    err,
     info,
     merge_harness_entry,
     prompt_backend,
@@ -106,22 +113,90 @@ def _skills_dir_exists() -> bool:
     return (Path(__file__).resolve().parent / "skills").is_dir()
 
 
+def _strip_json_comments(text: str) -> str:
+    """Strip ``//`` and ``/* */`` comments from JSONC text.
+
+    Devin's config files are JSON *with comment support*, which stdlib ``json``
+    rejects. Comments are replaced with equivalent whitespace (newlines kept) so
+    line/column numbers in any parse error still point at the real file.
+    Comment-like sequences inside string literals are left untouched.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            close = text.find("*/", i + 2)
+            end = n if close == -1 else close + 2
+            out.append("".join("\n" if c == "\n" else " " for c in text[i:end]))
+            i = end
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _parse_config(text: str) -> dict:
+    """Parse Devin config text (JSON or JSONC) into a dict.
+
+    Raises ``ValueError`` if the text is not a JSON object once comments are
+    stripped. Callers decide whether that is fatal.
+    """
+    data = json.loads(_strip_json_comments(text))
+    if not isinstance(data, dict):
+        raise ValueError("config root is not a JSON object")
+    return data
+
+
 def _load_config() -> dict:
     """Load Devin's global config as a dict.
 
-    Missing file -> ``{}``. Malformed JSON -> ``{}`` with a warning (we rebuild
-    only the hooks block; nothing else can be preserved from unparseable data).
+    Missing file -> ``{}``. Unreadable or unparseable file -> ``SystemExit(1)``
+    (Gemini/OMP installer pattern): rewriting the hooks block onto ``{}`` would
+    silently wipe every other setting in a hand-edited config.
+
+    Comments are stripped for parsing and are therefore dropped when the file is
+    written back.
     """
     if not CONFIG_FILE.exists():
         return {}
     try:
-        data = json.loads(CONFIG_FILE.read_text())
-        if not isinstance(data, dict):
-            raise ValueError("not an object")
-        return data
-    except (json.JSONDecodeError, OSError, ValueError) as exc:
-        info(f"Warning: {CONFIG_FILE} is malformed ({exc}); rebuilding hooks block only")
+        text = CONFIG_FILE.read_text()
+    except OSError as exc:
+        err(f"Cannot read {CONFIG_FILE}: {exc}")
+        sys.exit(1)
+    if not text.strip():
         return {}
+    try:
+        return _parse_config(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        err(
+            f"{CONFIG_FILE} contains invalid JSON; aborting so it is not overwritten. Please fix the file and retry.\n  {exc}"
+        )
+        sys.exit(1)
 
 
 def _save_config(data: dict) -> None:
@@ -141,6 +216,7 @@ def _register_hooks() -> None:
     keys and hook events are preserved untouched. Honors dry-run.
     """
     config = _load_config()
+    original = json.dumps(config, sort_keys=True)
     hook_cmd = str(venv_bin(HOOK_BIN_NAME))
 
     hooks = config.setdefault("hooks", {})
@@ -155,6 +231,11 @@ def _register_hooks() -> None:
             hooks[event] = event_list
         if not any(_matcher_has_command(matcher, hook_cmd) for matcher in event_list):
             event_list.append(_hook_entry(hook_cmd))
+
+    if json.dumps(config, sort_keys=True) == original:
+        # Already registered: leave the file (and any comments in it) untouched.
+        info(f"Devin hooks already registered in {CONFIG_FILE}")
+        return
 
     if dry_run():
         info(f"would write Devin hook config to {CONFIG_FILE}")
@@ -171,10 +252,9 @@ def _unregister_hooks() -> None:
     if not CONFIG_FILE.exists():
         return
     try:
-        config = json.loads(CONFIG_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
-        return
-    if not isinstance(config, dict):
+        config = _parse_config(CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        info(f"Warning: cannot parse {CONFIG_FILE} ({exc}); leaving it untouched")
         return
 
     hooks = config.get("hooks")

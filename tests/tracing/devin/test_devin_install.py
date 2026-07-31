@@ -117,11 +117,36 @@ class TestRegisterHooks:
         assert list(data.keys()) == ["hooks"]
         assert _session_end_commands(data) == [HOOK_CMD]
 
-    def test_rebuilds_on_malformed_config(self, config_file):
+    def test_aborts_on_malformed_config_without_overwriting(self, config_file):
         from tracing.devin.install import _register_hooks
 
         config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text("{not valid json!!!")
+        config_file.write_text('{"model": "swe-1.6", not valid json!!!')
+        original = config_file.read_text()
+
+        with pytest.raises(SystemExit) as excinfo:
+            _register_hooks()
+
+        assert excinfo.value.code == 1
+        assert config_file.read_text() == original
+
+    def test_aborts_when_config_root_is_not_an_object(self, config_file):
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text('["not", "an", "object"]')
+        original = config_file.read_text()
+
+        with pytest.raises(SystemExit):
+            _register_hooks()
+
+        assert config_file.read_text() == original
+
+    def test_empty_config_is_treated_as_no_settings(self, config_file):
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text("   \n")
 
         _register_hooks()
 
@@ -201,6 +226,142 @@ class TestRegisterHooks:
         cmds = _session_end_commands(data)
         assert cmds.count(HOOK_CMD) == 1
         assert cmds.count("/usr/bin/other") == 1
+
+
+class TestCommentedConfig:
+    """Devin accepts comments in config.json; stdlib json does not.
+
+    Comments are stripped to parse, so settings survive a rewrite even though
+    the comments themselves do not. A config we do not need to change is never
+    rewritten, so comments there stay intact.
+    """
+
+    def test_line_comments_do_not_drop_settings(self, config_file):
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            """{
+  // pick the fast model
+  "model": "swe-1.6",
+  "theme_mode": "dark" // inline trailing comment
+}
+"""
+        )
+
+        _register_hooks()
+
+        data = json.loads(config_file.read_text())
+        assert data["model"] == "swe-1.6"
+        assert data["theme_mode"] == "dark"
+        assert _session_end_commands(data) == [HOOK_CMD]
+
+    def test_block_comments_do_not_drop_settings(self, config_file):
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            """{
+  /* multi
+     line
+     comment */
+  "model": "swe-1.6",
+  "hooks": {
+    /* existing hooks */
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "/usr/bin/other"}]}]
+  }
+}
+"""
+        )
+
+        _register_hooks()
+
+        data = json.loads(config_file.read_text())
+        assert data["model"] == "swe-1.6"
+        assert data["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "/usr/bin/other"
+        assert _session_end_commands(data) == [HOOK_CMD]
+
+    def test_comment_markers_inside_strings_survive(self, config_file):
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            json.dumps(
+                {
+                    "docs_url": "https://docs.devin.ai/cli",
+                    "glob": "src/**/*.ts /* not a comment */",
+                    "escaped": 'quote \\" then // not a comment',
+                }
+            )
+        )
+
+        _register_hooks()
+
+        data = json.loads(config_file.read_text())
+        assert data["docs_url"] == "https://docs.devin.ai/cli"
+        assert data["glob"] == "src/**/*.ts /* not a comment */"
+        assert data["escaped"] == 'quote \\" then // not a comment'
+
+    def test_already_registered_commented_config_left_byte_identical(self, config_file):
+        from tracing.devin.install import _register_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        commented = """{
+  // arize tracing
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "%(cmd)s", "timeout": 30}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "%(cmd)s", "timeout": 30}]}]
+  }
+}
+""" % {
+            "cmd": HOOK_CMD
+        }
+        config_file.write_text(commented)
+
+        _register_hooks()
+
+        assert config_file.read_text() == commented
+
+    def test_unregister_from_commented_config(self, config_file):
+        from tracing.devin.install import _unregister_hooks
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            """{
+  // keep me
+  "model": "swe-1.6",
+  "hooks": {
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "%(cmd)s"}]}]
+  }
+}
+"""
+            % {"cmd": HOOK_CMD}
+        )
+
+        _unregister_hooks()
+
+        data = json.loads(config_file.read_text())
+        assert data["model"] == "swe-1.6"
+        assert "hooks" not in data
+
+
+class TestStripJsonComments:
+    def test_replaces_comments_with_whitespace_preserving_lines(self):
+        from tracing.devin.install import _strip_json_comments
+
+        text = '{\n  // a\n  "k": 1 /* b\nc */\n}'
+        stripped = _strip_json_comments(text)
+
+        assert json.loads(stripped) == {"k": 1}
+        assert stripped.count("\n") == text.count("\n")
+        assert len(stripped) == len(text)
+
+    def test_unterminated_block_comment_is_dropped(self):
+        from tracing.devin.install import _strip_json_comments
+
+        stripped = _strip_json_comments('{"k": 1}\n/* unterminated')
+
+        assert json.loads(stripped) == {"k": 1}
 
 
 class TestUnregisterHooks:

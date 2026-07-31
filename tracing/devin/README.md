@@ -6,7 +6,11 @@ Devin's hook payloads are thin (no session ID, no token or model data), so the r
 
 ## Setup
 
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers `Stop` and `SessionEnd` command hooks under the top-level `"hooks"` key in `~/.config/devin/config.json`.
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers `Stop` and `SessionEnd` command hooks under the top-level `"hooks"` key in Devin's user config — `~/.config/devin/config.json` on macOS and Linux, `%APPDATA%\devin\config.json` on Windows.
+
+Devin allows comments in its config files. The installer reads them, but writes the file back as plain JSON, so comments in a config it has to modify are not preserved. A config it cannot parse is left untouched and the install aborts with an error rather than overwriting your settings.
+
+> **Windows note:** only the config file moves — it lives under `%APPDATA%`. The sessions DB stays home-relative at `%USERPROFILE%\.local\share\devin\cli\sessions.db`, the same layout as macOS and Linux. If traces do not appear, check `~/.arize/harness/logs/devin.log` for the DB path the hook tried.
 
 ### Remote setup
 
@@ -83,9 +87,9 @@ install.bat uninstall devin
 | Project name | `devin` |
 | Phoenix endpoint | `http://localhost:6006` |
 | Arize AX endpoint | `otlp.arize.com:443` |
-| Hook config file | `~/.config/devin/config.json` |
+| Hook config file | `~/.config/devin/config.json` (Windows: `%APPDATA%\devin\config.json`) |
 | Hook events registered | `Stop`, `SessionEnd` |
-| Data source | `~/.local/share/devin/cli/sessions.db` (live, read-only) |
+| Data source | `~/.local/share/devin/cli/sessions.db` (live, read-only; Windows: `%USERPROFILE%\.local\share\devin\cli\sessions.db`) |
 | State directory | `~/.arize/harness/state/devin/` |
 | Log file | `~/.arize/harness/logs/devin.log` |
 
@@ -156,4 +160,4 @@ TOOL spans are parented to the LLM span that issued the call.
 
 ## Uninstall
 
-Uninstall removes the `Stop` and `SessionEnd` hook entries from `~/.config/devin/config.json`, leaving any hooks you added yourself untouched.
+Uninstall removes the `Stop` and `SessionEnd` hook entries from Devin's user config, leaving any hooks you added yourself untouched.
