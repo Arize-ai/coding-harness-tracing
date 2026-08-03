@@ -22,6 +22,7 @@ from core.setup import (
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
+    err,
     info,
     merge_harness_entry,
     prompt_backend,
@@ -59,9 +60,33 @@ _HOOK_EVENTS = (
 )
 
 
+class CodexNotifyConflict(RuntimeError):
+    """Raised when Codex already has a different ``notify`` command."""
+
+
+_NOTIFY_CONFLICT_MESSAGE = (
+    "Codex supports one `notify` command, but config.toml already contains a different one. "
+    "The Arize installer will not append to or overwrite it. Remove the existing `notify` entry "
+    "and rerun the installer. To keep both integrations, configure a wrapper as the sole `notify` "
+    "command and have it invoke both commands."
+)
+
+
 # ---------------------------------------------------------------------------
 # Codex TOML config management
 # ---------------------------------------------------------------------------
+
+
+def _validate_notify_available(data: dict, notify_cmd: str) -> None:
+    """Reject a non-empty ``notify`` value that is not already managed by us."""
+    if "notify" not in data:
+        return
+    existing_notify = data.get("notify")
+    if existing_notify in (None, "") or existing_notify == []:
+        return
+    if existing_notify == notify_cmd or existing_notify == [notify_cmd]:
+        return
+    raise CodexNotifyConflict(_NOTIFY_CONFLICT_MESSAGE)
 
 
 def _entry_is_arize_managed(entry: object) -> bool:
@@ -112,22 +137,18 @@ def _strip_arize_hooks(data: dict) -> bool:
 def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
     """Write the notify-only layout to ~/.codex/config.toml. Idempotent.
 
-    Ensures our ``notify_cmd`` is present exactly once in ``notify = [...]``.
-    Does not touch any existing ``[[hooks.<Event>]]`` entries -- if a prior
-    install left some behind, manage them out-of-band or run ``uninstall``.
+    Writes our ``notify_cmd`` only when ``notify`` is empty or already points
+    to that command. A different existing command is a conflict because Codex
+    treats the list as one executable argv, not as multiple callbacks.
     """
+    data = _toml_load(path)
+    _validate_notify_available(data, notify_cmd)
+
     if dry_run():
         info(f"would add notify entry to {path}")
         return
 
-    data = _toml_load(path)
-
-    existing_notify = data.get("notify", [])
-    if not isinstance(existing_notify, list):
-        existing_notify = [existing_notify] if existing_notify else []
-    if notify_cmd not in existing_notify:
-        existing_notify.append(notify_cmd)
-    data["notify"] = existing_notify
+    data["notify"] = [notify_cmd]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     _toml_write(data, path)
@@ -212,6 +233,12 @@ def install(with_skills: bool = False) -> None:
         info("Aborted.")
         return
 
+    # Refuse conflicts before cleanup or any shared/config/env writes. Recheck
+    # inside _codex_toml_apply immediately before writing to guard against a
+    # concurrent config change.
+    notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
+    _validate_notify_available(_toml_load(CODEX_CONFIG_FILE), notify_cmd)
+
     # 1. Migrate any v1 artifacts (idempotent; no-op on fresh installs).
     cleanup_legacy_install(CODEX_CONFIG_FILE)
 
@@ -254,7 +281,6 @@ def install(with_skills: bool = False) -> None:
     _write_env_file(CODEX_ENV_FILE, user_id=user_id)
 
     # 4. Write the notify-only TOML layout.
-    notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
     _codex_toml_apply(CODEX_CONFIG_FILE, notify_cmd)
     info(f"Updated TOML config: {CODEX_CONFIG_FILE}")
 
@@ -313,7 +339,11 @@ def cli_main(argv: list[str] | None = None) -> None:
     flags = argv[2:]
 
     if action == "install":
-        install(with_skills="--with-skills" in flags)
+        try:
+            install(with_skills="--with-skills" in flags)
+        except CodexNotifyConflict as exc:
+            err(str(exc))
+            sys.exit(1)
     else:
         uninstall()
 

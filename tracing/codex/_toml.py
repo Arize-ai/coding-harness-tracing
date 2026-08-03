@@ -106,11 +106,61 @@ def _toml_split_kv(line: str) -> tuple[str, str] | None:
     return None
 
 
+def _toml_array_is_complete(value: str) -> bool:
+    """Return True once a TOML array's closing bracket is present.
+
+    Brackets inside quoted strings or comments do not affect the nesting
+    depth. This is intentionally small, but sufficient to join multiline
+    arrays before the lenient fallback parser extracts their string values.
+    """
+    depth = 0
+    in_double_quotes = False
+    in_single_quotes = False
+    in_comment = False
+    escape = False
+
+    for ch in value:
+        if ch == "\n":
+            in_comment = False
+            continue
+        if in_comment:
+            continue
+        if escape:
+            escape = False
+            continue
+        if in_double_quotes:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_double_quotes = False
+            continue
+        if in_single_quotes:
+            if ch == "'":
+                in_single_quotes = False
+            continue
+        if ch == "#":
+            in_comment = True
+        elif ch == '"':
+            in_double_quotes = True
+        elif ch == "'":
+            in_single_quotes = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+
+    return depth <= 0
+
+
 def _toml_line_parse(text: str) -> dict:
     """Minimal TOML parser — handles flat keys and sections for our use case."""
     result: dict = {}
     current_section: dict = result
-    for raw_line in text.splitlines():
+    raw_lines = text.splitlines()
+    index = 0
+    while index < len(raw_lines):
+        raw_line = raw_lines[index]
+        index += 1
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -131,6 +181,11 @@ def _toml_line_parse(text: str) -> dict:
             val_raw = kv[1]
             # Handle array values like ["cmd"] or ['cmd']
             if val_raw.startswith("["):
+                array_lines = [val_raw]
+                while not _toml_array_is_complete("\n".join(array_lines)) and index < len(raw_lines):
+                    array_lines.append(raw_lines[index].strip())
+                    index += 1
+                val_raw = "\n".join(array_lines)
                 items = []
                 for item in re.findall(r'"([^"]*)"|\'([^\']*)\'', val_raw):
                     items.append(item[0] or item[1])
@@ -166,20 +221,81 @@ _BARE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 def _toml_key(key: str) -> str:
     """Quote a TOML key if it contains characters not allowed in bare keys."""
-    if _BARE_KEY_RE.match(key):
+    if _BARE_KEY_RE.fullmatch(key):
         return key
-    escaped = key.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+
+    escapes = {
+        '"': '\\"',
+        "\\": "\\\\",
+        "\b": "\\b",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\f": "\\f",
+        "\r": "\\r",
+    }
+    escaped: list[str] = []
+    for ch in key:
+        if ch in escapes:
+            escaped.append(escapes[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            escaped.append(f"\\u{ord(ch):04X}")
+        else:
+            escaped.append(ch)
+    return f'"{"".join(escaped)}"'
 
 
 def _toml_unkey(key: str) -> str:
     """Inverse of _toml_key — strip quotes and unescape a TOML key."""
-    if len(key) >= 2 and key.startswith('"') and key.endswith('"'):
-        inner = key[1:-1]
-        inner = inner.replace('\\"', '"')
-        inner = inner.replace("\\\\", "\\")
-        return inner
-    return key
+    if len(key) < 2:
+        return key
+    if key.startswith("'") and key.endswith("'"):
+        return key[1:-1]
+    if not (key.startswith('"') and key.endswith('"')):
+        return key
+
+    inner = key[1:-1]
+    result: list[str] = []
+    simple_escapes = {
+        '"': '"',
+        "\\": "\\",
+        "b": "\b",
+        "t": "\t",
+        "n": "\n",
+        "f": "\f",
+        "r": "\r",
+    }
+    index = 0
+    while index < len(inner):
+        ch = inner[index]
+        if ch != "\\" or index + 1 >= len(inner):
+            result.append(ch)
+            index += 1
+            continue
+
+        escape = inner[index + 1]
+        if escape in simple_escapes:
+            result.append(simple_escapes[escape])
+            index += 2
+            continue
+        if escape in ("u", "U"):
+            width = 4 if escape == "u" else 8
+            digits = inner[index + 2 : index + 2 + width]
+            if len(digits) == width and all(c in "0123456789abcdefABCDEF" for c in digits):
+                try:
+                    codepoint = int(digits, 16)
+                    if 0xD800 <= codepoint <= 0xDFFF:
+                        raise ValueError
+                    result.append(chr(codepoint))
+                    index += width + 2
+                    continue
+                except ValueError:
+                    pass
+
+        # Preserve malformed/unknown escapes for the lenient fallback parser.
+        result.extend(("\\", escape))
+        index += 2
+
+    return "".join(result)
 
 
 def _toml_split_key_path(path: str) -> list[str]:
