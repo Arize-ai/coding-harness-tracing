@@ -3,10 +3,6 @@
 Extracted from ``install.py`` so that ``install_legacy.py`` (and any other
 module) can depend on these utilities without creating an import cycle back
 into ``install.py``.
-
-The parser is intentionally lenient — falling back to a line-based parse if
-the file is malformed — so install/uninstall keep working when another tool
-has written ``~/.codex/config.toml`` in a slightly off-spec way.
 """
 
 from __future__ import annotations
@@ -46,6 +42,23 @@ def _toml_load(path: Path) -> dict:
         except Exception:
             pass
     return _toml_line_parse(text)
+
+
+def _toml_load_strict(path: Path) -> dict:
+    """Load TOML without falling back to a lossy parser.
+
+    Write paths use this guard before serializing a config back to disk.  A
+    lenient parse can omit or misinterpret user-owned data, so malformed TOML
+    must be left untouched instead of being rewritten from a partial dict.
+    """
+    if not path.is_file():
+        return {}
+    if _tomllib is None:
+        raise ValueError(f"Cannot validate TOML without a TOML parser: {path}")
+    try:
+        return _tomllib.loads(path.read_text())
+    except Exception as exc:
+        raise ValueError(f"Malformed TOML in {path}: {exc}") from exc
 
 
 def _toml_extract_section(line: str) -> str | None:

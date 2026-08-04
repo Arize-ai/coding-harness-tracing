@@ -16,8 +16,8 @@ import time
 from pathlib import Path
 
 from core.setup import BIN_DIR, dry_run, info
-from tracing.codex._toml import _toml_load, _toml_write
-from tracing.codex.constants import CODEX_CONFIG_FILE
+from tracing.codex._toml import _toml_load_strict, _toml_write
+from tracing.codex.constants import get_codex_home
 
 _PATH_MARKER_BEGIN = "# >>> arize codex tracing PATH >>>"
 _PATH_MARKER_END = "# <<< arize codex tracing PATH <<<"
@@ -217,7 +217,11 @@ def _strip_v1_otel_block(path: Path) -> None:
     if not path.is_file():
         return
 
-    data = _toml_load(path)
+    try:
+        data = _toml_load_strict(path)
+    except ValueError as exc:
+        info(f"Skipping legacy TOML cleanup for {path}: {exc}")
+        return
     otel = data.get("otel")
     if not isinstance(otel, dict):
         return
@@ -289,7 +293,7 @@ def cleanup_legacy_install(codex_config_file: Path | None = None) -> None:
     so callers (and tests) can redirect it without monkeypatching this module.
     """
     if codex_config_file is None:
-        codex_config_file = CODEX_CONFIG_FILE
+        codex_config_file = get_codex_home() / "config.toml"
 
     # 1. Stop the buffer service if its PID file exists.
     pid_file = Path.home() / ".arize" / "harness" / "run" / "codex-buffer.pid"

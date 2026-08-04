@@ -32,7 +32,6 @@ def fake_home(tmp_path, monkeypatch):
     install_dir = tmp_path / ".arize" / "harness"
     install_dir.mkdir(parents=True)
     config_file = install_dir / "config.json"
-    codex_dir = tmp_path / ".codex"
     venv_bin_dir = install_dir / "venv" / "bin"
     venv_bin_dir.mkdir(parents=True)
 
@@ -49,10 +48,8 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.setattr("core.constants.CONFIG_FILE", config_file)
     monkeypatch.setattr("core.config.CONFIG_FILE", config_file)
 
-    monkeypatch.setattr(codex_install, "CODEX_CONFIG_DIR", codex_dir)
-    monkeypatch.setattr(codex_install, "CODEX_CONFIG_FILE", codex_dir / "config.toml")
-    monkeypatch.setattr(codex_install, "CODEX_ENV_FILE", codex_dir / "arize-env.sh")
     monkeypatch.setattr(codex_install, "CONFIG_FILE", config_file)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
 
     return tmp_path
 
@@ -193,6 +190,25 @@ class TestInstall:
         assert entry["api_key"] == "ak-xxx"
         assert entry["space_id"] == "U3Bh"
         assert entry["project_name"] == "codex"
+
+    def test_install_uses_custom_codex_home(self, fake_home, mock_prompts, monkeypatch):
+        custom_home = fake_home / "alternate-codex"
+        custom_home.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+
+        codex_install.install()
+
+        assert (custom_home / "config.toml").is_file()
+        assert (custom_home / "arize-env.sh").is_file()
+        assert not (fake_home / ".codex").exists()
+
+    def test_empty_codex_home_uses_default(self, fake_home, mock_prompts, monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", "")
+
+        codex_install.install()
+
+        assert (fake_home / ".codex" / "config.toml").is_file()
+        assert (fake_home / ".codex" / "arize-env.sh").is_file()
 
     def test_install_writes_notify_only_layout(self, fake_home, mock_prompts):
         """Fresh install writes one `notify = [...]` entry; no lifecycle hooks, no otel."""
@@ -358,6 +374,67 @@ class TestInstall:
         data = codex_toml._toml_load(toml_path)
         assert data.get("model", {}).get("name") == "gpt-4"
         assert "notify" in data
+
+    def test_install_rejects_invalid_codex_home_without_touching_default(self, fake_home, mock_prompts, monkeypatch):
+        default_home = fake_home / ".codex"
+        default_home.mkdir()
+        default_toml = default_home / "config.toml"
+        default_toml.write_text('[model]\nname = "default-profile"\n')
+        missing_home = fake_home / "missing-codex"
+        monkeypatch.setenv("CODEX_HOME", str(missing_home))
+
+        with pytest.raises(ValueError, match="CODEX_HOME"):
+            codex_install.install()
+
+        assert default_toml.read_text() == '[model]\nname = "default-profile"\n'
+        assert not (fake_home / ".arize" / "harness" / "config.json").exists()
+
+    def test_install_rejects_malformed_shared_config_without_overwriting(self, fake_home, mock_prompts, monkeypatch):
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        original = '{"harnesses": '
+        config_file.write_text(original)
+        custom_home = fake_home / "alternate-codex"
+        custom_home.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+
+        with pytest.raises(ValueError, match="Malformed JSON"):
+            codex_install.install()
+
+        assert config_file.read_text() == original
+        assert not (custom_home / "config.toml").exists()
+        assert not (custom_home / "arize-env.sh").exists()
+
+    def test_install_rejects_malformed_codex_toml_without_overwriting(self, fake_home, mock_prompts, monkeypatch):
+        custom_home = fake_home / "alternate-codex"
+        custom_home.mkdir()
+        toml_file = custom_home / "config.toml"
+        original = "[otel\nendpoint = 'broken'\n"
+        toml_file.write_text(original)
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+
+        with pytest.raises(ValueError, match="Malformed TOML"):
+            codex_install.install()
+
+        assert toml_file.read_text() == original
+        assert not (custom_home / "arize-env.sh").exists()
+
+    def test_uninstall_uses_custom_codex_home(self, fake_home, mock_prompts, monkeypatch):
+        custom_home = fake_home / "alternate-codex"
+        custom_home.mkdir()
+        notify_cmd = _expected_notify_cmd(fake_home)
+        (custom_home / "config.toml").write_text(f"notify = ['{notify_cmd}']\n")
+        (custom_home / "arize-env.sh").write_text("export ARIZE_TRACE_ENABLED=true\n")
+        default_home = fake_home / ".codex"
+        default_home.mkdir()
+        default_toml = default_home / "config.toml"
+        default_toml.write_text('notify = ["foreign-default"]\n')
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+
+        codex_install.uninstall()
+
+        assert codex_toml._toml_load(custom_home / "config.toml") == {}
+        assert not (custom_home / "arize-env.sh").exists()
+        assert default_toml.read_text() == 'notify = ["foreign-default"]\n'
 
 
 # ---------------------------------------------------------------------------

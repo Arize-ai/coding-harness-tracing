@@ -702,6 +702,17 @@ class TestCodexUpdateToml:
         assert 'keep = "this"' in content
         assert 'old = "val"' not in content
 
+    def test_malformed_toml_is_left_untouched(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        original = "[otel\nendpoint = 'broken'\n"
+        toml_path.write_text(original)
+        from core.setup.codex import _update_toml_otel_section
+
+        with pytest.raises(ValueError, match="Malformed TOML"):
+            _update_toml_otel_section(toml_path, 4318)
+
+        assert toml_path.read_text() == original
+
     def test_custom_port(self, tmp_path):
         """Uses the provided collector port."""
         toml_path = tmp_path / "config.toml"
@@ -828,6 +839,41 @@ class TestCodexRunFlow:
         # env file and toml should still be written
         assert (codex_dir / "arize-env.sh").exists()
         assert (codex_dir / "config.toml").exists()
+
+    def test_run_uses_custom_codex_home(self, tmp_path, monkeypatch):
+        config_path = str(tmp_path / "config.json")
+        custom_codex_dir = tmp_path / "alternate-codex"
+        custom_codex_dir.mkdir()
+
+        import core.config
+
+        monkeypatch.setattr(core.config, "CONFIG_FILE", config_path)
+        monkeypatch.setenv("CODEX_HOME", str(custom_codex_dir))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        inputs = iter(["", "1", "", ""])
+        monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+        monkeypatch.setattr("core.setup.getpass", lambda prompt="": "")
+        monkeypatch.setattr(
+            "sys.stdout",
+            type(
+                "FakeOut",
+                (),
+                {
+                    "isatty": lambda self: False,
+                    "write": lambda self, s: None,
+                    "flush": lambda self: None,
+                },
+            )(),
+        )
+
+        from core.setup.codex import _run
+
+        _run()
+
+        assert (custom_codex_dir / "arize-env.sh").exists()
+        assert (custom_codex_dir / "config.toml").exists()
+        assert not (tmp_path / ".codex").exists()
 
 
 # ---------------------------------------------------------------------------
