@@ -246,6 +246,7 @@ Commands:
   kiro        Install and configure tracing for Kiro CLI
   opencode    Install and configure tracing for opencode
   omp         Install and configure tracing for Oh My Pi (omp)
+  status      Report configured harnesses and whether their hooks are wired up
   update      Update the installed coding-harness-tracing and re-register all harnesses
   uninstall <harness>   Tear down one harness
   uninstall             Full wipe: venv + repo + shared config
@@ -253,6 +254,8 @@ Commands:
 Flags:
   --with-skills         Symlink harness skills into .agents/skills/
   --branch NAME         Install from a specific git branch (default: main)
+  --json                With `status`: emit machine-readable JSON. Exits non-zero
+                        when no harness is configured, so callers can gate on it.
   --non-interactive, -y Ask nothing; read every value from the environment or a
                         .env file. Missing required values are an error.
 
@@ -284,12 +287,13 @@ EOF
 # -- Main dispatch -----------------------------------------------------------
 main() {
     local cmd="${1:-}"; shift || true
-    local subcmd="" with_skills=false
+    local subcmd="" with_skills=false status_args=""
     local args=("$@") i=0
     while [[ $i -lt ${#args[@]} ]]; do
         case "${args[$i]}" in
             --with-skills) with_skills=true ;;
             --non-interactive|-y) export ARIZE_NONINTERACTIVE=1 ;;
+            --json) status_args="--json" ;;
             --branch)
                 i=$((i + 1))
                 INSTALL_BRANCH="${args[$i]:-main}"
@@ -333,6 +337,10 @@ main() {
                 fi
                 "$vp" -m core.setup.wipe
             fi
+            ;;
+        status)
+            local vp; vp=$(venv_python) || { err "Venv not found — nothing installed"; exit 1; }
+            "$vp" -m core.setup.status $status_args
             ;;
         update)
             header "Updating coding-harness-tracing"

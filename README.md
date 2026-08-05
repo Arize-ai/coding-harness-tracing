@@ -108,6 +108,29 @@ The API key is never echoed — the installer reports only that it found one, an
 
 An API key on its own is rejected as ambiguous, since both backends use one.
 
+### Checking what's installed
+
+`status` reports which harnesses are configured and whether their hooks are actually wired into the harness's own settings file — the two things that have to both be true for traces to appear.
+
+```bash
+./install.sh status
+./install.sh status --json    # machine-readable
+```
+
+`--json` is the one to use from a script or a coding agent: it exits non-zero when no harness is configured, so you can gate on it without parsing output. The payload contains no secrets — an API key appears only as `"api_key_present": true` — so it is safe to paste into a bug report.
+
+```
+Harnesses:
+  claude-code
+    project:  claude-code
+    backend:  arize → otlp.arize.com:443
+    space:    my-space
+    API key:  present
+    hooks:    registered (/Users/me/.claude/settings.json)
+```
+
+`hooks: NOT registered` means credentials are saved but the harness was never wired up (or something removed the hooks) — re-run the install for that harness.
+
 ### Environment variables
 
 Most settings live in `.arize/harness/config.json`, but a small set of env vars affect runtime behavior on every harness. The installers wire most of these for you; set them yourself when you want to override behavior for a single session or debug locally.

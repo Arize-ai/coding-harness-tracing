@@ -21,6 +21,7 @@ REM --- Parse arguments ---
 set "COMMAND="
 set "UNINSTALL_HARNESS="
 set "WITH_SKILLS="
+set "STATUS_ARGS="
 :parse_args
 if "%~1"=="" goto :done_args
 if /i "%~1"=="-h"        goto :usage
@@ -29,9 +30,11 @@ if /i "%~1"=="help"      goto :usage
 if /i "%~1"=="--with-skills" ( set "WITH_SKILLS=--with-skills" & shift & goto :parse_args )
 if /i "%~1"=="--non-interactive" ( set "ARIZE_NONINTERACTIVE=1" & shift & goto :parse_args )
 if /i "%~1"=="-y" ( set "ARIZE_NONINTERACTIVE=1" & shift & goto :parse_args )
+if /i "%~1"=="--json" ( set "STATUS_ARGS=--json" & shift & goto :parse_args )
 if /i "%~1"=="--branch" ( set "INSTALL_BRANCH=%~2" & set "TARBALL_URL=https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/%~2.tar.gz" & shift & shift & goto :parse_args )
 for %%C in (claude codex copilot cursor gemini kiro opencode omp) do if /i "%~1"=="%%C" ( set "COMMAND=%%C" & shift & goto :parse_args )
 if /i "%~1"=="update" ( set "COMMAND=update" & shift & goto :parse_args )
+if /i "%~1"=="status" ( set "COMMAND=status" & shift & goto :parse_args )
 if /i "%~1"=="uninstall" (
     set "COMMAND=uninstall" & shift
     for %%C in (claude codex copilot cursor gemini kiro opencode omp) do if /i "%~1"=="%%C" ( set "UNINSTALL_HARNESS=%%C" & shift )
@@ -46,6 +49,7 @@ REM --- Harness name -> directory mapping ---
 REM claude->tracing\claude_code  codex->tracing\codex  copilot->tracing\copilot  cursor->tracing\cursor  gemini->tracing\gemini  kiro->tracing\kiro  opencode->tracing\opencode  omp->tracing\omp
 
 REM --- Dispatch ---
+if "%COMMAND%"=="status"    goto :cmd_status
 if "%COMMAND%"=="update"    goto :cmd_update
 if "%COMMAND%"=="uninstall" goto :cmd_uninstall
 
@@ -64,6 +68,12 @@ set "_PY=%INSTALL_DIR%\%HARNESS_DIR%\install.py"
 if not exist "%_PY%" ( echo [arize] install.py not found at %_PY% >&2 & exit /b 1 )
 echo [arize] Running %COMMAND% install...
 "%VENV_PYTHON%" "%_PY%" install %WITH_SKILLS%
+exit /b %ERRORLEVEL%
+
+REM --- cmd_status ---
+:cmd_status
+if not exist "%VENV_PYTHON%" ( echo [arize] Venv not found - nothing installed >&2 & exit /b 1 )
+"%VENV_PYTHON%" -m core.setup.status %STATUS_ARGS%
 exit /b %ERRORLEVEL%
 
 REM --- cmd_update ---
@@ -233,12 +243,14 @@ echo     gemini              Install tracing for Gemini CLI
 echo     kiro                Install tracing for Kiro CLI
 echo     opencode            Install tracing for opencode
 echo     omp                 Install tracing for Oh My Pi (omp)
+echo     status              Report configured harnesses and hook wiring
 echo     update              Update to latest and reinstall all harnesses
 echo     uninstall [harness] Remove one harness or full wipe
 echo.
 echo   Flags:
 echo     --with-skills   Symlink harness skills into .agents\skills\
 echo     --branch NAME   Install from a specific git branch (default: main)
+echo     --json          With status: emit machine-readable JSON
 echo     --non-interactive, -y  Ask nothing; read values from the environment
 echo                     or a .env file. Missing required values are an error.
 echo.
