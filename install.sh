@@ -254,8 +254,8 @@ Commands:
 Flags:
   --with-skills         Symlink harness skills into .agents/skills/
   --branch NAME         Install from a specific git branch (default: main)
-  --json                With `status`: emit machine-readable JSON. Exits non-zero
-                        when no harness is configured, so callers can gate on it.
+  --json                With `status`: emit machine-readable JSON. Exit code is
+                        0 all wired up, 1 nothing configured, 2 hooks missing.
   --non-interactive, -y Ask nothing; read every value from the environment or a
                         .env file. Missing required values are an error.
 

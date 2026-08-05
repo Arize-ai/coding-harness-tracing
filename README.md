@@ -123,7 +123,15 @@ With no terminal to answer on — CI, a cron job, a script — it takes the stor
 ./install.sh status --json    # machine-readable
 ```
 
-`--json` is the one to use from a script or a coding agent: it exits non-zero when no harness is configured, so you can gate on it without parsing output. The payload contains no secrets — an API key appears only as `"api_key_present": true` — so it is safe to paste into a bug report.
+`--json` is the one to use from a script or a coding agent — you can gate on the exit code without parsing output:
+
+| Exit | Meaning |
+|------|---------|
+| `0` | every configured harness is wired up |
+| `1` | nothing configured |
+| `2` | configured, but at least one harness's hooks are missing |
+
+The JSON payload carries the same verdict as `"healthy"`, plus `"unregistered"` listing any harness whose hooks are missing. It contains no secrets — an API key appears only as `"api_key_present": true` — so it is safe to paste into a bug report.
 
 ```
 Harnesses:

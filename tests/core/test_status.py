@@ -22,6 +22,11 @@ def status_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(status, "CONFIG_FILE", config_file)
     monkeypatch.setattr(setup, "INSTALL_DIR", install_dir)
 
+    # Registration lookups otherwise read the developer's real ~/.claude,
+    # ~/.codex and friends, so results would vary by machine. Tests that care
+    # about registration re-patch this with paths of their own.
+    monkeypatch.setattr(status, "_registration_paths", lambda harness: [])
+
     return {"install_dir": install_dir, "config_file": config_file}
 
 
@@ -173,6 +178,33 @@ class TestRegistrationDetection:
 
         assert _registration_state("not-a-real-harness") == (None, None)
 
+    def test_later_path_can_match_when_first_does_not(self, status_paths, tmp_path, monkeypatch):
+        """omp registers via settings.json OR a plugin file — either counts.
+
+        Stopping at the first existing path reported a false negative when the
+        second was the one that matched.
+        """
+        from core.setup import status as status_mod
+
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"unrelated": True}))
+        plugin = tmp_path / "arize-tracing.ts"
+        plugin.write_text(f"// hook at {status_paths['install_dir']}/venv/bin/arize-hook-omp")
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings, plugin])
+
+        assert status_mod._registration_state("omp") == (True, str(plugin))
+
+    def test_reports_inspected_path_when_none_match(self, status_paths, tmp_path, monkeypatch):
+        """A False verdict should name a file that actually exists."""
+        from core.setup import status as status_mod
+
+        missing = tmp_path / "absent.json"
+        present = tmp_path / "settings.json"
+        present.write_text(json.dumps({"unrelated": True}))
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [missing, present])
+
+        assert status_mod._registration_state("omp") == (False, str(present))
+
     def test_symlinked_plugin_counts_as_registered(self, status_paths, tmp_path, monkeypatch):
         from core.setup import status as status_mod
 
@@ -217,12 +249,63 @@ class TestCli:
         assert main(["--json"]) == 0
         assert json.loads(capsys.readouterr().out)["harnesses"][0]["name"] == "codex"
 
-    def test_exit_nonzero_when_nothing_configured(self, status_paths, capsys):
+    def test_exit_1_when_nothing_configured(self, status_paths, capsys):
         """So a caller can gate on it without parsing output."""
         from core.setup.status import main
 
         assert main([]) == 1
         assert "No harnesses configured" in capsys.readouterr().out
+
+    def test_exit_2_when_hooks_missing(self, status_paths, tmp_path, monkeypatch, capsys):
+        """Regression: this used to exit 0 while the payload said registered=false.
+
+        Anything gating on the exit code alone concluded the install was fine.
+        """
+        from core.setup import status as status_mod
+
+        _write_config(status_paths, {"harnesses": {"codex": {"target": "arize", "api_key": "k"}}})
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [tmp_path / "absent.toml"])
+
+        assert status_mod.main([]) == 2
+
+        out = capsys.readouterr().out
+        assert "Hooks are missing for: codex" in out
+
+    def test_exit_0_when_everything_registered(self, status_paths, tmp_path, monkeypatch):
+        from core.setup import status as status_mod
+
+        _write_config(status_paths, {"harnesses": {"codex": {"target": "arize", "api_key": "k"}}})
+        settings = tmp_path / "config.toml"
+        settings.write_text(str(status_paths["install_dir"] / "venv" / "bin" / "arize-hook-codex-notify"))
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
+
+        assert status_mod.main([]) == 0
+
+    def test_unknown_registration_is_not_treated_as_failure(self, status_paths):
+        """Cannot-tell must not be reported as broken — that is guessing too."""
+        from core.setup.status import collect_status, main
+
+        _write_config(status_paths, {"harnesses": {"mystery-harness": {"target": "arize", "api_key": "k"}}})
+
+        assert collect_status()["unregistered"] == []
+        assert main([]) == 0
+
+    def test_healthy_flag_mirrors_the_exit_code(self, status_paths, tmp_path, monkeypatch):
+        """JSON consumers get the same verdict without inspecting each entry."""
+        from core.setup import status as status_mod
+
+        _write_config(status_paths, {"harnesses": {"codex": {"target": "arize", "api_key": "k"}}})
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [tmp_path / "absent.toml"])
+
+        status = status_mod.collect_status()
+
+        assert status["healthy"] is False
+        assert status["unregistered"] == ["codex"]
+
+    def test_healthy_false_when_nothing_configured(self, status_paths):
+        from core.setup.status import collect_status
+
+        assert collect_status()["healthy"] is False
 
     def test_human_output_hides_the_key(self, status_paths, capsys):
         from core.setup.status import main

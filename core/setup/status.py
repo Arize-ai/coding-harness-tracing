@@ -20,9 +20,9 @@ from typing import Optional
 from core.config import load_config
 from core.setup import CONFIG_FILE, INSTALL_DIR, VENV_DIR
 
-# Where each harness registers itself, as (module, constant names). Checked in
-# order; the first path that exists decides. Kept declarative so a new harness
-# is one line rather than a bespoke check.
+# Where each harness registers itself, as (module, constant names). Every
+# candidate is checked — a harness may register through any one of them. Kept
+# declarative so a new harness is one line rather than a bespoke check.
 _REGISTRATION = {
     "claude-code": ("tracing.claude_code.constants", ("SETTINGS_FILE",)),
     "codex": ("tracing.codex.constants", ("CODEX_CONFIG_FILE",)),
@@ -90,6 +90,10 @@ def _references_install(path: Path) -> bool:
 def _registration_state(harness: str) -> tuple:
     """Return (registered, path) for a harness.
 
+    Every existing candidate is checked, not just the first: a harness can
+    register through any one of them, so stopping at the first existing path
+    would report a false negative when a later path is the one that matched.
+
     ``registered`` is None when we have no way to tell — an unknown harness, or
     one whose constants failed to import. Never guess True.
     """
@@ -97,12 +101,14 @@ def _registration_state(harness: str) -> tuple:
     if not paths:
         return (None, None)
 
-    for path in paths:
-        if path.exists():
-            return (_references_install(path), str(path))
+    existing = [path for path in paths if path.exists()]
+    for path in existing:
+        if _references_install(path):
+            return (True, str(path))
 
-    # Nothing on disk: not registered, but report where we looked.
-    return (False, str(paths[0]))
+    # Nothing references us. Point at what we actually inspected when something
+    # was there, otherwise at where we looked first.
+    return (False, str(existing[0]) if existing else str(paths[0]))
 
 
 def collect_status() -> dict:
@@ -132,6 +138,10 @@ def collect_status() -> dict:
             item["space_id"] = entry.get("space_id")
         entries.append(item)
 
+    # A harness we cannot check is not counted as broken — that would be
+    # guessing in the other direction. Only an explicit False counts.
+    unregistered = [item["name"] for item in entries if item["registered"] is False]
+
     return {
         "install_dir": str(INSTALL_DIR),
         "installed": VENV_DIR.exists(),
@@ -140,6 +150,8 @@ def collect_status() -> dict:
         "user_id": config.get("user_id") or "",
         "logging": config.get("logging"),
         "harnesses": entries,
+        "unregistered": unregistered,
+        "healthy": bool(entries) and not unregistered,
     }
 
 
@@ -164,6 +176,12 @@ def _format_human(status: dict) -> str:
         lines.append("No harnesses configured.")
         return "\n".join(lines)
 
+    if status["unregistered"]:
+        lines.append("")
+        lines.append(
+            "Hooks are missing for: " + ", ".join(status["unregistered"]) + " — re-run the install for those harnesses."
+        )
+
     lines.append("")
     lines.append("Harnesses:")
     for item in status["harnesses"]:
@@ -186,6 +204,17 @@ def _format_human(status: dict) -> str:
 
 
 def main(argv: Optional[list] = None) -> int:
+    """Print the report and return an exit code a caller can gate on.
+
+    0  every configured harness is wired up
+    1  nothing configured
+    2  configured, but at least one harness's hooks are missing
+
+    2 exists because 0 previously covered it: a harness whose hooks had been
+    removed reported ``"registered": false`` in the payload while the process
+    still exited successfully, so anything gating on the exit code alone
+    concluded the install was fine.
+    """
     parser = argparse.ArgumentParser(
         prog="install.sh status",
         description="Report configured harnesses and whether their hooks are wired up.",
@@ -200,8 +229,9 @@ def main(argv: Optional[list] = None) -> int:
     else:
         print(_format_human(status))
 
-    # Non-zero when nothing is set up, so a caller can gate on it.
-    return 0 if status["harnesses"] else 1
+    if not status["harnesses"]:
+        return 1
+    return 2 if status["unregistered"] else 0
 
 
 if __name__ == "__main__":
