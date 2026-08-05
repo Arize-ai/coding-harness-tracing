@@ -41,8 +41,8 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
-from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 from tracing.codex.constants import get_codex_home
+from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 
 # Root of Codex's per-session rollout transcripts.
 _CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"

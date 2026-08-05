@@ -630,7 +630,9 @@ class TestSendLegacySingleSpan:
     def test_notify_loads_env_from_custom_codex_home(self, tmp_path, monkeypatch):
         custom_home = tmp_path / "alternate-codex"
         custom_home.mkdir()
-        (custom_home / "arize-env.sh").write_text("export ARIZE_TRACE_ENABLED=true\nexport TEST_CODEX_HOME_ENV=loaded\n")
+        (custom_home / "arize-env.sh").write_text(
+            "export ARIZE_TRACE_ENABLED=true\nexport TEST_CODEX_HOME_ENV=loaded\n"
+        )
         monkeypatch.setenv("CODEX_HOME", str(custom_home))
         monkeypatch.delenv("TEST_CODEX_HOME_ENV", raising=False)
         monkeypatch.setattr(sys, "argv", ["hook", '{"type":"other"}'])
