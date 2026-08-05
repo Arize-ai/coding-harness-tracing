@@ -517,8 +517,8 @@ def _dotenv_values() -> dict:
 
     Lets ``ax api-keys create --env-file .env`` feed the installer directly:
     the key goes CLI → file → installer, never through argv, shell history, or
-    a coding agent's transcript. Only consulted when the real environment
-    doesn't already supply the value, so exported vars still win.
+    a coding agent's transcript. Values found here take precedence over the
+    real environment (see ``_env``).
     """
     global _dotenv_cache
     if _dotenv_cache is not None:
@@ -544,15 +544,24 @@ def _reset_dotenv_cache() -> None:
 
 
 def _env(name: str) -> str:
-    """Resolve a config value: real environment first, then the dotenv file."""
-    value = os.environ.get(name, "").strip()
+    """Resolve a config value: dotenv file first, then the real environment.
+
+    The file deliberately wins. A dotenv file is an explicit, inspectable
+    statement of intent; ``ARIZE_*`` variables are frequently *inherited* rather
+    than chosen — an installed harness exports ``ARIZE_API_KEY``,
+    ``ARIZE_SPACE_ID`` and ``ARIZE_PROJECT_NAME`` into every agent session via
+    the harness settings file. Reading the environment first let those stale
+    values silently beat the credentials the caller had just written, and could
+    pair a fresh key from the file with a space ID from the environment.
+    """
+    value = _dotenv_values().get(name, "").strip()
     if value:
         return value
-    return _dotenv_values().get(name, "").strip()
+    return os.environ.get(name, "").strip()
 
 
 def env_value(name: str) -> str:
-    """Resolve a config value from the environment or dotenv file.
+    """Resolve a config value from the dotenv file or environment.
 
     Public entry point for harness installers that have a prompt of their own
     to resolve (currently only Kiro's agent name).
@@ -561,7 +570,7 @@ def env_value(name: str) -> str:
 
 
 def env_flag(name: str, default: bool = True) -> bool:
-    """Read a boolean setting from the environment or dotenv file.
+    """Read a boolean setting from the dotenv file or environment.
 
     Only explicit falsey words turn a default-on setting off, and only explicit
     truthy words turn a default-off setting on.

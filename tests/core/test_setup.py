@@ -533,10 +533,48 @@ class TestDotenvResolution:
 
         assert creds["api_key"] == "right"
 
-    def test_real_env_beats_file(self, tmp_path, monkeypatch):
+    def test_file_beats_real_env(self, tmp_path, monkeypatch):
+        """The file wins: it is chosen, whereas ARIZE_* vars are often inherited."""
         from core.setup import prompt_backend
 
         (tmp_path / ".env").write_text("ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
+        monkeypatch.setenv("ARIZE_API_KEY", "env-key")
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            _, creds = prompt_backend()
+
+        assert creds["api_key"] == "file-key"
+        assert creds["space_id"] == "file-space"
+
+    def test_ambient_harness_env_does_not_leak_in(self, tmp_path, monkeypatch):
+        """Regression: an installed harness exports ARIZE_* into every session.
+
+        Those inherited values used to beat the .env the caller had just
+        written, pairing a fresh key with a stale space ID and overriding the
+        project name.
+        """
+        from core.setup import prompt_backend, prompt_project_name
+
+        (tmp_path / ".env").write_text(
+            "ARIZE_API_KEY=fresh-key\nARIZE_SPACE_ID=intended-space\nARIZE_PROJECT_NAME=intended-project\n"
+        )
+        monkeypatch.setenv("ARIZE_API_KEY", "stale-key")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "stale-space")
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "claude-code")
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            _, creds = prompt_backend()
+            project = prompt_project_name("fallback")
+
+        assert creds["api_key"] == "fresh-key"
+        assert creds["space_id"] == "intended-space"
+        assert project == "intended-project"
+
+    def test_env_still_used_when_file_lacks_the_key(self, tmp_path, monkeypatch):
+        """The file overrides only what it actually defines."""
+        from core.setup import prompt_backend
+
+        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=file-space\n")
         monkeypatch.setenv("ARIZE_API_KEY", "env-key")
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):

@@ -72,7 +72,7 @@ You're only asked these the first time you install a harness — subsequent inst
 
 Pass `--non-interactive` (or `-y`) to skip every prompt above and take each value from the environment instead. Nothing is asked, and a missing required value is an error rather than a prompt — so this is the mode to use from a script, from CI, or when a coding agent is driving the install itself.
 
-Values resolve from the environment first, then from `./.env` or `./.env.local` (point somewhere else with `ARIZE_ENV_FILE`). Only the keys below are read out of a dotenv file, so an app's `.env` full of unrelated settings is safe to use.
+Values are read from `./.env` or `./.env.local` (point somewhere else with `ARIZE_ENV_FILE`), falling back to the environment for anything the file doesn't define. **The file takes precedence over existing environment variables** — an already-installed harness exports `ARIZE_API_KEY`, `ARIZE_SPACE_ID` and `ARIZE_PROJECT_NAME` into every agent session, and those inherited values should not beat credentials you just wrote to a file. Only the keys below are read out of a dotenv file, so an app's `.env` full of unrelated settings is safe to use.
 
 ```bash
 ./install.sh claude --non-interactive
