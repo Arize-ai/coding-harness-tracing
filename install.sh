@@ -344,6 +344,11 @@ main() {
             ;;
         update)
             header "Updating coding-harness-tracing"
+            # Re-registering runs each harness's installer, which prompts for the
+            # project name. With no terminal to answer on that used to die with an
+            # EOFError, so fall back to stored values there — and only there, so an
+            # interactive update keeps every prompt it has today.
+            [[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1
             if [[ -d "${INSTALL_DIR}/.git" ]]; then
                 info "Pulling latest changes..."
                 git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {

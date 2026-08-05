@@ -325,6 +325,39 @@ class TestFlagParsing:
     def test_env_var_default_branch(self):
         assert "ARIZE_INSTALL_BRANCH" in self.text
 
+    def test_non_interactive_flag_parsed(self):
+        assert "--non-interactive|-y)" in self.text
+        assert "export ARIZE_NONINTERACTIVE=1" in self.text
+
+    def test_json_flag_parsed(self):
+        assert "--json)" in self.text
+        assert 'status_args="--json"' in self.text
+
+
+class TestUpdateNonInteractiveGate:
+    """`update` re-registers harnesses, which prompts for each project name.
+
+    With no terminal that used to die with an EOFError. The fallback must be
+    gated on there being no terminal, so an interactive update keeps its prompts.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _load(self):
+        self.text = _read_install_sh()
+
+    def test_update_falls_back_when_no_terminal(self):
+        assert '[[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1' in self.text
+
+    def test_gate_lives_in_the_update_arm(self):
+        """Guard against the export drifting somewhere it would always apply."""
+        update_arm = self.text.split("        update)", 1)[1].split("        -h|--help|help)", 1)[0]
+        assert '[[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1' in update_arm
+
+    def test_gate_reuses_the_scripts_own_tty_detection(self):
+        """_tty_in is how the rest of the script already decides if it can prompt."""
+        assert '_tty_in="/dev/tty"' in self.text
+        assert self.text.index('_tty_in="/dev/tty"') < self.text.index('[[ -n "$_tty_in" ]] || export')
+
 
 # ---------------------------------------------------------------------------
 # Constants tests

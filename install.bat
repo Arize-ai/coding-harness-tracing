@@ -81,6 +81,11 @@ REM --- cmd_update ---
 if not exist "%INSTALL_DIR%" ( echo [arize] Not installed at %INSTALL_DIR% >&2 & exit /b 1 )
 call :find_python
 if "%FOUND_PYTHON%"=="" ( echo [arize] Error: Python 3.9+ is required >&2 & exit /b 1 )
+REM Re-registering runs each harness's installer, which prompts for the project
+REM name. With no console to answer on that dies with an EOFError, so fall back
+REM to stored values there — and only there, so an interactive update keeps
+REM every prompt it has today. cmd has no -t test; ask Python instead.
+%FOUND_PYTHON% -c "import sys; sys.exit(0 if sys.stdin.isatty() else 1)" >nul 2>&1 || set "ARIZE_NONINTERACTIVE=1"
 set "_UPDATE_NEED_VENV=0"
 if exist "%INSTALL_DIR%\.git" (
     echo [arize] Pulling latest changes...

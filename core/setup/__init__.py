@@ -329,7 +329,10 @@ def prompt_project_name(default: str) -> str:
         # different one and collide their spans. Only an explicit dotenv entry
         # or the harness default may set it.
         name = _dotenv_only("ARIZE_PROJECT_NAME") or default
-        source = _source_of("ARIZE_PROJECT_NAME", fallback="harness default", include_env=False)
+        # "default" rather than "harness default": on a re-install the caller
+        # passes the stored project name as the default, so naming the harness
+        # would be wrong.
+        source = _source_of("ARIZE_PROJECT_NAME", fallback="default", include_env=False)
         info(f"Project name: {name} (from {source})")
         return name
 

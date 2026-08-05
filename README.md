@@ -103,10 +103,16 @@ The API key is never echoed — the installer reports only that it found one, an
 [arize] Backend: Arize AX at otlp.arize.com:443 (from default)
 [arize]   space ID: my-space (from /path/to/.env)
 [arize]   API key: found (from /path/to/.env)
-[arize] Project name: codex (from harness default)
+[arize] Project name: codex (from default)
 ```
 
 An API key on its own is rejected as ambiguous, since both backends use one.
+
+### Updating
+
+`install.sh update` pulls the latest code and re-registers every harness already in `config.json`. Re-registering runs each harness's installer, so in a terminal it still asks for each project name, exactly as before.
+
+With no terminal to answer on — CI, a cron job, a script — it takes the stored values instead of failing. Credentials aren't re-read on that path; only the project name is confirmed, and it keeps whatever is in `config.json`.
 
 ### Checking what's installed
 

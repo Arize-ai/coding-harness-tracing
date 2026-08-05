@@ -402,7 +402,7 @@ class TestNonInteractive:
             prompt_project_name("codex")
 
         out = capsys.readouterr().out
-        assert "harness default" in out
+        assert "(from default)" in out
         assert "ARIZE_PROJECT_NAME" not in out
 
     def test_user_id_blank_by_default(self):
