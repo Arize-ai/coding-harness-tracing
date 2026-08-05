@@ -379,13 +379,31 @@ class TestNonInteractive:
         with self._no_prompts():
             assert prompt_project_name("claude-code") == "claude-code"
 
-    def test_project_name_from_env(self, monkeypatch):
+    def test_project_name_ignores_ambient_env(self, monkeypatch):
+        """ARIZE_PROJECT_NAME in the environment belongs to another harness.
+
+        An installed harness exports it into every session; inheriting it would
+        name this harness's project after a different one and collide spans.
+        """
         from core.setup import prompt_project_name
 
-        monkeypatch.setenv("ARIZE_PROJECT_NAME", "my-project")
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "claude-code")
 
         with self._no_prompts():
-            assert prompt_project_name("claude-code") == "my-project"
+            assert prompt_project_name("codex") == "codex"
+
+    def test_project_name_source_label_does_not_credit_env(self, monkeypatch, capsys):
+        """The label must not name a source that was never consulted."""
+        from core.setup import prompt_project_name
+
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "claude-code")
+
+        with self._no_prompts():
+            prompt_project_name("codex")
+
+        out = capsys.readouterr().out
+        assert "harness default" in out
+        assert "ARIZE_PROJECT_NAME" not in out
 
     def test_user_id_blank_by_default(self):
         from core.setup import prompt_user_id
@@ -631,6 +649,74 @@ class TestDotenvResolution:
 
         assert _dotenv_values() == {}
         assert "Reading configuration" not in capsys.readouterr().out
+
+    def test_project_name_read_from_file(self, tmp_path):
+        """The file may set the project name; only the environment is ignored."""
+        from core.setup import prompt_project_name
+
+        (tmp_path / ".env").write_text("ARIZE_PROJECT_NAME=from-file\n")
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            assert prompt_project_name("codex") == "from-file"
+
+    def test_inline_comment_stripped(self, tmp_path):
+        """`KEY=value # note` must not yield a value with the comment attached."""
+        from core.setup import prompt_backend
+
+        (tmp_path / ".env").write_text(
+            "ARIZE_API_KEY=k # the key\nARIZE_SPACE_ID=space-abc # my main space\n",
+        )
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            _, creds = prompt_backend()
+
+        assert creds["space_id"] == "space-abc"
+        assert creds["api_key"] == "k"
+
+    def test_tab_before_comment_stripped(self, tmp_path):
+        from core.setup import _dotenv_values
+
+        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=space-abc\t# tabbed note\n")
+
+        assert _dotenv_values()["ARIZE_SPACE_ID"] == "space-abc"
+
+    def test_hash_in_quoted_value_preserved(self, tmp_path):
+        """Quoting is the documented way to keep a literal '#'."""
+        from core.setup import _dotenv_values
+
+        (tmp_path / ".env").write_text('ARIZE_PROJECT_NAME="has # hash"\n')
+
+        assert _dotenv_values()["ARIZE_PROJECT_NAME"] == "has # hash"
+
+    def test_hash_without_leading_space_is_kept(self, tmp_path):
+        """A '#' with no preceding whitespace is part of the value, per dotenv."""
+        from core.setup import _dotenv_values
+
+        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=space#abc\n")
+
+        assert _dotenv_values()["ARIZE_SPACE_ID"] == "space#abc"
+
+    def test_comment_only_value_is_empty(self, tmp_path):
+        from core.setup import _dotenv_values
+
+        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=#nothing here\nARIZE_API_KEY=k\n")
+
+        assert _dotenv_values()["ARIZE_SPACE_ID"] == ""
+
+    def test_reports_source_per_value(self, tmp_path, monkeypatch, capsys):
+        """Mixed sources must be visible: which value came from where."""
+        from core.setup import prompt_backend
+
+        (tmp_path / ".env").write_text("ARIZE_API_KEY=fresh-key\n")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-from-env")
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            prompt_backend()
+
+        out = capsys.readouterr().out
+        assert "$ARIZE_SPACE_ID" in out
+        assert str(tmp_path / ".env") in out
+        assert "fresh-key" not in out
 
 
 class TestWriteConfig:

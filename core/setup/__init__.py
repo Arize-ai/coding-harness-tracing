@@ -237,14 +237,19 @@ def _backend_from_env() -> tuple[str, dict]:
 
     if target == "phoenix":
         endpoint = _env("PHOENIX_ENDPOINT") or "http://localhost:6006"
-        info(f"Backend: Phoenix at {endpoint}")
-        return ("phoenix", {"endpoint": endpoint, "api_key": _env("PHOENIX_API_KEY")})
+        api_key = _env("PHOENIX_API_KEY")
+        info(f"Backend: Phoenix at {endpoint} (from {_source_of('PHOENIX_ENDPOINT', fallback='default')})")
+        info(f"  API key: {'found' if api_key else 'none'} (from {_source_of('PHOENIX_API_KEY', fallback='unset')})")
+        return ("phoenix", {"endpoint": endpoint, "api_key": api_key})
 
-    # Arize AX. Read the key but never echo it — only report that it was found.
+    # Arize AX. Read the key but never echo it — only report that it was found
+    # and where from, so a wrong-credentials install is diagnosable.
     api_key = _require_env("ARIZE_API_KEY", "An Arize API key")
     space_id = _require_env("ARIZE_SPACE_ID", "An Arize space ID")
     endpoint = _env("ARIZE_OTLP_ENDPOINT") or "otlp.arize.com:443"
-    info(f"Backend: Arize AX at {endpoint} (space {space_id}, API key from ARIZE_API_KEY)")
+    info(f"Backend: Arize AX at {endpoint} (from {_source_of('ARIZE_OTLP_ENDPOINT', fallback='default')})")
+    info(f"  space ID: {space_id} (from {_source_of('ARIZE_SPACE_ID')})")
+    info(f"  API key: found (from {_source_of('ARIZE_API_KEY')})")
     return ("arize", {"endpoint": endpoint, "api_key": api_key, "space_id": space_id})
 
 
@@ -318,8 +323,14 @@ def _try_copy_from(target: str, existing_harnesses: dict | None) -> dict | None:
 def prompt_project_name(default: str) -> str:
     """Prompt for project name. Returns default if blank."""
     if non_interactive():
-        name = _env("ARIZE_PROJECT_NAME") or default
-        info(f"Project name: {name}")
+        # Deliberately not _env(): the ambient ARIZE_PROJECT_NAME belongs to
+        # whichever harness is already installed and exports it into this
+        # session. Inheriting it would name *this* harness's project after a
+        # different one and collide their spans. Only an explicit dotenv entry
+        # or the harness default may set it.
+        name = _dotenv_only("ARIZE_PROJECT_NAME") or default
+        source = _source_of("ARIZE_PROJECT_NAME", fallback="harness default", include_env=False)
+        info(f"Project name: {name} (from {source})")
         return name
 
     print("")
@@ -472,6 +483,7 @@ _DOTENV_KEYS = (
 )
 
 _dotenv_cache: Optional[dict] = None
+_dotenv_path: Optional[Path] = None
 
 
 def _dotenv_candidates() -> list:
@@ -488,6 +500,11 @@ def _parse_dotenv(path: Path) -> dict:
 
     Handles ``export KEY=value``, surrounding quotes, comments and blank lines.
     Values are not shell-expanded — a literal ``$FOO`` stays literal.
+
+    An unquoted value ends at a whitespace-preceded ``#``, matching dotenv
+    convention: ``KEY=value # note`` yields ``value``. Quote the value to keep
+    a literal ``#``. Without this, a commented credential line silently
+    produced a malformed value rather than an error.
     """
     values: dict = {}
     try:
@@ -504,12 +521,27 @@ def _parse_dotenv(path: Path) -> dict:
         key, _, raw = line.partition("=")
         if key.strip() not in _DOTENV_KEYS:
             continue
+
         value = raw.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
+        else:
+            value = _strip_inline_comment(value)
+
         values[key.strip()] = value.strip()
 
     return values
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Drop a trailing ``# comment`` from an unquoted dotenv value."""
+    if value.startswith("#"):
+        return ""
+    for sep in (" #", "\t#"):
+        idx = value.find(sep)
+        if idx != -1:
+            value = value[:idx]
+    return value
 
 
 def _dotenv_values() -> dict:
@@ -520,7 +552,7 @@ def _dotenv_values() -> dict:
     a coding agent's transcript. Values found here take precedence over the
     real environment (see ``_env``).
     """
-    global _dotenv_cache
+    global _dotenv_cache, _dotenv_path
     if _dotenv_cache is not None:
         return _dotenv_cache
 
@@ -532,6 +564,7 @@ def _dotenv_values() -> dict:
         if found:
             info(f"Reading configuration from {path} ({len(found)} value(s))")
             _dotenv_cache = found
+            _dotenv_path = path
             break
 
     return _dotenv_cache
@@ -539,8 +572,30 @@ def _dotenv_values() -> dict:
 
 def _reset_dotenv_cache() -> None:
     """Clear the dotenv cache. For tests, which vary cwd and file contents."""
-    global _dotenv_cache
+    global _dotenv_cache, _dotenv_path
     _dotenv_cache = None
+    _dotenv_path = None
+
+
+def _dotenv_only(name: str) -> str:
+    """Resolve a value from the dotenv file alone, ignoring the environment."""
+    return _dotenv_values().get(name, "").strip()
+
+
+def _source_of(name: str, fallback: str = "unset", include_env: bool = True) -> str:
+    """Name where a value was resolved from, for reporting back to the user.
+
+    Answers the question the old output could not: whether a value came from the
+    file the caller wrote or from an inherited variable.
+
+    ``include_env=False`` for values that ignore the environment by design, so
+    the label never credits a source that was not consulted.
+    """
+    if _dotenv_only(name):
+        return str(_dotenv_path) if _dotenv_path else "dotenv file"
+    if include_env and os.environ.get(name, "").strip():
+        return f"${name}"
+    return fallback
 
 
 def _env(name: str) -> str:

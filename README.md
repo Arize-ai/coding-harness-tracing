@@ -83,7 +83,7 @@ Values are read from `./.env` or `./.env.local` (point somewhere else with `ARIZ
 | `ARIZE_API_KEY` + `ARIZE_SPACE_ID` | — | Arize AX credentials. Both required for the Arize backend. |
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | `http://localhost:6006` | Phoenix endpoint and optional API key. |
 | `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. |
-| `ARIZE_PROJECT_NAME` | harness name | Project spans are grouped under. |
+| `ARIZE_PROJECT_NAME` | harness name | Project spans are grouped under. **Read from the dotenv file only** — an environment value is ignored here, since an installed harness exports its own project name into every session and inheriting it would name this harness's project after a different one. |
 | `ARIZE_USER_ID` | — | Optional `user.id` on every span. |
 | `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
 | `ARIZE_LOG_PROMPTS` | `true` | Set `false` to omit prompt text. |
@@ -93,9 +93,20 @@ Values are read from `./.env` or `./.env.local` (point somewhere else with `ARIZ
 | `ARIZE_KIRO_AGENT` | `arize-traced` | Kiro only — which agent to install hooks into. |
 | `ARIZE_KIRO_SET_DEFAULT` | `false` | Kiro only — also make that agent Kiro's default. |
 
+In a dotenv file, an unquoted value ends at a whitespace-preceded `#`, so `ARIZE_SPACE_ID=abc # my space` yields `abc`. Quote the value to keep a literal `#`.
+
 Content logging defaults match the interactive wizard: everything on. Set the three `ARIZE_LOG_*` variables explicitly if you need a narrower capture.
 
-The API key is never echoed — the installer reports only that it found one. An API key on its own is rejected as ambiguous, since both backends use one.
+The API key is never echoed — the installer reports only that it found one, and where it came from. Every resolved value is reported with its source (dotenv path, `$VAR`, or default) so a wrong-credentials install is diagnosable:
+
+```
+[arize] Backend: Arize AX at otlp.arize.com:443 (from default)
+[arize]   space ID: my-space (from /path/to/.env)
+[arize]   API key: found (from /path/to/.env)
+[arize] Project name: codex (from harness default)
+```
+
+An API key on its own is rejected as ambiguous, since both backends use one.
 
 ### Environment variables
 
