@@ -75,13 +75,8 @@ Pass `--non-interactive` (or `-y`) to skip every prompt above and take each valu
 Values resolve from the environment first, then from `./.env` or `./.env.local` (point somewhere else with `ARIZE_ENV_FILE`). Only the keys below are read out of a dotenv file, so an app's `.env` full of unrelated settings is safe to use.
 
 ```bash
-# credentials straight from a dotenv file — nothing exported, no key in argv
-ax api-keys create --env-file .env          # writes ARIZE_API_KEY
-echo 'ARIZE_SPACE_ID=<space-id>' >> .env
 ./install.sh claude --non-interactive
 ```
-
-Reading the key from a file rather than a flag keeps it out of your shell history, out of `ps` output, and out of a coding agent's transcript.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
