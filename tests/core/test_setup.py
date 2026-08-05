@@ -189,6 +189,412 @@ class TestPromptUserId:
         assert result == ""
 
 
+class TestNonInteractive:
+    """Tests for non-interactive resolution of the four setup prompts.
+
+    Every test patches builtins.input to explode: reaching a prompt in this
+    mode is the bug being guarded against, since there is nobody to answer it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _non_interactive_env(self, monkeypatch):
+        """Enable the flag and clear every value the resolver reads."""
+        from core.setup import _reset_dotenv_cache
+
+        monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
+        for key in (
+            "ARIZE_API_KEY",
+            "ARIZE_SPACE_ID",
+            "ARIZE_BACKEND",
+            "ARIZE_OTLP_ENDPOINT",
+            "ARIZE_PROJECT_NAME",
+            "ARIZE_USER_ID",
+            "ARIZE_LOG_PROMPTS",
+            "ARIZE_LOG_TOOL_DETAILS",
+            "ARIZE_LOG_TOOL_CONTENT",
+            "ARIZE_ENV_FILE",
+            "PHOENIX_ENDPOINT",
+            "PHOENIX_API_KEY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        _reset_dotenv_cache()
+        yield
+        _reset_dotenv_cache()
+
+    @staticmethod
+    def _no_prompts():
+        """Patch input/getpass to fail loudly if the code tries to prompt."""
+        return patch("builtins.input", side_effect=AssertionError("prompted in non-interactive mode"))
+
+    def test_flag_detected(self):
+        from core.setup import non_interactive
+
+        assert non_interactive() is True
+
+    def test_flag_off_by_default(self, monkeypatch):
+        from core.setup import non_interactive
+
+        monkeypatch.delenv("ARIZE_NONINTERACTIVE", raising=False)
+        assert non_interactive() is False
+
+    def test_arize_from_env(self, monkeypatch):
+        """Space ID implies Arize AX; no backend flag needed."""
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_API_KEY", "key-123")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-456")
+
+        with self._no_prompts():
+            target, creds = prompt_backend()
+
+        assert target == "arize"
+        assert creds == {
+            "endpoint": "otlp.arize.com:443",
+            "api_key": "key-123",
+            "space_id": "space-456",
+        }
+
+    def test_api_key_never_printed(self, monkeypatch, capsys):
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_API_KEY", "super-secret-key")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-456")
+
+        with self._no_prompts():
+            prompt_backend()
+
+        captured = capsys.readouterr()
+        assert "super-secret-key" not in captured.out
+        assert "super-secret-key" not in captured.err
+
+    def test_phoenix_inferred_from_endpoint(self, monkeypatch):
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://phoenix:6006")
+        monkeypatch.setenv("PHOENIX_API_KEY", "phx-key")
+
+        with self._no_prompts():
+            target, creds = prompt_backend()
+
+        assert target == "phoenix"
+        assert creds == {"endpoint": "http://phoenix:6006", "api_key": "phx-key"}
+
+    def test_explicit_backend_overrides_inference(self, monkeypatch):
+        """ARIZE_BACKEND=phoenix wins even when a space ID is present."""
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_BACKEND", "phoenix")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-456")
+
+        with self._no_prompts():
+            target, creds = prompt_backend()
+
+        assert target == "phoenix"
+        assert creds["endpoint"] == "http://localhost:6006"
+
+    def test_backend_alias_ax(self, monkeypatch):
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_BACKEND", "ax")
+        monkeypatch.setenv("ARIZE_API_KEY", "key-123")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-456")
+
+        with self._no_prompts():
+            target, _ = prompt_backend()
+
+        assert target == "arize"
+
+    def test_custom_otlp_endpoint(self, monkeypatch):
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_API_KEY", "key-123")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-456")
+        monkeypatch.setenv("ARIZE_OTLP_ENDPOINT", "custom.arize.com:443")
+
+        with self._no_prompts():
+            _, creds = prompt_backend()
+
+        assert creds["endpoint"] == "custom.arize.com:443"
+
+    def test_missing_api_key_exits(self, monkeypatch, capsys):
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-456")
+
+        with self._no_prompts():
+            with pytest.raises(SystemExit):
+                prompt_backend()
+
+        assert "ARIZE_API_KEY" in capsys.readouterr().err
+
+    def test_missing_space_id_exits(self, monkeypatch, capsys):
+        """An API key alone is ambiguous — both backends use one."""
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_API_KEY", "key-123")
+
+        with self._no_prompts():
+            with pytest.raises(SystemExit):
+                prompt_backend()
+
+        err = capsys.readouterr().err
+        assert "cannot tell which backend" in err
+        assert "ARIZE_SPACE_ID" in err
+
+    def test_no_credentials_at_all_exits(self, capsys):
+        from core.setup import prompt_backend
+
+        with self._no_prompts():
+            with pytest.raises(SystemExit):
+                prompt_backend()
+
+        err = capsys.readouterr().err
+        assert "No credentials found" in err
+        assert "ARIZE_SPACE_ID" in err and "PHOENIX_ENDPOINT" in err
+
+    def test_exit_code_is_nonzero(self, capsys):
+        """The installer must fail loudly enough for a caller to detect."""
+        from core.setup import prompt_backend
+
+        with self._no_prompts():
+            with pytest.raises(SystemExit) as excinfo:
+                prompt_backend()
+
+        assert excinfo.value.code == 1
+
+    def test_unknown_backend_exits(self, monkeypatch, capsys):
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_BACKEND", "datadog")
+
+        with self._no_prompts():
+            with pytest.raises(SystemExit):
+                prompt_backend()
+
+        assert "datadog" in capsys.readouterr().err
+
+    def test_project_name_defaults(self):
+        from core.setup import prompt_project_name
+
+        with self._no_prompts():
+            assert prompt_project_name("claude-code") == "claude-code"
+
+    def test_project_name_from_env(self, monkeypatch):
+        from core.setup import prompt_project_name
+
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "my-project")
+
+        with self._no_prompts():
+            assert prompt_project_name("claude-code") == "my-project"
+
+    def test_user_id_blank_by_default(self):
+        from core.setup import prompt_user_id
+
+        with self._no_prompts():
+            assert prompt_user_id() == ""
+
+    def test_user_id_from_env(self, monkeypatch):
+        from core.setup import prompt_user_id
+
+        monkeypatch.setenv("ARIZE_USER_ID", "alice")
+
+        with self._no_prompts():
+            assert prompt_user_id() == "alice"
+
+    def test_logging_defaults_to_capture_everything(self):
+        """Parity with the interactive wizard, whose three prompts default to yes."""
+        from core.setup import prompt_content_logging
+
+        with self._no_prompts():
+            block = prompt_content_logging()
+
+        assert block == {"prompts": True, "tool_details": True, "tool_content": True}
+
+    def test_logging_opt_out(self, monkeypatch):
+        from core.setup import prompt_content_logging
+
+        monkeypatch.setenv("ARIZE_LOG_PROMPTS", "false")
+        monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "0")
+
+        with self._no_prompts():
+            block = prompt_content_logging()
+
+        assert block == {"prompts": False, "tool_details": True, "tool_content": False}
+
+    def test_env_flag_default_off_needs_explicit_optin(self, monkeypatch):
+        """A default-off setting must not be turned on by any old value."""
+        from core.setup import env_flag
+
+        assert env_flag("ARIZE_LOG_PROMPTS", default=False) is False
+        monkeypatch.setenv("ARIZE_LOG_PROMPTS", "1")
+        assert env_flag("ARIZE_LOG_PROMPTS", default=False) is True
+        monkeypatch.setenv("ARIZE_LOG_PROMPTS", "no")
+        assert env_flag("ARIZE_LOG_PROMPTS", default=False) is False
+
+    def test_kiro_agent_name_defaults(self):
+        """Kiro's own prompt resolves too — it is the one harness with extras."""
+        from tracing.kiro.install import _prompt_agent_name
+
+        with self._no_prompts():
+            assert _prompt_agent_name() == "arize-traced"
+
+    def test_kiro_agent_name_from_env(self, monkeypatch):
+        from tracing.kiro.install import _prompt_agent_name
+
+        monkeypatch.setenv("ARIZE_KIRO_AGENT", "my-agent")
+
+        with self._no_prompts():
+            assert _prompt_agent_name() == "my-agent"
+
+    def test_kiro_set_default_is_opt_in(self, monkeypatch):
+        """Never silently repoint the user's default Kiro agent."""
+        from tracing.kiro import install as kiro_install
+
+        called = []
+        monkeypatch.setattr(kiro_install.shutil, "which", lambda _: called.append("which") or None)
+
+        with self._no_prompts():
+            kiro_install._maybe_set_default("my-agent")
+
+        assert called == []
+
+    def test_kiro_set_default_opt_in_honored(self, monkeypatch, capsys):
+        from tracing.kiro import install as kiro_install
+
+        monkeypatch.setenv("ARIZE_KIRO_SET_DEFAULT", "1")
+        monkeypatch.setenv("ARIZE_DRY_RUN", "1")
+
+        with self._no_prompts():
+            kiro_install._maybe_set_default("my-agent")
+
+        assert "set-default my-agent" in capsys.readouterr().out
+
+    def test_harness_check_skipped(self, monkeypatch):
+        """The y/N 'not installed' prompt must not fire under the flag, even on a TTY."""
+        from core.setup import ensure_harness_installed
+
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+        with self._no_prompts():
+            assert ensure_harness_installed("Nope", home_subdir=".no-such-harness-dir") is True
+
+
+class TestDotenvResolution:
+    """Non-interactive installs can read credentials from a dotenv file.
+
+    This is the path that keeps an API key out of argv and shell history:
+    `ax api-keys create --env-file .env` writes it, the installer reads it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        from core.setup import _reset_dotenv_cache
+
+        monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
+        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "ARIZE_PROJECT_NAME", "ARIZE_ENV_FILE"):
+            monkeypatch.delenv(key, raising=False)
+        _reset_dotenv_cache()
+        yield
+        _reset_dotenv_cache()
+
+    def test_reads_dotenv_from_cwd(self, tmp_path):
+        """tmp_path is cwd via the module-level _isolate_cwd fixture."""
+        from core.setup import prompt_backend
+
+        (tmp_path / ".env").write_text("ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            target, creds = prompt_backend()
+
+        assert target == "arize"
+        assert creds["api_key"] == "file-key"
+        assert creds["space_id"] == "file-space"
+
+    def test_env_local_fallback(self, tmp_path):
+        from core.setup import prompt_backend
+
+        (tmp_path / ".env.local").write_text("ARIZE_API_KEY=local-key\nARIZE_SPACE_ID=local-space\n")
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            _, creds = prompt_backend()
+
+        assert creds["api_key"] == "local-key"
+
+    def test_explicit_path_wins(self, tmp_path, monkeypatch):
+        from core.setup import prompt_backend
+
+        (tmp_path / ".env").write_text("ARIZE_API_KEY=wrong\nARIZE_SPACE_ID=wrong\n")
+        custom = tmp_path / "creds.env"
+        custom.write_text("ARIZE_API_KEY=right\nARIZE_SPACE_ID=right-space\n")
+        monkeypatch.setenv("ARIZE_ENV_FILE", str(custom))
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            _, creds = prompt_backend()
+
+        assert creds["api_key"] == "right"
+
+    def test_real_env_beats_file(self, tmp_path, monkeypatch):
+        from core.setup import prompt_backend
+
+        (tmp_path / ".env").write_text("ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
+        monkeypatch.setenv("ARIZE_API_KEY", "env-key")
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            _, creds = prompt_backend()
+
+        assert creds["api_key"] == "env-key"
+        assert creds["space_id"] == "file-space"
+
+    def test_parses_export_quotes_and_comments(self, tmp_path):
+        from core.setup import prompt_backend, prompt_project_name
+
+        (tmp_path / ".env").write_text(
+            "# Arize credentials\n"
+            "\n"
+            'export ARIZE_API_KEY="quoted-key"\n'
+            "ARIZE_SPACE_ID='single-quoted'\n"
+            "ARIZE_PROJECT_NAME = spaced-out \n"
+            "MALFORMED_LINE\n"
+        )
+
+        with patch("builtins.input", side_effect=AssertionError("prompted")):
+            _, creds = prompt_backend()
+            project = prompt_project_name("fallback")
+
+        assert creds["api_key"] == "quoted-key"
+        assert creds["space_id"] == "single-quoted"
+        assert project == "spaced-out"
+
+    def test_unrelated_keys_ignored(self, tmp_path):
+        """An app's .env holds all sorts of things; only our keys are read."""
+        from core.setup import _dotenv_values
+
+        (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-nope\nDATABASE_URL=postgres://x\nARIZE_SPACE_ID=space\n")
+
+        assert _dotenv_values() == {"ARIZE_SPACE_ID": "space"}
+
+    def test_dotenv_ignored_when_interactive(self, tmp_path, monkeypatch):
+        """Without the flag the wizard still asks, even with a .env sitting there."""
+        from core.setup import prompt_backend
+
+        monkeypatch.delenv("ARIZE_NONINTERACTIVE", raising=False)
+        (tmp_path / ".env").write_text("ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
+
+        with patch("builtins.input", side_effect=["2", "typed-space", ""]):
+            with patch("core.setup.getpass", return_value="typed-key"):
+                with patch.object(sys.stdout, "isatty", return_value=False):
+                    _, creds = prompt_backend()
+
+        assert creds["api_key"] == "typed-key"
+        assert creds["space_id"] == "typed-space"
+
+    def test_missing_file_is_not_an_error(self, capsys):
+        from core.setup import _dotenv_values
+
+        assert _dotenv_values() == {}
+        assert "Reading configuration" not in capsys.readouterr().out
+
+
 class TestWriteConfig:
     """Tests for write_config()."""
 

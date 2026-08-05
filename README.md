@@ -27,7 +27,7 @@ Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response 
 
 ### Setup walkthrough
 
-The installer involves a brief interactive setup. The steps below run in order:
+The installer involves a brief interactive setup. The steps below run in order. To skip all of them, see [Non-interactive install](#non-interactive-install).
 
 #### 1. Backend selection
 
@@ -67,6 +67,40 @@ Three Y/n opt-outs that apply to **all** harnesses:
 - Log what tools returned (file contents, command output)?
 
 You're only asked these the first time you install a harness — subsequent installs reuse the existing `logging:` block. You can edit them later in `~/.arize/harness/config.json`.
+
+### Non-interactive install
+
+Pass `--non-interactive` (or `-y`) to skip every prompt above and take each value from the environment instead. Nothing is asked, and a missing required value is an error rather than a prompt — so this is the mode to use from a script, from CI, or when a coding agent is driving the install itself.
+
+Values resolve from the environment first, then from `./.env` or `./.env.local` (point somewhere else with `ARIZE_ENV_FILE`). Only the keys below are read out of a dotenv file, so an app's `.env` full of unrelated settings is safe to use.
+
+```bash
+# credentials straight from a dotenv file — nothing exported, no key in argv
+ax api-keys create --env-file .env          # writes ARIZE_API_KEY
+echo 'ARIZE_SPACE_ID=<space-id>' >> .env
+./install.sh claude --non-interactive
+```
+
+Reading the key from a file rather than a flag keeps it out of your shell history, out of `ps` output, and out of a coding agent's transcript.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ARIZE_API_KEY` + `ARIZE_SPACE_ID` | — | Arize AX credentials. Both required for the Arize backend. |
+| `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | `http://localhost:6006` | Phoenix endpoint and optional API key. |
+| `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. |
+| `ARIZE_PROJECT_NAME` | harness name | Project spans are grouped under. |
+| `ARIZE_USER_ID` | — | Optional `user.id` on every span. |
+| `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
+| `ARIZE_LOG_PROMPTS` | `true` | Set `false` to omit prompt text. |
+| `ARIZE_LOG_TOOL_DETAILS` | `true` | Set `false` to omit tool commands, file paths and URLs. |
+| `ARIZE_LOG_TOOL_CONTENT` | `true` | Set `false` to omit tool output. |
+| `ARIZE_ENV_FILE` | `./.env`, `./.env.local` | Explicit dotenv path to read instead of searching. |
+| `ARIZE_KIRO_AGENT` | `arize-traced` | Kiro only — which agent to install hooks into. |
+| `ARIZE_KIRO_SET_DEFAULT` | `false` | Kiro only — also make that agent Kiro's default. |
+
+Content logging defaults match the interactive wizard: everything on. Set the three `ARIZE_LOG_*` variables explicitly if you need a narrower capture.
+
+The API key is never echoed — the installer reports only that it found one. An API key on its own is rejected as ambiguous, since both backends use one.
 
 ### Environment variables
 

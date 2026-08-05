@@ -109,7 +109,7 @@ def ensure_harness_installed(
     if checks:
         info(f"  (not found: {', '.join(checks)})")
 
-    if not sys.stdout.isatty():
+    if non_interactive() or not sys.stdout.isatty():
         info("  non-interactive — proceeding anyway")
         return True
 
@@ -139,6 +139,9 @@ def prompt_backend(
       phoenix: {"endpoint", "api_key"}
       arize:   {"endpoint", "api_key", "space_id"}
     """
+    if non_interactive():
+        return _backend_from_env()
+
     print("Which backend do you want to use?")
     print("")
     print("  1) Phoenix (self-hosted)")
@@ -194,6 +197,55 @@ def prompt_backend(
             "space_id": space_id,
         },
     )
+
+
+def _backend_from_env() -> tuple[str, dict]:
+    """Resolve backend + credentials from the environment, for non-interactive installs.
+
+    Backend selection is explicit via ``ARIZE_BACKEND``, otherwise inferred: a
+    space ID means Arize AX, a Phoenix endpoint means Phoenix. Nothing is
+    inferred from the API key alone — both backends use one.
+
+    Exits with an actionable message when a required value is missing; this
+    path must never fall back to a prompt, because there is nobody to answer it.
+    """
+    target = _env("ARIZE_BACKEND").lower()
+    if target in ("ax", "arize"):
+        target = "arize"
+    elif target and target != "phoenix":
+        err(f"Unknown ARIZE_BACKEND '{target}' — use 'arize' or 'phoenix'.")
+        sys.exit(1)
+
+    if not target:
+        if _env("ARIZE_SPACE_ID"):
+            target = "arize"
+        elif _env("PHOENIX_ENDPOINT"):
+            target = "phoenix"
+        elif _env("ARIZE_API_KEY"):
+            # Both backends take an API key, so a key on its own is ambiguous.
+            err(
+                "Found an API key but cannot tell which backend it is for. Add "
+                "ARIZE_SPACE_ID for Arize AX, or PHOENIX_ENDPOINT for Phoenix."
+            )
+            sys.exit(1)
+        else:
+            err(
+                "No credentials found. Set ARIZE_API_KEY and ARIZE_SPACE_ID for Arize AX "
+                "(in the environment or a .env file), or PHOENIX_ENDPOINT for Phoenix."
+            )
+            sys.exit(1)
+
+    if target == "phoenix":
+        endpoint = _env("PHOENIX_ENDPOINT") or "http://localhost:6006"
+        info(f"Backend: Phoenix at {endpoint}")
+        return ("phoenix", {"endpoint": endpoint, "api_key": _env("PHOENIX_API_KEY")})
+
+    # Arize AX. Read the key but never echo it — only report that it was found.
+    api_key = _require_env("ARIZE_API_KEY", "An Arize API key")
+    space_id = _require_env("ARIZE_SPACE_ID", "An Arize space ID")
+    endpoint = _env("ARIZE_OTLP_ENDPOINT") or "otlp.arize.com:443"
+    info(f"Backend: Arize AX at {endpoint} (space {space_id}, API key from ARIZE_API_KEY)")
+    return ("arize", {"endpoint": endpoint, "api_key": api_key, "space_id": space_id})
 
 
 def _try_copy_from(target: str, existing_harnesses: dict | None) -> dict | None:
@@ -265,6 +317,11 @@ def _try_copy_from(target: str, existing_harnesses: dict | None) -> dict | None:
 
 def prompt_project_name(default: str) -> str:
     """Prompt for project name. Returns default if blank."""
+    if non_interactive():
+        name = _env("ARIZE_PROJECT_NAME") or default
+        info(f"Project name: {name}")
+        return name
+
     print("")
     name = input(f"Project name [{default}]: ").strip()
     return name if name else default
@@ -276,6 +333,16 @@ def prompt_content_logging() -> dict:
     All three default to True to match the kit's existing capture-everything
     behavior. Users opt out per category.
     """
+    if non_interactive():
+        block = {
+            "prompts": env_flag("ARIZE_LOG_PROMPTS"),
+            "tool_details": env_flag("ARIZE_LOG_TOOL_DETAILS"),
+            "tool_content": env_flag("ARIZE_LOG_TOOL_CONTENT"),
+        }
+        enabled = ", ".join(f"{k}={'on' if v else 'off'}" for k, v in block.items())
+        info(f"Content logging: {enabled}")
+        return block
+
     print("")
     if sys.stdout.isatty() and os.name != "nt":
         print("\033[1;33mSecurity:\033[0m Traces can contain sensitive data — credentials, PII, file contents.")
@@ -309,6 +376,9 @@ def write_logging_config(logging_block: dict, config_path: str | None = None) ->
 
 def prompt_user_id() -> str:
     """Optional user ID prompt. Returns "" if skipped."""
+    if non_interactive():
+        return _env("ARIZE_USER_ID")
+
     print("")
     if sys.stdout.isatty() and os.name != "nt":
         print("\033[0;34mOptional:\033[0m Set a user ID to identify your spans (useful for teams).")
@@ -371,6 +441,146 @@ def write_config(
 def dry_run() -> bool:
     """True when ARIZE_DRY_RUN env var is set to a truthy value ('1','true','yes')."""
     return os.environ.get("ARIZE_DRY_RUN", "").lower() in ("1", "true", "yes")
+
+
+def non_interactive() -> bool:
+    """True when ARIZE_NONINTERACTIVE is set to a truthy value ('1','true','yes').
+
+    In this mode the setup wizards never call ``input()``/``getpass()``: every
+    value is resolved from the environment (or a dotenv file, see
+    ``_dotenv_values``) and a missing required value is a hard error instead of
+    a prompt. Deliberately opt-in — without it, an exported ``ARIZE_API_KEY``
+    would silently stop the interactive wizard from asking its questions.
+    """
+    return os.environ.get("ARIZE_NONINTERACTIVE", "").lower() in ("1", "true", "yes")
+
+
+# Keys we will read out of a dotenv file. Everything else in the file is
+# ignored, so pointing at an app's .env can't inject unrelated settings.
+_DOTENV_KEYS = (
+    "ARIZE_API_KEY",
+    "ARIZE_SPACE_ID",
+    "ARIZE_BACKEND",
+    "ARIZE_OTLP_ENDPOINT",
+    "ARIZE_PROJECT_NAME",
+    "ARIZE_USER_ID",
+    "ARIZE_LOG_PROMPTS",
+    "ARIZE_LOG_TOOL_DETAILS",
+    "ARIZE_LOG_TOOL_CONTENT",
+    "PHOENIX_ENDPOINT",
+    "PHOENIX_API_KEY",
+)
+
+_dotenv_cache: Optional[dict] = None
+
+
+def _dotenv_candidates() -> list:
+    """Dotenv files to consider, in order. ARIZE_ENV_FILE overrides the search."""
+    explicit = os.environ.get("ARIZE_ENV_FILE", "").strip()
+    if explicit:
+        return [Path(explicit).expanduser()]
+    cwd = Path.cwd()
+    return [cwd / ".env", cwd / ".env.local"]
+
+
+def _parse_dotenv(path: Path) -> dict:
+    """Extract _DOTENV_KEYS from a dotenv file. Unreadable file → {}.
+
+    Handles ``export KEY=value``, surrounding quotes, comments and blank lines.
+    Values are not shell-expanded — a literal ``$FOO`` stays literal.
+    """
+    values: dict = {}
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return values
+
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :]
+        key, _, raw = line.partition("=")
+        if key.strip() not in _DOTENV_KEYS:
+            continue
+        value = raw.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        values[key.strip()] = value.strip()
+
+    return values
+
+
+def _dotenv_values() -> dict:
+    """Load Arize/Phoenix values from a dotenv file, once per process.
+
+    Lets ``ax api-keys create --env-file .env`` feed the installer directly:
+    the key goes CLI → file → installer, never through argv, shell history, or
+    a coding agent's transcript. Only consulted when the real environment
+    doesn't already supply the value, so exported vars still win.
+    """
+    global _dotenv_cache
+    if _dotenv_cache is not None:
+        return _dotenv_cache
+
+    _dotenv_cache = {}
+    for path in _dotenv_candidates():
+        if not path.is_file():
+            continue
+        found = _parse_dotenv(path)
+        if found:
+            info(f"Reading configuration from {path} ({len(found)} value(s))")
+            _dotenv_cache = found
+            break
+
+    return _dotenv_cache
+
+
+def _reset_dotenv_cache() -> None:
+    """Clear the dotenv cache. For tests, which vary cwd and file contents."""
+    global _dotenv_cache
+    _dotenv_cache = None
+
+
+def _env(name: str) -> str:
+    """Resolve a config value: real environment first, then the dotenv file."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    return _dotenv_values().get(name, "").strip()
+
+
+def env_value(name: str) -> str:
+    """Resolve a config value from the environment or dotenv file.
+
+    Public entry point for harness installers that have a prompt of their own
+    to resolve (currently only Kiro's agent name).
+    """
+    return _env(name)
+
+
+def env_flag(name: str, default: bool = True) -> bool:
+    """Read a boolean setting from the environment or dotenv file.
+
+    Only explicit falsey words turn a default-on setting off, and only explicit
+    truthy words turn a default-off setting on.
+    """
+    raw = _env(name).lower()
+    if not raw:
+        return default
+    if default:
+        return raw not in ("0", "false", "no", "n", "off")
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _require_env(name: str, what: str) -> str:
+    """Resolve a required value, or exit with an actionable message."""
+    value = _env(name)
+    if not value:
+        err(f"{what} is required for a non-interactive install — set {name} or put it in a .env file.")
+        sys.exit(1)
+    return value
 
 
 def ensure_shared_runtime() -> None:

@@ -253,6 +253,30 @@ Commands:
 Flags:
   --with-skills         Symlink harness skills into .agents/skills/
   --branch NAME         Install from a specific git branch (default: main)
+  --non-interactive, -y Ask nothing; read every value from the environment or a
+                        .env file. Missing required values are an error.
+
+Non-interactive install:
+  Values are read from the environment first, then from ./.env or ./.env.local
+  (override the path with ARIZE_ENV_FILE). Because credentials can come from a
+  file, the API key never has to appear in a command line or shell history.
+
+  ARIZE_API_KEY, ARIZE_SPACE_ID     Arize AX credentials (both required)
+  PHOENIX_ENDPOINT, PHOENIX_API_KEY Phoenix credentials
+  ARIZE_BACKEND                     arize|phoenix (default: inferred — a space
+                                    ID means Arize AX, a Phoenix endpoint
+                                    means Phoenix)
+  ARIZE_PROJECT_NAME                Project name (default: the harness name)
+  ARIZE_USER_ID                     Optional user ID stamped on spans
+  ARIZE_OTLP_ENDPOINT               Override otlp.arize.com:443
+  ARIZE_LOG_PROMPTS                 Set false to omit prompt text
+  ARIZE_LOG_TOOL_DETAILS            Set false to omit tool commands and paths
+  ARIZE_LOG_TOOL_CONTENT            Set false to omit tool output
+
+  Example — credentials straight from a dotenv file, nothing exported:
+    ax api-keys create --env-file .env   # writes ARIZE_API_KEY
+    echo 'ARIZE_SPACE_ID=<space-id>' >> .env
+    ./install.sh claude --non-interactive
 
 EOF
 }
@@ -265,6 +289,7 @@ main() {
     while [[ $i -lt ${#args[@]} ]]; do
         case "${args[$i]}" in
             --with-skills) with_skills=true ;;
+            --non-interactive|-y) export ARIZE_NONINTERACTIVE=1 ;;
             --branch)
                 i=$((i + 1))
                 INSTALL_BRANCH="${args[$i]:-main}"
