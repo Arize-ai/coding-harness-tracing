@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -65,8 +66,13 @@ def _references_install(path: Path) -> bool:
     Every harness wires itself up by writing an absolute path into its own
     settings/config file, or by linking a plugin out of the install dir — so a
     mention of INSTALL_DIR is the common signal across all of them.
+
+    The marker carries a trailing separator so a sibling directory cannot match
+    on prefix: ``~/.arize/harness-old`` is not ``~/.arize/harness``, and
+    reporting a stale install as wired up would be a false positive in the one
+    command whose job is to tell you the truth about that.
     """
-    marker = str(INSTALL_DIR)
+    marker = str(INSTALL_DIR).rstrip(os.sep) + os.sep
 
     if path.is_symlink():
         try:

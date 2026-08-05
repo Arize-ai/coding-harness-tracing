@@ -362,6 +362,62 @@ class TestNonInteractive:
 
         assert excinfo.value.code == 1
 
+    def test_arize_key_with_only_phoenix_endpoint_exits(self, monkeypatch, capsys):
+        """Inferring Phoenix here would throw away the Arize key.
+
+        Real setup: a dev runs Phoenix locally for their app, so its .env has
+        PHOENIX_ENDPOINT, while they want Arize AX for the coding agent.
+        """
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_API_KEY", "my-ax-key")
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://localhost:6006")
+
+        with self._no_prompts():
+            with pytest.raises(SystemExit):
+                prompt_backend()
+
+        assert "ARIZE_SPACE_ID" in capsys.readouterr().err
+
+    def test_both_backends_configured_exits(self, monkeypatch, capsys):
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_API_KEY", "k")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "s")
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://localhost:6006")
+
+        with self._no_prompts():
+            with pytest.raises(SystemExit):
+                prompt_backend()
+
+        assert "ambiguous" in capsys.readouterr().err
+
+    def test_explicit_backend_resolves_the_ambiguity(self, monkeypatch):
+        """ARIZE_BACKEND is the documented way out of both errors above."""
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("ARIZE_BACKEND", "phoenix")
+        monkeypatch.setenv("ARIZE_API_KEY", "k")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "s")
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://localhost:6006")
+
+        with self._no_prompts():
+            target, creds = prompt_backend()
+
+        assert target == "phoenix"
+        assert creds["endpoint"] == "http://localhost:6006"
+
+    def test_phoenix_alone_still_infers_phoenix(self, monkeypatch):
+        """No Arize credentials at all — inference is unambiguous."""
+        from core.setup import prompt_backend
+
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://localhost:6006")
+
+        with self._no_prompts():
+            target, _ = prompt_backend()
+
+        assert target == "phoenix"
+
     def test_unknown_backend_exits(self, monkeypatch, capsys):
         from core.setup import prompt_backend
 
@@ -645,10 +701,35 @@ class TestDotenvResolution:
         assert creds["space_id"] == "typed-space"
 
     def test_missing_file_is_not_an_error(self, capsys):
+        """No .env in the cwd is normal — only an *explicit* path must exist."""
         from core.setup import _dotenv_values
 
         assert _dotenv_values() == {}
         assert "Reading configuration" not in capsys.readouterr().out
+
+    def test_unreadable_explicit_path_is_fatal(self, tmp_path, monkeypatch, capsys):
+        """A typo in ARIZE_ENV_FILE must not fall through to the environment.
+
+        Naming a file states where the credentials come from; ignoring it
+        silently installed with whatever happened to be in the environment.
+        """
+        from core.setup import _dotenv_values
+
+        monkeypatch.setenv("ARIZE_ENV_FILE", str(tmp_path / "typo.env"))
+
+        with pytest.raises(SystemExit) as excinfo:
+            _dotenv_values()
+
+        assert excinfo.value.code == 1
+        assert "ARIZE_ENV_FILE" in capsys.readouterr().err
+
+    def test_explicit_path_that_is_a_directory_is_fatal(self, tmp_path, monkeypatch):
+        from core.setup import _dotenv_values
+
+        monkeypatch.setenv("ARIZE_ENV_FILE", str(tmp_path))
+
+        with pytest.raises(SystemExit):
+            _dotenv_values()
 
     def test_project_name_read_from_file(self, tmp_path):
         """The file may set the project name; only the environment is ignored."""

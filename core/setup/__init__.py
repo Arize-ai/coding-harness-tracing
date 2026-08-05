@@ -217,8 +217,25 @@ def _backend_from_env() -> tuple[str, dict]:
         sys.exit(1)
 
     if not target:
+        if _env("ARIZE_SPACE_ID") and _env("PHOENIX_ENDPOINT"):
+            # Both backends signalled. Picking one would silently discard the
+            # other's credentials — a dev running Phoenix locally for their app
+            # has PHOENIX_ENDPOINT in its .env while wanting Arize AX here.
+            err(
+                "Both an Arize space ID and a Phoenix endpoint are configured, so the "
+                "backend is ambiguous. Set ARIZE_BACKEND to 'arize' or 'phoenix'."
+            )
+            sys.exit(1)
         if _env("ARIZE_SPACE_ID"):
             target = "arize"
+        elif _env("ARIZE_API_KEY") and _env("PHOENIX_ENDPOINT"):
+            # An Arize key with only a Phoenix endpoint: inferring Phoenix would
+            # throw the key away, which is never what the caller meant.
+            err(
+                "Found an Arize API key but only a Phoenix endpoint. Add ARIZE_SPACE_ID "
+                "for Arize AX, or set ARIZE_BACKEND=phoenix to use Phoenix deliberately."
+            )
+            sys.exit(1)
         elif _env("PHOENIX_ENDPOINT"):
             target = "phoenix"
         elif _env("ARIZE_API_KEY"):
@@ -490,10 +507,20 @@ _dotenv_path: Optional[Path] = None
 
 
 def _dotenv_candidates() -> list:
-    """Dotenv files to consider, in order. ARIZE_ENV_FILE overrides the search."""
+    """Dotenv files to consider, in order. ARIZE_ENV_FILE overrides the search.
+
+    An explicit path that cannot be read is a hard error rather than a silent
+    fall-back to the environment: naming a file states where the credentials are
+    meant to come from, and a typo would otherwise quietly install with whatever
+    happened to be in the environment instead.
+    """
     explicit = os.environ.get("ARIZE_ENV_FILE", "").strip()
     if explicit:
-        return [Path(explicit).expanduser()]
+        path = Path(explicit).expanduser()
+        if not path.is_file():
+            err(f"ARIZE_ENV_FILE points at {path}, which is not a readable file.")
+            sys.exit(1)
+        return [path]
     cwd = Path.cwd()
     return [cwd / ".env", cwd / ".env.local"]
 

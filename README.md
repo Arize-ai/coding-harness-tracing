@@ -82,14 +82,14 @@ Values are read from `./.env` or `./.env.local` (point somewhere else with `ARIZ
 |----------|---------|-------------|
 | `ARIZE_API_KEY` + `ARIZE_SPACE_ID` | — | Arize AX credentials. Both required for the Arize backend. |
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | `http://localhost:6006` | Phoenix endpoint and optional API key. |
-| `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. |
+| `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. When both are present, or an Arize key appears with only a Phoenix endpoint, the install stops and asks you to set this rather than guess — guessing would discard one backend's credentials. |
 | `ARIZE_PROJECT_NAME` | harness name | Project spans are grouped under. **Read from the dotenv file only** — an environment value is ignored here, since an installed harness exports its own project name into every session and inheriting it would name this harness's project after a different one. |
 | `ARIZE_USER_ID` | — | Optional `user.id` on every span. |
 | `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
 | `ARIZE_LOG_PROMPTS` | `true` | Set `false` to omit prompt text. |
 | `ARIZE_LOG_TOOL_DETAILS` | `true` | Set `false` to omit tool commands, file paths and URLs. |
 | `ARIZE_LOG_TOOL_CONTENT` | `true` | Set `false` to omit tool output. |
-| `ARIZE_ENV_FILE` | `./.env`, `./.env.local` | Explicit dotenv path to read instead of searching. |
+| `ARIZE_ENV_FILE` | `./.env`, `./.env.local` | Explicit dotenv path to read instead of searching. A path that is not a readable file is an error, not a fall-back to the environment. |
 | `ARIZE_KIRO_AGENT` | `arize-traced` | Kiro only — which agent to install hooks into. |
 | `ARIZE_KIRO_SET_DEFAULT` | `false` | Kiro only — also make that agent Kiro's default. |
 

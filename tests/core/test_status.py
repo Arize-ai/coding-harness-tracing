@@ -172,6 +172,21 @@ class TestRegistrationDetection:
         assert registered is False
         assert path == str(missing)
 
+    def test_sibling_install_dir_does_not_count(self, status_paths, tmp_path, monkeypatch):
+        """`harness-old` must not match the marker `harness` on prefix.
+
+        Reporting a stale install as wired up is a false positive in the one
+        command whose job is to tell the truth about that.
+        """
+        from core.setup import status as status_mod
+
+        stale = str(status_paths["install_dir"]) + "-old"
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"hook": f"{stale}/venv/bin/arize-hook-stop"}))
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
+
+        assert status_mod._registration_state("claude-code") == (False, str(settings))
+
     def test_unknown_harness_reports_none_not_false(self, status_paths):
         """Never claim 'not registered' for something we cannot check."""
         from core.setup.status import _registration_state
