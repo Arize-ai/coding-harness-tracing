@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -46,11 +47,21 @@ class TestShellSyntax:
         text = _read_install_sh()
         assert "set -euo pipefail" in text, "Missing strict mode"
 
-    def test_line_count_under_400(self):
-        """Router should be ~200-330 lines, well under the old 1919."""
+    def test_line_count_under_460(self):
+        """Router should be ~350-450 lines, well under the old 1919.
+
+        The cap is a ratchet against bash creeping back in: logic here is not
+        unit-testable, not type-checked, and has to be mirrored in install.bat
+        for Windows. Anything that can live in `core/setup/` belongs there.
+
+        Raised from 400 when offline wheel install landed (--wheel-dir): flag
+        parsing and the pip invocation both run before the venv exists, so they
+        cannot move to Python. If you are raising it again, move something to
+        Python first — and change this docstring, not just the number.
+        """
         text = _read_install_sh()
         lines = text.strip().splitlines()
-        assert len(lines) <= 400, f"install.sh has {len(lines)} lines — should be under 400"
+        assert len(lines) <= 460, f"install.sh has {len(lines)} lines — should be under 460"
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +302,11 @@ class TestDispatchLogic:
         # between them.
         pre_wipe = text[:wipe_idx]
         assert "list_installed_harnesses" in pre_wipe, "Full uninstall does not iterate installed harnesses before wipe"
+        # run_harness_py dispatches to install.py — as a file in repo mode, as a
+        # module in wheel mode. Either way it must run before the wipe.
         assert (
-            'install.py" uninstall' in pre_wipe
-        ), "Full uninstall does not invoke per-harness install.py uninstall before wipe"
+            'run_harness_py "$key" "$vp" uninstall' in pre_wipe
+        ), "Full uninstall does not invoke per-harness uninstall before wipe"
 
     def test_update_calls_pip_install(self):
         assert "pip" in self.text and "install" in self.text
@@ -382,3 +395,101 @@ class TestConstants:
 
     def test_tarball_url(self):
         assert "archive/refs/heads/" in self.text
+
+
+class TestWheelDirParsing:
+    """`--wheel-dir` installs from local wheels, fetching nothing."""
+
+    @pytest.fixture(autouse=True)
+    def _load(self):
+        self.text = _read_install_sh()
+
+    def test_flag_and_env_var_both_wired(self):
+        assert "--wheel-dir)" in self.text
+        assert "ARIZE_WHEEL_DIR" in self.text
+
+    def test_pip_uses_no_index(self):
+        """--no-index is what makes a missing wheel loud instead of a PyPI fetch."""
+        assert '--no-index --find-links "$WHEEL_DIR" coding-harness-tracing' in self.text
+
+    def test_documented_in_usage(self):
+        assert "--wheel-dir DIR" in self.text
+
+    def test_harness_py_falls_back_to_module(self):
+        """A wheel install has no source tree, so install.py runs as a module."""
+        assert 'run_with_tty "$vp" -m "${dir//\\//.}.install"' in self.text
+
+
+class TestWheelDirBehaviour:
+    """Run the script for real, with a throwaway HOME and no network."""
+
+    def _run(self, *args: str, home, wheel_dir=None, timeout=90):
+        env = {**os.environ, "NO_COLOR": "1", "HOME": str(home)}
+        env.pop("ARIZE_WHEEL_DIR", None)
+        cmd = ["bash", INSTALL_SH, *args]
+        if wheel_dir is not None:
+            cmd += ["--wheel-dir", str(wheel_dir)]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+
+    def test_missing_directory_is_fatal(self, tmp_path):
+        result = self._run("claude", home=tmp_path, wheel_dir=tmp_path / "nope")
+        assert result.returncode != 0
+        assert "needs a directory" in result.stderr
+
+    def test_directory_without_a_wheel_is_fatal(self, tmp_path):
+        """Fail before touching anything, rather than silently falling back."""
+        empty = tmp_path / "wheels"
+        empty.mkdir()
+        result = self._run("claude", home=tmp_path, wheel_dir=empty)
+        assert result.returncode != 0
+        assert "No coding_harness_tracing-*.whl" in result.stderr
+        assert not (tmp_path / ".arize").exists()
+
+    @pytest.mark.slow
+    def test_never_downloads_the_repo(self, tmp_path):
+        """The whole point: no tarball, no clone, no source tree.
+
+        A deliberately corrupt wheel makes pip fail, which is fine — what
+        matters is that nothing was fetched on the way there.
+        """
+        wheels = tmp_path / "wheels"
+        wheels.mkdir()
+        (wheels / "coding_harness_tracing-0.1.0-py3-none-any.whl").write_bytes(b"not a wheel")
+
+        result = self._run("claude", home=tmp_path, wheel_dir=wheels)
+
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "Downloading coding-harness-tracing tarball" not in combined
+        assert "Extracted to" not in combined
+        assert not (tmp_path / ".arize" / "harness" / "pyproject.toml").exists()
+        assert not (tmp_path / ".arize" / "harness" / ".git").exists()
+
+    @pytest.mark.slow
+    def test_places_install_sh_for_later_commands(self, tmp_path):
+        """`status`, `update` and `uninstall` are all documented as running from
+        ~/.arize/harness/install.sh, which repo mode gets via the extract.
+        Without this copy the install works and then cannot be verified."""
+        wheels = tmp_path / "wheels"
+        wheels.mkdir()
+        (wheels / "coding_harness_tracing-0.1.0-py3-none-any.whl").write_bytes(b"not a wheel")
+
+        self._run("claude", home=tmp_path, wheel_dir=wheels)
+
+        placed = tmp_path / ".arize" / "harness" / "install.sh"
+        assert placed.is_file()
+        assert os.access(placed, os.X_OK)
+
+    @pytest.mark.slow
+    def test_update_refuses_without_a_source_tree(self, tmp_path):
+        """Rather than quietly converting an offline install to a network one."""
+        harness = tmp_path / ".arize" / "harness"
+        (harness / "venv" / "bin").mkdir(parents=True)
+        # A venv python that exists so update gets past its own guard.
+        (harness / "venv" / "bin" / "python").symlink_to(sys.executable)
+        (harness / "venv" / "bin" / "pip").symlink_to(sys.executable)
+
+        result = self._run("update", home=tmp_path)
+
+        assert result.returncode != 0
+        assert "no source tree to update" in result.stderr

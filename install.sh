@@ -16,6 +16,10 @@ INSTALL_BRANCH="${ARIZE_INSTALL_BRANCH:-main}"
 TARBALL_URL="https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/${INSTALL_BRANCH}.tar.gz"
 INSTALL_DIR="${HOME}/.arize/harness"
 VENV_DIR="${INSTALL_DIR}/venv"
+# When set, install from local wheels in this directory instead of fetching the
+# repo. Lets a caller that already ships the wheels install with no network at
+# all — and with no remote code execution for a permission layer to object to.
+WHEEL_DIR="${ARIZE_WHEEL_DIR:-}"
 
 # -- Terminal helpers --------------------------------------------------------
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -129,8 +133,33 @@ install_repo_tarball() {
 }
 
 install_repo() {
+    # Wheel mode fetches nothing. The wheel carries every module the harness
+    # needs, so there is no source tree to place — but install.sh itself has to
+    # land in INSTALL_DIR, because `status`, `update` and `uninstall` are all
+    # documented as running from there and repo mode gets it via the extract.
+    if [[ -n "$WHEEL_DIR" ]]; then
+        mkdir -p "$INSTALL_DIR"
+        if [[ -f "${BASH_SOURCE[0]}" ]] && ! cmp -s "${BASH_SOURCE[0]}" "${INSTALL_DIR}/install.sh"; then
+            cp "${BASH_SOURCE[0]}" "${INSTALL_DIR}/install.sh" && chmod +x "${INSTALL_DIR}/install.sh"
+        fi
+        return 0
+    fi
     git_sync_harness_repo "$INSTALL_BRANCH" && return 0
     install_repo_tarball
+}
+
+# Invoke a harness's install.py. Repo mode runs the file from the source tree;
+# wheel mode has no source tree, so it runs the same code as a module. Both
+# resolve `core.*` from site-packages either way — the package is pip-installed,
+# never on sys.path by accident — so these are equivalent, not a fallback.
+run_harness_py() {
+    local key="$1" vp="$2"; shift 2
+    local dir; dir=$(harness_dir "$key") || return 1
+    if [[ -f "${INSTALL_DIR}/${dir}/install.py" ]]; then
+        run_with_tty "$vp" "${INSTALL_DIR}/${dir}/install.py" "$@"
+    else
+        run_with_tty "$vp" -m "${dir//\//.}.install" "$@"
+    fi
 }
 
 # -- Venv setup --------------------------------------------------------------
@@ -148,8 +177,11 @@ _fix_macos_ssl_certs() {
     local vp
     vp=$(venv_python 2>/dev/null) || return 0
 
-    if ! "$pip" install --quiet certifi 2>/dev/null; then
+    local offline=()
+    [[ -n "$WHEEL_DIR" ]] && offline=(--no-index --find-links "$WHEEL_DIR")
+    if ! "$pip" install --quiet "${offline[@]+"${offline[@]}"}" certifi 2>/dev/null; then
         warn "Could not install certifi — SSL verification may fail on macOS"
+        [[ -n "$WHEEL_DIR" ]] && warn "Bundle a certifi wheel in ${WHEEL_DIR} to fix this offline."
         return 0
     fi
 
@@ -187,7 +219,14 @@ setup_venv() {
     fi
     local pip; pip=$(venv_pip) || { err "pip not found in venv"; return 1; }
     info "Installing coding-harness-tracing into venv..."
-    "$pip" install --quiet "$INSTALL_DIR" 2>/dev/null || { err "Failed to install coding-harness-tracing package"; return 1; }
+    if [[ -n "$WHEEL_DIR" ]]; then
+        # --no-index so a missing wheel fails loudly instead of quietly reaching
+        # PyPI, which would defeat the point of installing offline.
+        "$pip" install --quiet --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
+            || { err "Failed to install coding-harness-tracing from ${WHEEL_DIR}"; return 1; }
+    else
+        "$pip" install --quiet "$INSTALL_DIR" 2>/dev/null || { err "Failed to install coding-harness-tracing package"; return 1; }
+    fi
 
     [[ "$(uname)" == "Darwin" ]] && _fix_macos_ssl_certs "$pip"
 
@@ -220,12 +259,10 @@ install_harness() {
     local vp; vp=$(venv_python) || { err "Venv python not found after setup"; exit 1; }
     info "Migrating legacy config.yaml to config.json (if present)..."
     "$vp" -m core.config migrate || true
-    local install_py="${INSTALL_DIR}/${dir}/install.py"
-    [[ -f "$install_py" ]] || { err "Harness install script not found: ${install_py}"; exit 1; }
     if [[ "$skills" == true ]]; then
-        run_with_tty "$vp" "$install_py" install --with-skills
+        run_harness_py "$cmd" "$vp" install --with-skills
     else
-        run_with_tty "$vp" "$install_py" install
+        run_harness_py "$cmd" "$vp" install
     fi
     info "Setup complete!"
 }
@@ -254,6 +291,10 @@ Commands:
 Flags:
   --with-skills         Symlink harness skills into .agents/skills/
   --branch NAME         Install from a specific git branch (default: main)
+  --wheel-dir DIR       Install from local wheels in DIR instead of downloading
+                        the repo. No network and no remote code execution; also
+                        settable as ARIZE_WHEEL_DIR. Bundle a certifi wheel
+                        alongside it to keep macOS SSL working offline.
   --json                With `status`: emit machine-readable JSON. Exit code is
                         0 all wired up, 1 nothing configured, 2 hooks missing.
   --non-interactive, -y Ask nothing; read every value from the environment or a
@@ -299,6 +340,14 @@ main() {
                 INSTALL_BRANCH="${args[$i]:-main}"
                 TARBALL_URL="https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/${INSTALL_BRANCH}.tar.gz"
                 ;;
+            --wheel-dir)
+                i=$((i + 1))
+                WHEEL_DIR="${args[$i]:-}"
+                [[ -d "$WHEEL_DIR" ]] || { err "--wheel-dir needs a directory; got '${WHEEL_DIR}'"; exit 1; }
+                WHEEL_DIR="$(cd "$WHEEL_DIR" && pwd)"
+                compgen -G "${WHEEL_DIR}/coding_harness_tracing-*.whl" >/dev/null \
+                    || { err "No coding_harness_tracing-*.whl in ${WHEEL_DIR}"; exit 1; }
+                ;;
             *) [[ -z "$subcmd" ]] && subcmd="${args[$i]}" ;;
         esac
         i=$((i + 1))
@@ -310,10 +359,10 @@ main() {
             ;;
         uninstall)
             if [[ -n "$subcmd" ]]; then
-                local dir; dir=$(harness_dir "$subcmd") || { err "Unknown harness: ${subcmd}"; usage; exit 1; }
+                harness_dir "$subcmd" >/dev/null || { err "Unknown harness: ${subcmd}"; usage; exit 1; }
                 local vp; vp=$(venv_python) || { err "Venv not found — nothing to uninstall"; exit 1; }
                 header "Uninstalling ${subcmd} tracing"
-                run_with_tty "$vp" "${INSTALL_DIR}/${dir}/install.py" uninstall
+                run_harness_py "$subcmd" "$vp" uninstall
             else
                 local vp; vp=$(venv_python) || {
                     warn "Venv not found — removing install directory"; rm -rf "$INSTALL_DIR"
@@ -328,11 +377,9 @@ main() {
                 harnesses=$("$vp" -c 'from core.setup import list_installed_harnesses as L; print("\n".join(L()))' 2>/dev/null) || true
                 if [[ -n "$harnesses" ]]; then
                     while IFS= read -r key; do
-                        local dir; dir=$(harness_dir "$key") || { warn "Unknown harness: ${key} (skipping)"; continue; }
-                        if [[ -f "${INSTALL_DIR}/${dir}/install.py" ]]; then
-                            info "Uninstalling ${key} tracing..."
-                            run_with_tty "$vp" "${INSTALL_DIR}/${dir}/install.py" uninstall || warn "${key} uninstall failed (continuing)"
-                        fi
+                        harness_dir "$key" >/dev/null || { warn "Unknown harness: ${key} (skipping)"; continue; }
+                        info "Uninstalling ${key} tracing..."
+                        run_harness_py "$key" "$vp" uninstall || warn "${key} uninstall failed (continuing)"
                     done <<< "$harnesses"
                 fi
                 "$vp" -m core.setup.wipe
@@ -349,14 +396,30 @@ main() {
             # EOFError, so fall back to stored values there — and only there, so an
             # interactive update keeps every prompt it has today.
             [[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1
-            if [[ -d "${INSTALL_DIR}/.git" ]]; then
+            # A wheel install has no repo to pull and no newer wheel to hand us.
+            # Silently converting it to a network install would change how it was
+            # installed behind the user's back, so refuse and say who can update.
+            if [[ -z "$WHEEL_DIR" && ! -d "${INSTALL_DIR}/.git" && ! -f "${INSTALL_DIR}/pyproject.toml" ]]; then
+                err "This looks like an offline install with no source tree to update."
+                err "Re-run the installer that created it (for npx evals, update that), or"
+                err "pass --wheel-dir <dir> with a newer wheel."
+                exit 1
+            fi
+            if [[ -n "$WHEEL_DIR" ]]; then
+                info "Updating from local wheels in ${WHEEL_DIR}..."
+            elif [[ -d "${INSTALL_DIR}/.git" ]]; then
                 info "Pulling latest changes..."
                 git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
                     warn "git pull failed — falling back to tarball re-extract"; install_repo_tarball; }
             else install_repo_tarball; fi
             local pip; pip=$(venv_pip) || { err "Venv not found — run install first"; exit 1; }
             info "Reinstalling coding-harness-tracing..."
-            "$pip" install --quiet -U "$INSTALL_DIR" 2>/dev/null || { err "Failed to reinstall package"; exit 1; }
+            if [[ -n "$WHEEL_DIR" ]]; then
+                "$pip" install --quiet -U --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
+                    || { err "Failed to reinstall from ${WHEEL_DIR}"; exit 1; }
+            else
+                "$pip" install --quiet -U "$INSTALL_DIR" 2>/dev/null || { err "Failed to reinstall package"; exit 1; }
+            fi
             local vp; vp=$(venv_python) || { err "venv python not found"; exit 1; }
             info "Migrating legacy config.yaml to config.json (if present)..."
             "$vp" -m core.config migrate || true
@@ -364,10 +427,8 @@ main() {
             harnesses=$("$vp" -c 'from core.setup import list_installed_harnesses as L; print("\n".join(L()))' 2>/dev/null) || true
             if [[ -n "$harnesses" ]]; then
                 while IFS= read -r key; do
-                    local dir; dir=$(harness_dir "$key") || { warn "Unknown harness: ${key} (skipping)"; continue; }
-                    if [[ -f "${INSTALL_DIR}/${dir}/install.py" ]]; then
-                        info "Re-registering ${key}..."; run_with_tty "$vp" "${INSTALL_DIR}/${dir}/install.py" install
-                    else warn "Harness directory not found: ${dir}"; fi
+                    harness_dir "$key" >/dev/null || { warn "Unknown harness: ${key} (skipping)"; continue; }
+                    info "Re-registering ${key}..."; run_harness_py "$key" "$vp" install
                 done <<< "$harnesses"
             else info "No installed harnesses found to re-register"; fi
             info "Update complete."
