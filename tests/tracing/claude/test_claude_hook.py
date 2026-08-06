@@ -33,6 +33,7 @@ from tracing.claude_code.hooks.handlers import (
     subagent_stop,
     user_prompt_submit,
 )
+from tracing.claude_code.hooks.tool_buffer import ToolBuffer
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -327,6 +328,24 @@ class TestUserPromptSubmit:
         # New trace should be set up
         assert state.get("current_trace_id") != "old-trace-id-00000000000000000000"
 
+    def test_failed_orphan_export_retains_old_turn_and_does_not_start_new(self, mock_resolve, state):
+        state.set("current_trace_id", "old-trace-id-00000000000000000000")
+        state.set("current_trace_span_id", "old-span-1234567")
+        state.set("current_trace_start_time", "999000")
+        state.set("current_trace_prompt", "old prompt")
+        state.set("trace_count", "7")
+
+        with (
+            mock.patch("tracing.claude_code.hooks.handlers.ensure_session_initialized"),
+            mock.patch("tracing.claude_code.hooks.handlers.send_span", return_value=False),
+        ):
+            _handle_user_prompt_submit({"prompt": "new prompt"})
+
+        assert state.get("current_trace_id") == "old-trace-id-00000000000000000000"
+        assert state.get("current_trace_span_id") == "old-span-1234567"
+        assert state.get("current_trace_prompt") == "old prompt"
+        assert state.get("trace_count") == "7"
+
 
 # ---------------------------------------------------------------------------
 # stop tests
@@ -350,6 +369,40 @@ class TestStop:
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
         assert "I found the issue." in attrs["output.value"]["stringValue"]
+
+    def test_stop_cleanup_does_not_erase_a_concurrent_newer_turn(self, mock_resolve, state, transcript_file):
+        state.set("current_trace_id", "o" * 32)
+        state.set("current_trace_span_id", "p" * 16)
+        state.set("current_trace_start_time", "1000")
+        state.set("current_trace_prompt", "old prompt")
+        state.set("trace_start_line", "0")
+
+        def replace_with_newer_turn(_payload):
+            state.set("current_trace_id", "n" * 32)
+            state.set("current_trace_span_id", "q" * 16)
+            state.set("current_trace_start_time", "2000")
+            state.set("current_trace_prompt", "new prompt")
+            state.set("trace_start_line", "9")
+            state.set("high_fidelity_span_ids", '{"turn:new":"r"}')
+            return True
+
+        with (
+            mock.patch(
+                "tracing.claude_code.hooks.handlers.resolve_transcript_path", return_value=Path(transcript_file)
+            ),
+            mock.patch(
+                "tracing.claude_code.hooks.handlers.send_span",
+                side_effect=replace_with_newer_turn,
+            ),
+        ):
+            _handle_stop({})
+
+        assert state.get("current_trace_id") == "n" * 32
+        assert state.get("current_trace_span_id") == "q" * 16
+        assert state.get("current_trace_start_time") == "2000"
+        assert state.get("current_trace_prompt") == "new prompt"
+        assert state.get("trace_start_line") == "9"
+        assert state.get("high_fidelity_span_ids") == '{"turn:new":"r"}'
 
     def test_parses_transcript_string_content(self, mock_resolve, state, captured_spans, tmp_path):
         """Parses transcript with string content format."""
@@ -468,6 +521,49 @@ class TestStop:
         assert state.get("current_trace_start_time") is None
         assert state.get("current_trace_prompt") is None
         assert state.get("trace_start_line") is None
+
+    def test_legacy_failed_export_retains_turn_buffers_for_retry(self, mock_resolve, state):
+        for key, value in {
+            "current_trace_id": "t" * 32,
+            "current_trace_span_id": "s" * 16,
+            "current_trace_start_time": "1000",
+            "current_trace_prompt": "retry me",
+            "trace_start_line": "0",
+            "high_fidelity_span_ids": '{"turn:x": "abc"}',
+            "pending_subagents": '{"agent-1": {"agent_id": "agent-1"}}',
+        }.items():
+            state.set(key, value)
+        ToolBuffer(state).record_start("tool-1", tool_name="Read")
+
+        with (
+            mock.patch("tracing.claude_code.hooks.handlers.resolve_transcript_path", return_value=None),
+            mock.patch("tracing.claude_code.hooks.handlers.send_span", return_value=False),
+        ):
+            _handle_stop({})
+
+        assert state.get("current_trace_id") == "t" * 32
+        assert state.get("pending_subagents") is not None
+        assert state.get("high_fidelity_span_ids") is not None
+        assert [item.tool_use_id for item in ToolBuffer(state).all()] == ["tool-1"]
+
+    def test_legacy_success_preserves_unexported_child_snapshots(self, mock_resolve, state, captured_spans):
+        for key, value in {
+            "current_trace_id": "t" * 32,
+            "current_trace_span_id": "s" * 16,
+            "current_trace_start_time": "1000",
+            "current_trace_prompt": "legacy",
+            "trace_start_line": "0",
+            "pending_subagents": '{"agent-1": {"agent_id": "agent-1"}}',
+        }.items():
+            state.set(key, value)
+        ToolBuffer(state).record_start("tool-1", tool_name="Read")
+
+        with mock.patch("tracing.claude_code.hooks.handlers.resolve_transcript_path", return_value=None):
+            _handle_stop({})
+
+        assert state.get("current_trace_id") is None
+        assert [item.tool_use_id for item in ToolBuffer(state).all()] == ["tool-1"]
+        assert state.get("pending_subagents") is not None
 
     def test_gc_every_5_turns(self, mock_resolve, state, captured_spans):
         """GC runs every 5 turns."""
@@ -733,6 +829,110 @@ class TestScanTranscriptForUsage:
         assert usage.cache_read == 20
         assert usage.cache_write == 30
 
+    def test_duplicate_request_records_counted_once(self, tmp_path):
+        """A streamed response writes one record per content block, each
+        repeating the same usage snapshot — one API call must be billed once,
+        while the text of every content block is still concatenated."""
+        tf = tmp_path / "dup.jsonl"
+        usage_snapshot = {
+            "input_tokens": 10,
+            "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 30,
+            "output_tokens": 40,
+        }
+        lines = [
+            json.dumps(
+                {
+                    "requestId": "req_1",
+                    "message": {
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": text,
+                        "model": "m",
+                        "usage": usage_snapshot,
+                    },
+                }
+            )
+            for text in ("first block", "second block", "third block")
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert output == "first block\nsecond block\nthird block"
+        assert usage.prompt == 60  # 10 + 20 + 30, once — not three times
+        assert usage.completion == 40
+        assert usage.cache_read == 20
+        assert usage.cache_write == 30
+
+    def test_partial_then_final_snapshot_last_record_wins(self, tmp_path):
+        """Some harness versions write partial usage snapshots before the
+        final one; the last record for a request is authoritative."""
+        tf = tmp_path / "partial.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "requestId": "req_1",
+                    "message": {
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": "x",
+                        "model": "m",
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "requestId": "req_1",
+                    "message": {
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": "y",
+                        "model": "m",
+                        "usage": {"input_tokens": 10, "output_tokens": 31979},
+                    },
+                }
+            ),
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert usage.completion == 31979
+        assert usage.prompt == 10
+
+    def test_distinct_requests_are_summed(self, tmp_path):
+        """Different API calls (distinct requestIds) still accumulate."""
+        tf = tmp_path / "distinct.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "requestId": f"req_{n}",
+                    "message": {
+                        "id": f"msg_{n}",
+                        "role": "assistant",
+                        "content": "x",
+                        "model": "m",
+                        "usage": {"input_tokens": 10, "output_tokens": n},
+                    },
+                }
+            )
+            for n in (1, 2)
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert usage.completion == 3
+        assert usage.prompt == 20
+
+    def test_records_without_identity_counted_individually(self, tmp_path):
+        """Records with neither requestId nor message.id can't be correlated,
+        so each one counts (matches the pre-dedup behavior for such records)."""
+        tf = tmp_path / "noid.jsonl"
+        lines = [
+            json.dumps({"message": {"role": "assistant", "content": "a", "model": "m", "usage": {"output_tokens": 1}}}),
+            json.dumps({"message": {"role": "assistant", "content": "b", "model": "m", "usage": {"output_tokens": 2}}}),
+        ]
+        tf.write_text("\n".join(lines) + "\n")
+        output, usage, model = _scan_transcript_for_usage(tf, 0)
+        assert usage.completion == 3
+
 
 # ---------------------------------------------------------------------------
 # subagent_stop tests
@@ -960,6 +1160,55 @@ class TestStopFailure:
         assert attrs["error.message"]["stringValue"] == "429"
         assert attrs["output.value"]["stringValue"] == "API Error: Rate limit reached"
         assert "(failed)" in span["name"]
+
+    def test_stop_failure_redacts_error_details_when_prompt_logging_is_disabled(
+        self, monkeypatch, mock_resolve, state, captured_spans
+    ):
+        monkeypatch.setenv("ARIZE_LOG_PROMPTS", "false")
+        state.set("current_trace_id", "t" * 32)
+        state.set("current_trace_span_id", "s" * 16)
+        state.set("current_trace_start_time", "1000")
+        state.set("current_trace_prompt", "test")
+
+        _handle_stop_failure({"error": "crash", "error_details": "secret-token"})
+
+        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        attrs = {a["key"]: a["value"] for a in span["attributes"]}
+        assert attrs["error.message"]["stringValue"] == "<redacted (12 chars)>"
+
+    def test_stop_failure_success_preserves_unexported_tool_and_subagent_buffers(
+        self, mock_resolve, state, captured_spans
+    ):
+        state.set("current_trace_id", "t" * 32)
+        state.set("current_trace_span_id", "s" * 16)
+        state.set("current_trace_start_time", "1000")
+        state.set("current_trace_prompt", "test")
+        state.set("high_fidelity_span_ids", "{}")
+        state.set("pending_subagents", '{"agent-1": {"agent_id": "agent-1"}}')
+        ToolBuffer(state).record_start("tool-1", tool_name="Read")
+
+        _handle_stop_failure({"error": "crash", "error_details": "segfault"})
+
+        assert [item.tool_use_id for item in ToolBuffer(state).all()] == ["tool-1"]
+        assert state.get("pending_subagents") is not None
+        assert state.get("high_fidelity_span_ids") is None
+
+    def test_stop_failure_failed_export_retains_turn_buffers(self, mock_resolve, state):
+        state.set("current_trace_id", "t" * 32)
+        state.set("current_trace_span_id", "s" * 16)
+        state.set("current_trace_start_time", "1000")
+        state.set("current_trace_prompt", "test")
+        state.set("high_fidelity_span_ids", "{}")
+        state.set("pending_subagents", '{"agent-1": {"agent_id": "agent-1"}}')
+        ToolBuffer(state).record_start("tool-1", tool_name="Read")
+
+        with mock.patch("tracing.claude_code.hooks.handlers.send_span", return_value=False):
+            _handle_stop_failure({"error": "crash", "error_details": "segfault"})
+
+        assert state.get("current_trace_id") == "t" * 32
+        assert state.get("pending_subagents") is not None
+        assert state.get("high_fidelity_span_ids") is not None
+        assert [item.tool_use_id for item in ToolBuffer(state).all()] == ["tool-1"]
 
     def test_stop_failure_returns_early_without_trace_state(self, mock_resolve, state, captured_spans):
         """No current_trace_id → returns without sending."""

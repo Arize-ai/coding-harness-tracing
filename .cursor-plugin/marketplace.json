@@ -1,0 +1,31 @@
+{
+  "name": "coding-harness-tracing",
+  "owner": {
+    "name": "Arize AI",
+    "email": "support@arize.com"
+  },
+  "metadata": {
+    "description": "Arize AI plugins for Cursor observability and tracing"
+  },
+  "plugins": [
+    {
+      "name": "cursor-tracing",
+      "source": "./tracing/cursor",
+      "description": "Automatic tracing of Cursor IDE/CLI sessions to Arize AX or Phoenix with OpenInference spans",
+      "version": "1.0.0",
+      "homepage": "https://arize.com",
+      "repository": "https://github.com/Arize-ai/coding-harness-tracing",
+      "license": "Apache-2.0",
+      "keywords": [
+        "tracing",
+        "agents",
+        "openinference",
+        "arize",
+        "phoenix",
+        "cursor",
+        "observability"
+      ],
+      "category": "observability"
+    }
+  ]
+}

@@ -11,18 +11,26 @@ Configure OpenInference tracing for Cursor IDE sessions to Arize AX (cloud) or P
 
 **This skill follows a decision tree workflow.** Start by asking the user where they are in the setup process:
 
-1. **Do they already have credentials?**
-   - Yes -> Jump to [Configure Settings](#configure-settings)
-   - No -> Continue to step 2
+1. **First, determine the install type.** Was Arize tracing installed as a **Cursor plugin** (via `/add-plugin` in Cursor 2.5+, which registers hooks automatically), or **manually** by running `install.sh`?
+   - If unsure, ask the user directly: "Did you install Arize tracing as a Cursor plugin (via /add-plugin), or by running install.sh?"
+   - Heuristic 1: Check Cursor's installed-plugins location for a `cursor-tracing` plugin directory.
+   - Heuristic 2: Check whether `.cursor/hooks.json` already contains `arize-hook-cursor` entries -- if so, this is a manual `install.sh` install; if absent, it's a plugin install (or a fresh setup).
+   - This branch only matters for the [Activate Cursor hooks](#activate-cursor-hooks) step below. The credentials/config step is identical for both install types.
 
-2. **Which backend do they want to use?**
+2. **Do they already have credentials?**
+   - Yes -> Jump to [Configure Settings](#configure-settings)
+   - No -> Continue to step 3
+
+3. **Which backend do they want to use?**
    - Phoenix (self-hosted) -> Go to [Set Up Phoenix](#set-up-phoenix)
    - Arize AX (cloud) -> Go to [Set Up Arize AX](#set-up-arize-ax)
 
-3. **Are they troubleshooting?**
+4. **Are they troubleshooting?**
    - Yes -> Jump to [Troubleshoot](#troubleshoot)
 
 **Important:** Only follow the relevant path for the user's needs. Don't go through all sections.
+
+**Plugin users, please read:** The marketplace install via `/add-plugin` registers Cursor hooks automatically but cannot run an interactive credentials wizard. Run this skill once after `/add-plugin` so it can write `~/.arize/harness/config.json` with your backend credentials -- without that file, the hooks will fail open (no-op) and no spans will be sent.
 
 ## Set Up Phoenix
 
@@ -131,6 +139,18 @@ If the user has a custom OTLP endpoint, set it in `harnesses.cursor.endpoint`.
 
 ### Activate Cursor hooks
 
+**This step depends on install type** (see [How to Use This Skill](#how-to-use-this-skill) step 1). Pick the branch that matches the user's install:
+
+#### Plugin install (Cursor `/add-plugin`)
+
+**Skip this step entirely.** The plugin's bundled `hooks/hooks.json` already registers every Cursor hook event automatically when the plugin is installed. There is nothing to write to `.cursor/hooks.json`.
+
+After saving credentials in the previous step, tell the user to start a new Cursor session -- traces will begin flowing on the next interaction.
+
+> **Warning:** Do NOT manually add `.cursor/hooks.json` entries on top of a plugin install. Cursor will then route each event to the handler twice (once via the plugin and once via your project file), producing duplicate spans for every hook. If the user already has manual `.cursor/hooks.json` entries pointing at `arize-hook-cursor` from a previous `install.sh` setup, remove those entries before relying on the plugin.
+
+#### Manual install (`install.sh`)
+
 Cursor uses a `.cursor/hooks.json` file in the project root to route hook events to the handler. All events route to a single `arize-hook-cursor` CLI entry point, which dispatches based on `hook_event_name` in the JSON payload.
 
 Create `.cursor/hooks.json` in the user's project (or merge into it if it already exists):
@@ -164,7 +184,9 @@ If the user already has a `.cursor/hooks.json` with other hooks, merge the Arize
 
 1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
-3. **Hooks active**: Verify `.cursor/hooks.json` exists in the project root and contains the Arize hook entries.
+3. **Hooks active**:
+   - **Manual install**: Verify `.cursor/hooks.json` exists in the project root and contains the Arize hook entries.
+   - **Plugin install**: No project-level `.cursor/hooks.json` is required -- the plugin registers hooks itself. Confirm the `cursor-tracing` plugin is listed as installed in Cursor.
 
 ### Confirm
 
@@ -231,7 +253,9 @@ Every span includes `cursor.conversation.id` as a span attribute. Since `session
 
 ### Hooks JSON Example (IDE + CLI)
 
-When configuring `.cursor/hooks.json`, include both IDE and CLI events:
+> **Plugin users: do NOT hand-write `.cursor/hooks.json` from this example.** The example below is a reference for the **manual `install.sh` path only**. Under a Cursor `/add-plugin` install, the plugin's bundled `hooks/hooks.json` already registers every event automatically; adding these entries on top of the plugin would route each event to the handler twice and produce duplicate spans for every hook. See [Activate Cursor hooks > Plugin install](#plugin-install-cursor-add-plugin).
+
+When configuring `.cursor/hooks.json` on a manual `install.sh` install, include both IDE and CLI events:
 
 ```json
 {
@@ -265,7 +289,9 @@ Common issues and fixes:
 | Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/cursor.log` |
 | Config missing | Run the installer or create `~/.arize/harness/config.json` manually (include `harnesses.cursor` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
-| Hooks not firing | Verify `.cursor/hooks.json` exists in the project root and paths are correct (use absolute paths) |
+| Hooks not firing (manual install) | Verify `.cursor/hooks.json` exists in the project root and paths are correct (use absolute paths) |
+| Hooks not firing (plugin install) | Verify the `cursor-tracing` plugin is enabled in Cursor; start a fresh Cursor session after installation; check `~/.arize/harness/logs/cursor.log` for errors |
+| Duplicate spans / events traced twice | A plugin install plus manual `.cursor/hooks.json` entries pointing at `arize-hook-cursor` will fire each hook twice. Remove the manual entries and keep only one install path. |
 | Shell/MCP spans missing input | State push failed -- check that `~/.arize/harness/state/cursor/` is writable |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Cursor |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching Cursor |

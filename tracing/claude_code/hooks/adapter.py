@@ -119,7 +119,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     Sets the following state keys (matching bash lines 71-82):
     - session_id: from input_json or generate_trace_id()
     - session_start_time: get_timestamp_ms() as string
-    - project_name: from ARIZE_PROJECT_NAME env, or basename of input_json["cwd"], or cwd
+    - project_name: framework-scoped env override or config.json, else basename of input_json["cwd"], or cwd
     - trace_count: "0"
     - tool_count: "0"
     - user_id: from env.get_user_id(SERVICE_NAME), then input_json["user_id"], then ""
@@ -134,8 +134,11 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     if not session_id:
         session_id = generate_trace_id()
 
-    # project_name
-    project_name = env.project_name
+    # project_name: framework-scoped env override > config.json > cwd basename.
+    # Reading config here (rather than only env.project_name) means edits to
+    # harnesses.claude-code.project_name take effect and PHOENIX_PROJECT is
+    # honored on the Phoenix backend — see issue #74.
+    project_name = env.project_name_for(SERVICE_NAME)
     if not project_name:
         cwd = input_json.get("cwd", "")
         project_name = os.path.basename(cwd) if cwd else os.path.basename(os.getcwd())

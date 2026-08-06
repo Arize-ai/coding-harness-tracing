@@ -19,6 +19,7 @@ class HarnessMetadata(TypedDict):
 # --- Base layout ---
 BASE_DIR = Path.home() / ".arize" / "harness"
 CONFIG_FILE = BASE_DIR / "config.json"
+CONFIG_FILE_YAML = BASE_DIR / "config.yaml"
 
 # --- Runtime directories ---
 PID_DIR = BASE_DIR / "run"

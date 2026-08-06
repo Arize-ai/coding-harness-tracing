@@ -144,7 +144,7 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
     """Assemble CHAIN/LLM/TOOL spans from an extracted turn and ship them."""
     thread_id = _metadata_text(thread_id, 128)
     turn_id = _metadata_text(turn_id, 128)
-    project_name = _metadata_text(env.project_name) or "codex"
+    project_name = _metadata_text(env.project_name_for(SERVICE_NAME)) or "codex"
     user_id = _metadata_text(env.get_user_id(SERVICE_NAME))
 
     trace_id = generate_trace_id()
@@ -379,7 +379,7 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
     final_output = assistant_output or "(No response)"
     thread_id = _metadata_text(thread_id, 128)
     turn_id = _metadata_text(turn_id, 128)
-    project_name = _metadata_text(env.project_name) or "codex"
+    project_name = _metadata_text(env.project_name_for(SERVICE_NAME)) or "codex"
 
     trace_id = generate_trace_id()
     span_id = generate_span_id()

@@ -528,6 +528,40 @@ class TestExtractTurnFromRollout:
         assert tc["output"] == "file1\nfile2"
         assert tc["end_ts"] > tc["start_ts"]
 
+    def test_custom_tool_call_pairs_with_output_by_call_id(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _resp(
+                {
+                    "type": "custom_tool_call",
+                    "status": "completed",
+                    "name": "exec",
+                    "call_id": "custom-1",
+                    "input": 'await tools.exec_command({cmd: "ls"});',
+                },
+                ts="2026-05-20T00:00:01.000Z",
+            ),
+            _resp(
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "custom-1",
+                    "output": "file1\nfile2",
+                },
+                ts="2026-05-20T00:00:02.000Z",
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert len(turn["tool_calls"]) == 1
+        tc = turn["tool_calls"][0]
+        assert tc["tool"] == "exec"
+        assert tc["call_id"] == "custom-1"
+        assert tc["args"] == 'await tools.exec_command({cmd: "ls"});'
+        assert tc["output"] == "file1\nfile2"
+        assert tc["end_ts"] > tc["start_ts"]
+
     def test_web_search_call_pairs_with_preceding_end(self, tmp_path):
         path = _write_rollout(
             tmp_path,
@@ -749,6 +783,29 @@ class TestBuildAndSendSpans:
             "tracing.codex.hooks.handlers.send_span_to_backend",
             side_effect=lambda p: (sent.append(p), True)[1],
         )
+
+    def test_project_name_from_config(self, monkeypatch):
+        """project.name comes from config.json when no env override is set (#74)."""
+        from core.common import env as core_env
+
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+        cfg = {"harnesses": {"codex": {"project_name": "from-config", "target": "phoenix"}}}
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+        core_env.invalidate_caches()
+
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 2000,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["project.name"]["stringValue"] == "from-config"
 
     def test_multi_span_with_one_tool(self, monkeypatch):
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "codex")

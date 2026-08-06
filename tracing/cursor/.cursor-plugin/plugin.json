@@ -1,0 +1,23 @@
+{
+  "name": "cursor-tracing",
+  "displayName": "Arize Cursor Tracing",
+  "description": "Automatic tracing of Cursor sessions to Arize AX or Phoenix with OpenInference spans.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Arize AI",
+    "email": "support@arize.com",
+    "url": "https://arize.com"
+  },
+  "repository": "https://github.com/Arize-ai/coding-harness-tracing",
+  "license": "Apache-2.0",
+  "keywords": [
+    "tracing",
+    "agents",
+    "openinference",
+    "arize",
+    "phoenix",
+    "cursor",
+    "observability"
+  ],
+  "hooks": "hooks/hooks.json"
+}

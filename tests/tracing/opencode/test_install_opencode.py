@@ -213,6 +213,24 @@ class TestPluginSourceResolution:
         assert src.name == "arize-tracing.ts"
 
 
+class TestPluginChildSessionContract:
+    def test_fetches_task_child_session_with_exact_call_id(self, plugin_source_text):
+        assert "fetchChildSessions" in plugin_source_text
+        assert "parentCallID" in plugin_source_text
+        assert "metadata?.sessionId" in plugin_source_text
+        assert "client.session.get" in plugin_source_text
+        assert "client.session.messages" in plugin_source_text
+
+    def test_forwards_child_sessions_in_snapshot(self, plugin_source_text):
+        assert "childSessions" in plugin_source_text
+        assert "forward({ type, sessionID, messages, childSessions })" in plugin_source_text
+
+    def test_suppresses_independent_child_session_snapshots(self, plugin_source_text):
+        assert "const sessionInfoRes = await client.session.get" in plugin_source_text
+        assert "const sessionInfo = successfulSession(sessionInfoRes, sessionID)" in plugin_source_text
+        assert "if (!sessionInfo || sessionInfo.parentID) return" in plugin_source_text
+
+
 # ---------------------------------------------------------------------------
 # Install tests — second harness (copy-from)
 # ---------------------------------------------------------------------------

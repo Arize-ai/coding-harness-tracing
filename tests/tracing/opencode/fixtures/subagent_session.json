@@ -1,0 +1,109 @@
+{
+  "type": "close",
+  "sessionID": "ses_parent",
+  "messages": [
+    {
+      "info": {
+        "id": "msg_user_parent",
+        "sessionID": "ses_parent",
+        "role": "user",
+        "time": {"created": 1000},
+        "agent": "build",
+        "model": {"providerID": "opencode", "modelID": "free-model"}
+      },
+      "parts": [
+        {
+          "id": "prt_user_parent",
+          "sessionID": "ses_parent",
+          "messageID": "msg_user_parent",
+          "type": "text",
+          "text": "[REDACTED]"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "msg_parent_llm_1",
+        "sessionID": "ses_parent",
+        "role": "assistant",
+        "parentID": "msg_user_parent",
+        "providerID": "opencode",
+        "modelID": "free-model",
+        "agent": "build",
+        "time": {"created": 1100, "completed": 3000},
+        "tokens": {"input": 10, "output": 5, "reasoning": 1, "cache": {"read": 0, "write": 0}},
+        "finish": "tool-calls"
+      },
+      "parts": [
+        {
+          "id": "prt_task",
+          "sessionID": "ses_parent",
+          "messageID": "msg_parent_llm_1",
+          "type": "tool",
+          "tool": "task",
+          "callID": "call_task_1",
+          "state": {
+            "status": "completed",
+            "input": {"description": "[REDACTED]", "prompt": "[REDACTED]", "subagent_type": "general"},
+            "output": "[REDACTED]",
+            "metadata": {"parentSessionId": "ses_parent", "sessionId": "ses_child"},
+            "time": {"start": 1500, "end": 2900}
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "msg_parent_llm_2",
+        "sessionID": "ses_parent",
+        "role": "assistant",
+        "parentID": "msg_user_parent",
+        "providerID": "opencode",
+        "modelID": "free-model",
+        "agent": "build",
+        "time": {"created": 3100, "completed": 4000},
+        "tokens": {"input": 4, "output": 2, "reasoning": 0, "cache": {"read": 3, "write": 0}},
+        "finish": "stop"
+      },
+      "parts": [
+        {"id": "prt_parent_final", "sessionID": "ses_parent", "messageID": "msg_parent_llm_2", "type": "text", "text": "[REDACTED]"}
+      ]
+    }
+  ],
+  "childSessions": [
+    {
+      "sessionID": "ses_child",
+      "parentSessionID": "ses_parent",
+      "parentCallID": "call_task_1",
+      "info": {
+        "id": "ses_child",
+        "parentID": "ses_parent",
+        "agent": "general",
+        "title": "[REDACTED]",
+        "model": {"providerID": "opencode", "id": "free-model"},
+        "time": {"created": 1600, "updated": 2800}
+      },
+      "messages": [
+        {
+          "info": {"id": "msg_child_user", "sessionID": "ses_child", "role": "user", "time": {"created": 1600}, "agent": "general"},
+          "parts": [{"id": "prt_child_user", "sessionID": "ses_child", "messageID": "msg_child_user", "type": "text", "text": "[REDACTED]"}]
+        },
+        {
+          "info": {
+            "id": "msg_child_llm",
+            "sessionID": "ses_child",
+            "role": "assistant",
+            "parentID": "msg_child_user",
+            "providerID": "opencode",
+            "modelID": "free-model",
+            "agent": "general",
+            "time": {"created": 1700, "completed": 2700},
+            "tokens": {"input": 7, "output": 2, "reasoning": 1, "cache": {"read": 0, "write": 0}},
+            "finish": "stop"
+          },
+          "parts": [{"id": "prt_child_text", "sessionID": "ses_child", "messageID": "msg_child_llm", "type": "text", "text": "[REDACTED]"}]
+        }
+      ]
+    }
+  ]
+}

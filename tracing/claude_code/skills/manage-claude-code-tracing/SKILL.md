@@ -312,3 +312,5 @@ Common issues and fixes:
 | Want verbose logging | Set `ARIZE_VERBOSE` to `"true"` in env config |
 | Wrong project name | Set `harnesses.claude-code.project_name` in `~/.arize/harness/config.json` (default: `"claude-code"`) |
 | Spans missing user attribution | Set `ARIZE_USER_ID` in env config to add `user.id` to all spans |
+| Turn appears without child LLM/tool spans | The Claude transcript was unavailable or unreadable, so the fail-soft legacy turn fallback was used; enable `ARIZE_VERBOSE=true` and inspect the harness log |
+| Need raw hook payloads for schema troubleshooting | Temporarily enable `ARIZE_TRACE_DEBUG=true`; the debug directory contains sensitive raw content and should be removed afterwards |
