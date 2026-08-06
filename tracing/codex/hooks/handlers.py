@@ -142,6 +142,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 
     tool_calls: list = []
     pending_func: dict = {}  # call_id -> entry being filled
+    pending_custom: dict = {}  # call_id -> Code Mode entry being filled
     pending_search_end: "dict | None" = None  # most recent unmatched web_search_end
 
     try:
@@ -250,6 +251,33 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                 if outer == "response_item" and ptype == "function_call_output":
                     call_id = payload.get("call_id") or ""
                     pending = pending_func.get(call_id) if call_id else None
+                    if pending is not None:
+                        pending["output"] = payload.get("output") or ""
+                        pending["end_ts"] = ts_ms or pending["end_ts"]
+                    continue
+
+                # Code Mode exposes its outer exec invocation as a custom tool
+                # call rather than a function_call. Pair it with the durable
+                # output record by call_id so it is rendered like other tools.
+                if outer == "response_item" and ptype == "custom_tool_call":
+                    call_id = payload.get("call_id") or ""
+                    entry = {
+                        "tool": payload.get("name") or "custom_tool_call",
+                        "args": payload.get("input") or "",
+                        "output": "",
+                        "call_id": call_id,
+                        "start_ts": ts_ms,
+                        "end_ts": ts_ms,
+                        "decision": None,
+                    }
+                    tool_calls.append(entry)
+                    if call_id:
+                        pending_custom[call_id] = entry
+                    continue
+
+                if outer == "response_item" and ptype == "custom_tool_call_output":
+                    call_id = payload.get("call_id") or ""
+                    pending = pending_custom.get(call_id) if call_id else None
                     if pending is not None:
                         pending["output"] = payload.get("output") or ""
                         pending["end_ts"] = ts_ms or pending["end_ts"]
