@@ -10,6 +10,7 @@ from unittest import mock
 
 import pytest
 
+import tracing.codex.hooks.transcript as codex_transcript
 from tracing.codex.hooks.handlers import (
     _build_and_send_spans,
     _find_rollout_file,
@@ -650,6 +651,24 @@ class TestExtractTurnFromRollout:
         turn = _extract_turn_from_rollout(path, "t1")
         assert turn["user_prompt"] == "hi"
 
+    def test_skips_json_record_that_raises_value_error(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        oversized_integer = "9" * 5000
+        path.write_text(
+            f'{{"oversized":{oversized_integer}}}\n'
+            + json.dumps(_evt({"type": "task_started", "turn_id": "t1"}))
+            + "\n"
+            + json.dumps(_evt({"type": "user_message", "message": "hi"}))
+            + "\n"
+            + json.dumps(_evt({"type": "task_complete", "turn_id": "t1"}))
+            + "\n"
+        )
+
+        turn = _extract_turn_from_rollout(path, "t1")
+
+        assert turn is not None
+        assert turn["user_prompt"] == "hi"
+
     def test_skips_valid_json_with_wrong_structural_shapes(self, tmp_path):
         path = tmp_path / "rollout.jsonl"
         records = [
@@ -1242,6 +1261,46 @@ class TestHandleNotify:
         assert attrs["codex.notify_fallback"]["stringValue"] == "true"
         assert attrs["input.value"]["stringValue"] == "notify prompt"
         assert attrs["output.value"]["stringValue"] == "notify answer"
+
+    @pytest.mark.parametrize(
+        ("limit_name", "limit"),
+        [
+            ("_MAX_ROLLOUT_BYTES", 256),
+            ("_MAX_ROLLOUT_LINE_BYTES", 128),
+            ("_MAX_ROLLOUT_RECORDS", 2),
+        ],
+    )
+    def test_rollout_read_limit_uses_notify_fallback(self, _isolate_sessions_root, monkeypatch, limit_name, limit):
+        monkeypatch.setattr(codex_transcript, limit_name, limit, raising=False)
+        _write_rollout(
+            _isolate_sessions_root,
+            "bounded-session",
+            {"type": "session_meta", "payload": {"id": "bounded-session"}},
+            {"padding": "x" * 1024},
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt({"type": "user_message", "message": "durable prompt"}),
+            _evt({"type": "task_complete", "turn_id": "t1", "last_agent_message": "durable answer"}),
+        )
+        sent = []
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda payload: (sent.append(payload), True)[1],
+        ):
+            _handle_notify(
+                {
+                    "type": "agent-turn-complete",
+                    "thread-id": "bounded-session",
+                    "turn-id": "t1",
+                    "input-messages": [{"role": "user", "content": "fallback prompt"}],
+                    "last-assistant-message": "fallback answer",
+                }
+            )
+
+        spans = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert len(spans) == 1
+        attrs = _attrs_of_span(spans[0])
+        assert attrs["codex.notify_fallback"]["stringValue"] == "true"
+        assert attrs["output.value"]["stringValue"] == "fallback answer"
 
     def test_extracts_from_rollout_and_ships_multi_span(self, _isolate_sessions_root):
         _write_rollout(

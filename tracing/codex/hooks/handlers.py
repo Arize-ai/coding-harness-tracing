@@ -96,7 +96,7 @@ def _rollout_session_matches(path: Path, session_id: str) -> bool:
             for line in handle:
                 try:
                     record = json.loads(line)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError):
                     continue
                 if not isinstance(record, dict) or record.get("type") != "session_meta":
                     continue

@@ -159,6 +159,14 @@ class TestTomlHelpers:
         raw = p.read_text()
         assert 'desc = "it\'s a value"' in raw
 
+    def test_management_skill_validation_supports_python_39(self):
+        skill_path = Path(__file__).parents[3] / "tracing" / "codex" / "skills" / "manage-codex-tracing" / "SKILL.md"
+        validation = skill_path.read_text().split("## Validation", 1)[1].split("## Synthetic", 1)[0]
+
+        assert "~/.arize/harness/venv/bin/python" in validation
+        assert "from tracing.codex._toml import _toml_load" in validation
+        assert "import tomllib" not in validation
+
 
 # ---------------------------------------------------------------------------
 # Install tests — v2 hooks layout

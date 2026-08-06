@@ -15,9 +15,16 @@ import stat
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, TextIO
+from typing import Iterator
 
 from core.common import get_timestamp_ms
+
+# Reading is streamed, but hard budgets keep notify latency and memory bounded
+# for malformed, very large, or concurrently growing rollout files.
+_MAX_ROLLOUT_BYTES = 64 << 20  # 64 MiB
+_MAX_ROLLOUT_LINE_BYTES = 1 << 20  # 1 MiB
+_MAX_ROLLOUT_RECORDS = 200_000
+
 
 # ---------------------------------------------------------------------------
 # Rollout extraction
@@ -25,19 +32,41 @@ from core.common import get_timestamp_ms
 
 
 @contextmanager
-def _open_regular_text(path: Path) -> Iterator[TextIO]:
-    """Open one immutable descriptor without blocking on or following a final FIFO/symlink."""
+def _open_regular_text(path: Path) -> Iterator[Iterator[str]]:
+    """Yield bounded UTF-8 lines from one verified regular-file descriptor."""
     descriptor = -1
     try:
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
             raise OSError("rollout candidate is not a regular file")
-        handle = os.fdopen(descriptor, "r", encoding="utf-8")
+        if file_stat.st_size > _MAX_ROLLOUT_BYTES:
+            raise OSError("rollout exceeds safe byte limit")
+
+        handle = os.fdopen(descriptor, "rb")
         descriptor = -1  # fdopen owns and closes it from here.
+
+        def bounded_lines() -> Iterator[str]:
+            total_bytes = 0
+            records = 0
+            while True:
+                raw_line = handle.readline(_MAX_ROLLOUT_LINE_BYTES + 1)
+                if not raw_line:
+                    return
+                total_bytes += len(raw_line)
+                records += 1
+                if len(raw_line) > _MAX_ROLLOUT_LINE_BYTES:
+                    raise OSError("rollout line exceeds safe byte limit")
+                if total_bytes > _MAX_ROLLOUT_BYTES:
+                    raise OSError("rollout exceeds safe byte limit")
+                if records > _MAX_ROLLOUT_RECORDS:
+                    raise OSError("rollout exceeds safe record limit")
+                yield raw_line.decode("utf-8")
+
         with handle:
-            yield handle
+            yield bounded_lines()
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -199,7 +228,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                     continue
                 try:
                     obj = json.loads(line)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError):
                     continue
                 if not isinstance(obj, dict):
                     continue
