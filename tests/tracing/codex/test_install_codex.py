@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -120,7 +119,7 @@ class TestTomlHelpers:
         }
         p = tmp_path / "config.toml"
         codex_toml._toml_write(data, p)
-        parsed = codex_toml._toml_line_parse(p.read_text())
+        parsed = codex_toml._toml_load_strict(p)
         assert parsed["notify"] == ["/usr/bin/hook"]
         assert parsed["model"]["name"] == "gpt-4"
 
@@ -145,7 +144,7 @@ class TestTomlHelpers:
         assert f"'{win_path}'" in raw
         assert "\\\\" not in raw
 
-        parsed = codex_toml._toml_line_parse(raw)
+        parsed = codex_toml._toml_load_strict(p)
         assert parsed["notify"] == [win_path]
 
     def test_roundtrip_value_with_single_quote_falls_back_to_basic(self, tmp_path):
@@ -155,6 +154,30 @@ class TestTomlHelpers:
 
         raw = p.read_text()
         assert 'desc = "it\'s a value"' in raw
+
+
+class TestTomlLoadStrict:
+    """Unit tests for _toml_load_strict's own contract, independent of install()."""
+
+    def test_missing_file_returns_empty_dict(self, tmp_path):
+        p = tmp_path / "does-not-exist.toml"
+        assert codex_toml._toml_load_strict(p) == {}
+
+    def test_malformed_toml_raises_value_error(self, tmp_path):
+        p = tmp_path / "config.toml"
+        p.write_text("[otel\nendpoint = 'broken'\n")
+
+        with pytest.raises(ValueError, match="Malformed TOML"):
+            codex_toml._toml_load_strict(p)
+
+    def test_missing_tomllib_raises_value_error(self, tmp_path, monkeypatch):
+        """No tomllib/tomli available (e.g. py<3.11 without the tomli fallback installed)."""
+        monkeypatch.setattr(codex_toml, "_tomllib", None)
+        p = tmp_path / "config.toml"
+        p.write_text('notify = ["/usr/bin/hook"]\n')
+
+        with pytest.raises(ValueError, match="Cannot validate TOML without a TOML parser"):
+            codex_toml._toml_load_strict(p)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +225,19 @@ class TestInstall:
         assert (custom_home / "arize-env.sh").is_file()
         assert not (fake_home / ".codex").exists()
 
+    @pytest.mark.parametrize("raw_home", ["~/.codex", "$HOME/.codex"], ids=["tilde", "env-var"])
+    def test_codex_home_expands_tilde_and_env_vars(self, fake_home, mock_prompts, monkeypatch, raw_home):
+        """Shell-style ``~`` and ``$VAR`` in CODEX_HOME should expand to the real home."""
+        default_home = fake_home / ".codex"
+        default_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("CODEX_HOME", raw_home)
+
+        codex_install.install()
+
+        assert (default_home / "config.toml").is_file()
+        assert (default_home / "arize-env.sh").is_file()
+
     def test_empty_codex_home_uses_default(self, fake_home, mock_prompts, monkeypatch):
         monkeypatch.setenv("CODEX_HOME", "")
 
@@ -216,7 +252,7 @@ class TestInstall:
 
         toml_path = fake_home / ".codex" / "config.toml"
         assert toml_path.is_file()
-        data = codex_toml._toml_load(toml_path)
+        data = codex_toml._toml_load_strict(toml_path)
         notify_cmd = _expected_notify_cmd(fake_home)
 
         # Exactly one notify entry pointing at our hook.
@@ -335,7 +371,7 @@ class TestInstall:
         assert first == second
 
         # Notify entry stays single; the notify-only layout writes no hooks.
-        data = codex_toml._toml_load(toml_path)
+        data = codex_toml._toml_load_strict(toml_path)
         assert len(data["notify"]) == 1
         assert "hooks" not in data
 
@@ -371,7 +407,7 @@ class TestInstall:
         toml_path.write_text('[model]\nname = "gpt-4"\n')
 
         codex_install.install()
-        data = codex_toml._toml_load(toml_path)
+        data = codex_toml._toml_load_strict(toml_path)
         assert data.get("model", {}).get("name") == "gpt-4"
         assert "notify" in data
 
@@ -432,7 +468,7 @@ class TestInstall:
 
         codex_install.uninstall()
 
-        assert codex_toml._toml_load(custom_home / "config.toml") == {}
+        assert codex_toml._toml_load_strict(custom_home / "config.toml") == {}
         assert not (custom_home / "arize-env.sh").exists()
         assert default_toml.read_text() == 'notify = ["foreign-default"]\n'
 
@@ -457,14 +493,14 @@ class TestUninstall:
         codex_install.install()
 
         toml_path = fake_home / ".codex" / "config.toml"
-        data = codex_toml._toml_load(toml_path)
+        data = codex_toml._toml_load_strict(toml_path)
         data["model"] = {"name": "gpt-4"}
         codex_toml._toml_write(data, toml_path)
 
         codex_install.uninstall()
 
         assert toml_path.is_file()
-        remaining = codex_toml._toml_load(toml_path)
+        remaining = codex_toml._toml_load_strict(toml_path)
         assert remaining.get("model", {}).get("name") == "gpt-4"
         assert "notify" not in remaining
         assert "hooks" not in remaining
@@ -475,13 +511,13 @@ class TestUninstall:
         codex_install.install()
 
         toml_path = fake_home / ".codex" / "config.toml"
-        data = codex_toml._toml_load(toml_path)
+        data = codex_toml._toml_load_strict(toml_path)
         data["notify"].append("/usr/local/bin/my-custom-hook")
         codex_toml._toml_write(data, toml_path)
 
         codex_install.uninstall()
 
-        remaining = codex_toml._toml_load(toml_path)
+        remaining = codex_toml._toml_load_strict(toml_path)
         assert remaining["notify"] == ["/usr/local/bin/my-custom-hook"]
 
     def test_uninstall_preserves_foreign_hook_entries(self, fake_home, mock_prompts):
@@ -490,7 +526,7 @@ class TestUninstall:
 
         # Manually add a foreign hook entry (current install layout has no hooks).
         toml_path = fake_home / ".codex" / "config.toml"
-        data = codex_toml._toml_load(toml_path)
+        data = codex_toml._toml_load_strict(toml_path)
         data.setdefault("hooks", {}).setdefault("PreToolUse", []).append(
             {"hooks": [{"type": "command", "command": "/usr/local/bin/their-hook"}]}
         )
@@ -498,7 +534,7 @@ class TestUninstall:
 
         codex_install.uninstall()
 
-        remaining = codex_toml._toml_load(toml_path)
+        remaining = codex_toml._toml_load_strict(toml_path)
         # Only the foreign hook survives.
         remaining_cmds = _hook_commands(remaining, "PreToolUse")
         assert remaining_cmds == ["/usr/local/bin/their-hook"]
@@ -598,7 +634,7 @@ class TestTomlApplyRemove:
     def test_apply_to_empty_file(self, tmp_path):
         p = tmp_path / "config.toml"
         self._apply(p)
-        data = codex_toml._toml_load(p)
+        data = codex_toml._toml_load_strict(p)
         assert data["notify"] == ["/venv/bin/notify"]
         assert "hooks" not in data
 
@@ -606,14 +642,14 @@ class TestTomlApplyRemove:
         p = tmp_path / "config.toml"
         self._apply(p)
         self._apply(p)
-        data = codex_toml._toml_load(p)
+        data = codex_toml._toml_load_strict(p)
         assert data["notify"] == ["/venv/bin/notify"]
 
     def test_apply_preserves_existing_notify(self, tmp_path):
         p = tmp_path / "config.toml"
         p.write_text('notify = ["/usr/bin/other-hook"]\n')
         self._apply(p)
-        data = codex_toml._toml_load(p)
+        data = codex_toml._toml_load_strict(p)
         assert "/usr/bin/other-hook" in data["notify"]
         assert "/venv/bin/notify" in data["notify"]
 
@@ -621,7 +657,7 @@ class TestTomlApplyRemove:
         p = tmp_path / "config.toml"
         p.write_text('[model]\nname = "gpt-4"\n')
         self._apply(p)
-        data = codex_toml._toml_load(p)
+        data = codex_toml._toml_load_strict(p)
         assert data["model"]["name"] == "gpt-4"
         assert "notify" in data
 
@@ -632,7 +668,7 @@ class TestTomlApplyRemove:
             "[[hooks.PreToolUse]]\n" "hooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-tool' }]\n"
         )
         self._apply(p)
-        data = codex_toml._toml_load(p)
+        data = codex_toml._toml_load_strict(p)
         assert data["notify"] == ["/venv/bin/notify"]
         cmds = _hook_commands(data, "PreToolUse")
         assert "/venv/bin/arize-hook-codex-tool" in cmds
@@ -646,12 +682,12 @@ class TestTomlApplyRemove:
     def test_remove_only_our_notify(self, tmp_path):
         p = tmp_path / "config.toml"
         self._apply(p)
-        data = codex_toml._toml_load(p)
+        data = codex_toml._toml_load_strict(p)
         data["notify"].append("/usr/bin/other")
         codex_toml._toml_write(data, p)
 
         codex_install._codex_toml_remove(p, "/venv/bin/notify")
-        remaining = codex_toml._toml_load(p)
+        remaining = codex_toml._toml_load_strict(p)
         assert remaining["notify"] == ["/usr/bin/other"]
 
     def test_remove_strips_legacy_hook_entries(self, tmp_path):
@@ -665,7 +701,7 @@ class TestTomlApplyRemove:
             "hooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-session' }]\n"
         )
         codex_install._codex_toml_remove(p, "/venv/bin/notify")
-        remaining = codex_toml._toml_load(p)
+        remaining = codex_toml._toml_load_strict(p)
         assert "notify" not in remaining
         assert "hooks" not in remaining
 
@@ -694,14 +730,14 @@ class TestTomlEdgeCases:
     def test_boolean_roundtrip(self, tmp_path):
         p = tmp_path / "test.toml"
         codex_toml._toml_write({"flag": True, "other": False}, p)
-        data = codex_toml._toml_line_parse(p.read_text())
+        data = codex_toml._toml_load_strict(p)
         assert data["flag"] is True
         assert data["other"] is False
 
     def test_integer_roundtrip(self, tmp_path):
         p = tmp_path / "test.toml"
         codex_toml._toml_write({"port": 4318}, p)
-        data = codex_toml._toml_line_parse(p.read_text())
+        data = codex_toml._toml_load_strict(p)
         assert data["port"] == 4318
 
     def test_empty_array(self, tmp_path):
@@ -709,13 +745,8 @@ class TestTomlEdgeCases:
         codex_toml._toml_write({"notify": []}, p)
         text = p.read_text()
         assert "notify = []" in text
-        data = codex_toml._toml_line_parse(text)
+        data = codex_toml._toml_load_strict(p)
         assert data["notify"] == []
-
-    def test_comments_ignored_in_parse(self):
-        text = '# comment\nkey = "val"\n'
-        data = codex_toml._toml_line_parse(text)
-        assert data["key"] == "val"
 
 
 # ---------------------------------------------------------------------------
@@ -817,12 +848,12 @@ class TestCLIDispatch:
 
 
 # ---------------------------------------------------------------------------
-# TOML fallback quoting tests
+# TOML quoting tests
 # ---------------------------------------------------------------------------
 
 
-class TestTomlFallbackQuoting:
-    """Tests for quote-aware TOML fallback parser/writer."""
+class TestTomlQuoting:
+    """Tests for quote-aware TOML key encoding and path splitting."""
 
     def test_unkey_roundtrips_through_key(self):
         inputs = [
@@ -848,56 +879,6 @@ class TestTomlFallbackQuoting:
         for path, expected in cases:
             assert codex_toml._toml_split_key_path(path) == expected, f"split failed for {path!r}"
 
-    def test_fallback_roundtrips_quoted_section_keys(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("tracing.codex._toml._tomllib", None)
-        toml_text = textwrap.dedent(
-            """\
-            [mcp_servers."@scope/server"]
-            command = "npx"
-            args = ["-y", "@scope/server"]
-        """
-        )
-        p = tmp_path / "config.toml"
-        p.write_text(toml_text)
-
-        data = codex_toml._toml_load(p)
-        assert data == {
-            "mcp_servers": {
-                "@scope/server": {
-                    "command": "npx",
-                    "args": ["-y", "@scope/server"],
-                }
-            }
-        }
-
-        p2 = tmp_path / "config2.toml"
-        codex_toml._toml_write(data, p2)
-        data2 = codex_toml._toml_load(p2)
-        assert data2 == data
-
-    def test_fallback_repairs_malformed_unquoted_keys(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("tracing.codex._toml._tomllib", None)
-        toml_text = textwrap.dedent(
-            """\
-            [plugins.@scope/server]
-            enabled = true
-        """
-        )
-        p = tmp_path / "config.toml"
-        p.write_text(toml_text)
-
-        data = codex_toml._toml_load(p)
-        assert data == {"plugins": {"@scope/server": {"enabled": True}}}
-
-        p2 = tmp_path / "config2.toml"
-        codex_toml._toml_write(data, p2)
-        rewritten = p2.read_text()
-        assert '[plugins."@scope/server"]' in rewritten
-
-        tomllib = pytest.importorskip("tomllib")
-        strict_data = tomllib.loads(rewritten)
-        assert strict_data == data
-
     def test_split_key_path_leading_and_trailing_dots(self):
         assert codex_toml._toml_split_key_path("a.") == ["a", ""]
         assert codex_toml._toml_split_key_path(".b") == ["", "b"]
@@ -918,52 +899,6 @@ class TestTomlFallbackQuoting:
 
     def test_unkey_bare_key_passthrough(self):
         assert codex_toml._toml_unkey("simple-key_0") == "simple-key_0"
-
-    def test_fallback_deeply_nested_quoted_keys(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("tracing.codex._toml._tomllib", None)
-        toml_text = textwrap.dedent(
-            """\
-            [a."b.c"."d/e"]
-            x = 1
-        """
-        )
-        p = tmp_path / "deep.toml"
-        p.write_text(toml_text)
-
-        data = codex_toml._toml_load(p)
-        assert data == {"a": {"b.c": {"d/e": {"x": 1}}}}
-
-        p2 = tmp_path / "deep2.toml"
-        codex_toml._toml_write(data, p2)
-        data2 = codex_toml._toml_load(p2)
-        assert data2 == data
-
-    def test_fallback_multiple_sections_with_quoted_keys(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("tracing.codex._toml._tomllib", None)
-        toml_text = textwrap.dedent(
-            """\
-            [servers."@org/alpha"]
-            port = 8080
-
-            [servers."@org/beta"]
-            port = 9090
-        """
-        )
-        p = tmp_path / "multi.toml"
-        p.write_text(toml_text)
-
-        data = codex_toml._toml_load(p)
-        assert data == {
-            "servers": {
-                "@org/alpha": {"port": 8080},
-                "@org/beta": {"port": 9090},
-            }
-        }
-
-        p2 = tmp_path / "multi2.toml"
-        codex_toml._toml_write(data, p2)
-        data2 = codex_toml._toml_load(p2)
-        assert data2 == data
 
     def test_toml_key_idempotent_for_bare_keys(self):
         for bare in ["simple", "with-dash", "with_under", "CamelCase", "num123"]:
