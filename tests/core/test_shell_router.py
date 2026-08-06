@@ -445,7 +445,6 @@ class TestWheelDirBehaviour:
         assert "No coding_harness_tracing-*.whl" in result.stderr
         assert not (tmp_path / ".arize").exists()
 
-    @pytest.mark.slow
     def test_never_downloads_the_repo(self, tmp_path):
         """The whole point: no tarball, no clone, no source tree.
 
@@ -465,7 +464,6 @@ class TestWheelDirBehaviour:
         assert not (tmp_path / ".arize" / "harness" / "pyproject.toml").exists()
         assert not (tmp_path / ".arize" / "harness" / ".git").exists()
 
-    @pytest.mark.slow
     def test_places_install_sh_for_later_commands(self, tmp_path):
         """`status`, `update` and `uninstall` are all documented as running from
         ~/.arize/harness/install.sh, which repo mode gets via the extract.
@@ -480,7 +478,6 @@ class TestWheelDirBehaviour:
         assert placed.is_file()
         assert os.access(placed, os.X_OK)
 
-    @pytest.mark.slow
     def test_update_refuses_without_a_source_tree(self, tmp_path):
         """Rather than quietly converting an offline install to a network one."""
         harness = tmp_path / ".arize" / "harness"

@@ -250,7 +250,7 @@ harness_dir() {
 
 install_harness() {
     local cmd="$1" skills="$2"
-    local dir; dir=$(harness_dir "$cmd") || { err "Unknown harness: ${cmd}"; usage; exit 1; }
+    harness_dir "$cmd" >/dev/null || { err "Unknown harness: ${cmd}"; usage; exit 1; }
     header "Installing ${cmd} tracing"
     local python_cmd; python_cmd=$(find_python) || { err "No Python 3.9+ found"; exit 1; }
     info "Found Python: ${python_cmd} ($("$python_cmd" --version 2>&1))"
@@ -428,7 +428,10 @@ main() {
             if [[ -n "$harnesses" ]]; then
                 while IFS= read -r key; do
                     harness_dir "$key" >/dev/null || { warn "Unknown harness: ${key} (skipping)"; continue; }
-                    info "Re-registering ${key}..."; run_harness_py "$key" "$vp" install
+                    # Keep going, as the uninstall loop does: one harness whose
+                    # registration fails should not abandon the rest half-updated.
+                    info "Re-registering ${key}..."
+                    run_harness_py "$key" "$vp" install || warn "${key} re-registration failed (continuing)"
                 done <<< "$harnesses"
             else info "No installed harnesses found to re-register"; fi
             info "Update complete."
