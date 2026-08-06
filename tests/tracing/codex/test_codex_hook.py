@@ -250,6 +250,40 @@ class TestExtractTurnFromRollout:
         assert tc["output"] == "file1\nfile2"
         assert tc["end_ts"] > tc["start_ts"]
 
+    def test_custom_tool_call_pairs_with_output_by_call_id(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _resp(
+                {
+                    "type": "custom_tool_call",
+                    "status": "completed",
+                    "name": "exec",
+                    "call_id": "custom-1",
+                    "input": 'await tools.exec_command({cmd: "ls"});',
+                },
+                ts="2026-05-20T00:00:01.000Z",
+            ),
+            _resp(
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "custom-1",
+                    "output": "file1\nfile2",
+                },
+                ts="2026-05-20T00:00:02.000Z",
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert len(turn["tool_calls"]) == 1
+        tc = turn["tool_calls"][0]
+        assert tc["tool"] == "exec"
+        assert tc["call_id"] == "custom-1"
+        assert tc["args"] == 'await tools.exec_command({cmd: "ls"});'
+        assert tc["output"] == "file1\nfile2"
+        assert tc["end_ts"] > tc["start_ts"]
+
     def test_web_search_call_pairs_with_preceding_end(self, tmp_path):
         path = _write_rollout(
             tmp_path,
