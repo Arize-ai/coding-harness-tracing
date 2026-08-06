@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -136,7 +137,10 @@ class TestHarnessMapping:
         self.text = _read_install_sh()
 
     def test_claude_maps_to_tracing_claude_code(self):
-        assert 'claude)  echo "tracing/claude_code"' in self.text
+        # Both spellings: "claude" is the CLI name, "claude-code" the config key
+        # that list_installed_harnesses() hands back. See
+        # TestConfigKeysResolveInHarnessDir for why the alias exists.
+        assert 'claude|claude-code)  echo "tracing/claude_code"' in self.text
 
     def test_codex_maps_to_tracing_codex(self):
         assert 'codex)   echo "tracing/codex"' in self.text
@@ -490,3 +494,74 @@ class TestWheelDirBehaviour:
 
         assert result.returncode != 0
         assert "no source tree to update" in result.stderr
+
+
+class TestConfigKeysResolveInHarnessDir:
+    """Every key that can appear in config.json must resolve in harness_dir().
+
+    `update` and full `uninstall` discover harnesses through
+    list_installed_harnesses(), which yields *config keys* (each harness's
+    HARNESS_NAME), then look each one up with harness_dir(), which knew only CLI
+    names. Claude Code writes "claude-code" while its CLI name is "claude", so
+    both loops skipped it with "Unknown harness: claude-code (skipping)".
+
+    The consequence was not cosmetic: a full uninstall wiped the venv and left 16
+    hook entries live in ~/.claude/settings.json pointing at the deleted path, so
+    Claude Code then tried to exec missing binaries on every hook event. wipe.py
+    deliberately does not touch settings.json — the per-harness uninstall is the
+    only thing that cleans it, and it was the step being skipped.
+
+    Discovered from the constants rather than hardcoded, so a new harness whose
+    HARNESS_NAME differs from its CLI name fails here instead of in the field.
+    """
+
+    @staticmethod
+    def _config_keys() -> list:
+        import importlib
+
+        repo_root = Path(INSTALL_SH).resolve().parent
+        keys = []
+        for constants in sorted((repo_root / "tracing").glob("*/constants.py")):
+            module = importlib.import_module(f"tracing.{constants.parent.name}.constants")
+            name = getattr(module, "HARNESS_NAME", None)
+            if name:
+                keys.append(name)
+        return keys
+
+    def test_constants_were_discovered(self):
+        """Guard the guard: an empty list would make every test below vacuous."""
+        keys = self._config_keys()
+        assert len(keys) >= 8, f"expected every harness's HARNESS_NAME, found {keys}"
+        assert "claude-code" in keys, "the regression case itself must be covered"
+
+    def test_every_config_key_resolves(self, tmp_path):
+        """Probe through `uninstall`, which is where the lookup actually happens.
+
+        With an empty HOME the command still fails — there is no venv — but it
+        fails *after* harness_dir(), so "Unknown harness" cleanly distinguishes a
+        name that did not resolve from one that did.
+        """
+        for key in self._config_keys():
+            result = subprocess.run(
+                ["bash", INSTALL_SH, "uninstall", key],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "NO_COLOR": "1", "HOME": str(tmp_path)},
+                stdin=subprocess.DEVNULL,
+            )
+            assert "Unknown harness" not in result.stderr, f"config key {key!r} does not resolve in harness_dir()"
+
+    def test_cli_names_still_resolve(self):
+        """The alias must not cost us the original spelling."""
+        text = _read_install_sh()
+        for cli_name in ("claude", "codex", "copilot", "cursor", "gemini", "kiro", "opencode", "omp"):
+            assert re.search(rf"^\s+{cli_name}[)|]", text, re.MULTILINE), f"{cli_name} missing from harness_dir()"
+
+    def test_install_dispatch_does_not_gain_an_alias(self):
+        """`install.sh claude-code` should stay an unknown *command*.
+
+        The alias is for resolving discovered config keys. Making it a second way
+        to install the same harness would imply there are two harnesses.
+        """
+        assert "claude|codex|copilot|cursor|gemini|kiro|opencode|omp)" in _read_install_sh()

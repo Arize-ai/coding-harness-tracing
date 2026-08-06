@@ -234,9 +234,17 @@ setup_venv() {
 }
 
 # -- Harness name mapping ----------------------------------------------------
+#
+# Accepts both the CLI name and the config key. They are the same for every
+# harness except Claude Code, which writes HARNESS_NAME "claude-code" while its
+# CLI name is "claude". `update` and full `uninstall` discover harnesses via
+# list_installed_harnesses(), which yields *config keys*, so without the alias
+# both skipped Claude Code entirely — a full uninstall wiped the venv and left
+# its hooks in ~/.claude/settings.json pointing at the deleted path.
+# install.bat has accepted both spellings all along.
 harness_dir() {
     case "$1" in
-        claude)  echo "tracing/claude_code" ;;
+        claude|claude-code)  echo "tracing/claude_code" ;;
         codex)   echo "tracing/codex" ;;
         copilot) echo "tracing/copilot" ;;
         cursor)  echo "tracing/cursor" ;;
