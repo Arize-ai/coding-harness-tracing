@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from getpass import getpass
 from pathlib import Path
 from typing import Optional
+
+from dotenv import dotenv_values
 
 from core.config import delete_value, load_config, save_config, set_value
 
@@ -555,59 +558,40 @@ def _parse_dotenv(path: Path) -> dict:
     Handles ``export KEY=value``, surrounding quotes, comments and blank lines.
     Values are not shell-expanded — a literal ``$FOO`` stays literal.
 
-    An unquoted value ends at a whitespace-preceded ``#``, matching dotenv
-    convention: ``KEY=value # note`` yields ``value``. Quote the value to keep
-    a literal ``#``. Without this, a commented credential line silently
-    produced a malformed value rather than an error.
+    Parsing is ``python-dotenv``'s ``dotenv_values``, so quoting, ``export``
+    prefixes, inline comments and escapes follow the same rules as every other
+    dotenv consumer instead of a local approximation. It returns a dict and
+    touches no process state, which is what this needs — values here are
+    resolved per key by ``_env``, never exported.
 
-    An unbalanced quote is fatal. ``KEY="abc`` used to yield ``"abc`` — a
-    credential with a stray quote welded on, which reads as "found" and then
-    fails authentication with nothing pointing at the typo. Checked against
-    ``python-dotenv``'s ``dotenv_values``, which rejects the same lines; the two
-    agree on every other case exercised in the tests, except that it expands
-    ``\\n`` inside double quotes. None of the keys read here want a newline, so
-    that expansion is deliberately not copied.
+    Only ``_DOTENV_KEYS`` are kept, so a file holding unrelated application
+    settings is safe to point at.
+
+    A line ``dotenv_values`` cannot parse is dropped with a warning, which for a
+    credential is the wrong outcome: ``ARIZE_API_KEY="abc`` would silently fall
+    through to whatever was in the environment, and the install would report a
+    key it did not read from the file you named. So a key that is clearly
+    present in the text but absent from the parse is fatal.
     """
-    values: dict = {}
     try:
-        lines = path.read_text().splitlines()
+        text = path.read_text()
     except OSError:
-        return values
+        return {}
 
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :]
-        key, _, raw = line.partition("=")
-        if key.strip() not in _DOTENV_KEYS:
-            continue
+    parsed = dotenv_values(path)
+    values = {key: (parsed.get(key) or "").strip() for key in _DOTENV_KEYS if parsed.get(key) is not None}
 
-        value = raw.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
-        elif value[:1] in ("'", '"'):
-            err(f"{path}: {key.strip()} has an unbalanced {value[:1]} quote.")
-            err("Fix the line or remove the quotes — a value cannot be read from it safely.")
-            sys.exit(1)
-        else:
-            value = _strip_inline_comment(value)
-
-        values[key.strip()] = value.strip()
+    unparsed = [
+        key
+        for key in _DOTENV_KEYS
+        if key not in values and re.search(rf"^[ \t]*(?:export[ \t]+)?{key}[ \t]*=", text, re.MULTILINE)
+    ]
+    if unparsed:
+        err(f"{path}: could not parse {', '.join(sorted(unparsed))} — check for an unbalanced quote.")
+        err("Fix the line rather than leaving it: the value would otherwise be taken from the environment.")
+        sys.exit(1)
 
     return values
-
-
-def _strip_inline_comment(value: str) -> str:
-    """Drop a trailing ``# comment`` from an unquoted dotenv value."""
-    if value.startswith("#"):
-        return ""
-    for sep in (" #", "\t#"):
-        idx = value.find(sep)
-        if idx != -1:
-            value = value[:idx]
-    return value
 
 
 def _dotenv_values() -> dict:

@@ -2,7 +2,12 @@
 name = "coding-harness-tracing"
 version = "0.1.0"
 requires-python = ">=3.9"
-dependencies = []
+# python-dotenv parses the credential file for non-interactive installs. It is
+# the only runtime dependency; keep it that way. Imported by core/setup alone,
+# never by the hooks, so a traced session still runs on the stdlib.
+# `>=1.0` resolves to 1.2.1 on Python 3.9 and 1.2.2 above it — both verified to
+# agree on every case in TestDotenvResolution.
+dependencies = ["python-dotenv>=1.0"]
 
 [project.optional-dependencies]
 dev = [

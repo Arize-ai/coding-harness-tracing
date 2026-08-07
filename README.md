@@ -76,6 +76,8 @@ Values come from the environment, or from a dotenv file named explicitly with `A
 
 **A named file takes precedence over existing environment variables** — an already-installed harness exports `ARIZE_API_KEY`, `ARIZE_SPACE_ID` and `ARIZE_PROJECT_NAME` into every agent session, and those inherited values should not beat credentials you just wrote to a file. Only the keys below are read out of it, so a file full of unrelated settings is safe to use.
 
+Parsing is [`python-dotenv`](https://pypi.org/project/python-dotenv/)'s `dotenv_values`, so quoting, `export` prefixes, comments and escapes behave as they do for every other dotenv consumer. It is the package's only runtime dependency, imported by the installer alone — the hooks that run inside a traced session still use nothing outside the stdlib. A line it cannot parse is a hard error rather than a skip: a credential quietly falling back to the environment is the outcome this whole section exists to avoid.
+
 There is deliberately **no automatic `./.env` search**. Because a named file outranks the environment, reading the working directory would let a cloned repository's dotenv choose `ARIZE_OTLP_ENDPOINT` or `PHOENIX_ENDPOINT` while your real credentials came from the environment — installing a config that sends spans and a bearer API key to an endpoint the repo picked, for every later session on the machine. Name the file you mean:
 
 ```bash

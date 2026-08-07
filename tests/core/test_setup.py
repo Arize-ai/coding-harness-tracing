@@ -817,12 +817,20 @@ class TestDotenvResolution:
 
         assert _dotenv_values()["ARIZE_SPACE_ID"] == "space#abc"
 
-    def test_comment_only_value_is_empty(self, tmp_path, monkeypatch):
+    def test_unspaced_hash_is_part_of_the_value(self, tmp_path, monkeypatch):
+        """`#` only starts a comment when whitespace precedes it.
+
+        So `KEY=#nothing` is the literal value `#nothing`, consistent with
+        `KEY=abc#123` yielding `abc#123`. This is python-dotenv's rule and a
+        change from the hand-rolled parser, which returned "" here — worth
+        knowing, because `ARIZE_SPACE_ID=# TODO` now installs that string
+        instead of reporting a missing value.
+        """
         from core.setup import _dotenv_values
 
         _named_env(tmp_path, monkeypatch, "ARIZE_SPACE_ID=#nothing here\nARIZE_API_KEY=k\n")
 
-        assert _dotenv_values()["ARIZE_SPACE_ID"] == ""
+        assert _dotenv_values()["ARIZE_SPACE_ID"] == "#nothing here"
 
     @pytest.mark.parametrize(
         "body,expected",
@@ -884,14 +892,21 @@ class TestDotenvResolution:
         assert exc.value.code == 1
         assert "unbalanced" in capsys.readouterr().err
 
-    def test_backslash_n_stays_literal(self, tmp_path):
-        """Deliberate divergence from python-dotenv, which would expand it."""
+    def test_backslash_n_expands_in_double_quotes(self, tmp_path):
+        """python-dotenv expands escapes inside double quotes; single quotes don't.
+
+        None of the nine keys read here want a newline, so this is not useful —
+        it is simply what a standard parser does, inherited rather than chosen.
+        """
         from core.setup import _parse_dotenv
 
-        path = tmp_path / "nl.env"
-        path.write_text('ARIZE_API_KEY="a\\nb"\n')
+        dq = tmp_path / "dq.env"
+        dq.write_text('ARIZE_API_KEY="a\\nb"\n')
+        assert _parse_dotenv(dq)["ARIZE_API_KEY"] == "a\nb"
 
-        assert _parse_dotenv(path)["ARIZE_API_KEY"] == "a\\nb"
+        sq = tmp_path / "sq.env"
+        sq.write_text("ARIZE_API_KEY='a\\nb'\n")
+        assert _parse_dotenv(sq)["ARIZE_API_KEY"] == "a\\nb"
 
     def test_reports_source_per_value(self, tmp_path, monkeypatch, capsys):
         """Mixed sources must be visible: which value came from where."""
