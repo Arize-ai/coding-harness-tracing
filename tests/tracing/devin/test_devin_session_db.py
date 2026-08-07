@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import pytest
+
 from tracing.devin import session_db
 
 
@@ -109,6 +111,75 @@ def test_resolve_session_id_returns_newest(tmp_path):
         con.close()
 
 
+def test_resolve_session_id_ignores_trailing_slash(tmp_path):
+    """Trailing slashes on either side must not break the match."""
+    db = tmp_path / "sessions.db"
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _build_db(
+        db,
+        [("plain", str(proj), "b", "m", 100, 1), ("slashed", str(proj) + "/", "b", "m", 200, 1)],
+        [],
+    )
+    con = session_db.connect_readonly(db)
+    try:
+        # Both rows canonicalize to the same dir; the newest wins regardless of
+        # whether the query itself carries a trailing slash.
+        assert session_db.resolve_session_id(con, str(proj)) == "slashed"
+        assert session_db.resolve_session_id(con, str(proj) + "/") == "slashed"
+    finally:
+        con.close()
+
+
+def test_resolve_session_id_matches_through_symlink(tmp_path):
+    """A symlinked spelling of the project dir matches the stored real path (and vice versa)."""
+    real = tmp_path / "real-proj"
+    real.mkdir()
+    link = tmp_path / "link-proj"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("platform does not support symlinks")
+
+    db = tmp_path / "sessions.db"
+    _build_db(db, [("via-real", str(real), "b", "m", 100, 1)], [])
+    con = session_db.connect_readonly(db)
+    try:
+        assert session_db.resolve_session_id(con, str(link)) == "via-real"
+    finally:
+        con.close()
+
+    db2 = tmp_path / "sessions2.db"
+    _build_db(db2, [("via-link", str(link), "b", "m", 100, 1)], [])
+    con = session_db.connect_readonly(db2)
+    try:
+        assert session_db.resolve_session_id(con, str(real)) == "via-link"
+    finally:
+        con.close()
+
+
+def test_resolve_session_id_matches_case_variants_that_resolve_identically(tmp_path):
+    """Case-variant spellings match when the filesystem canonicalizes them.
+
+    Only Windows canonicalizes case in ``Path.resolve()``; elsewhere (including
+    case-insensitive macOS) the variants resolve to distinct strings, so the
+    scenario is skipped rather than asserted.
+    """
+    proj = tmp_path / "CaseProj"
+    proj.mkdir()
+    variant = tmp_path / "caseproj"
+    if variant.resolve() != proj.resolve():
+        pytest.skip("filesystem does not resolve case variants identically")
+
+    db = tmp_path / "sessions.db"
+    _build_db(db, [("s", str(proj), "b", "m", 100, 1)], [])
+    con = session_db.connect_readonly(db)
+    try:
+        assert session_db.resolve_session_id(con, str(variant)) == "s"
+    finally:
+        con.close()
+
+
 def test_connect_readonly_does_not_mutate(tmp_path):
     db = tmp_path / "sessions.db"
     _build_db(db, [("s", "/w", "b", "m", 1, 1)], [])
@@ -119,6 +190,12 @@ def test_connect_readonly_does_not_mutate(tmp_path):
     finally:
         con.close()
     assert db.stat().st_mtime_ns == before
+
+
+def test_connect_readonly_returns_none_on_failure(tmp_path):
+    """Per the module contract, an unopenable DB yields None — never an exception."""
+    missing = tmp_path / "does-not-exist" / "sessions.db"
+    assert session_db.connect_readonly(missing, retries=1, delay=0) is None
 
 
 # ---------------------------------------------------------------------------

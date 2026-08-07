@@ -198,13 +198,9 @@ def flush_session(project_dir: str) -> int:
     """Resolve the session for ``project_dir`` and emit any not-yet-emitted
     generations. Returns the number of interactions emitted (0 if none / on any
     soft failure)."""
-    con = None
-    try:
-        con = connect_readonly(SESSIONS_DB)
-    except Exception as exc:  # noqa: BLE001 — DB open is best-effort
-        log(f"flush_session: could not open {SESSIONS_DB}: {exc!r}")
-        return 0
+    con = connect_readonly(SESSIONS_DB)
     if con is None:
+        log(f"flush_session: could not open {SESSIONS_DB}")
         return 0
     try:
         session_id = resolve_session_id(con, project_dir)

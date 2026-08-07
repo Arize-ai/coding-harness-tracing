@@ -28,6 +28,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 
 @dataclass
@@ -102,20 +103,30 @@ def connect_readonly(db_path, retries: int = 3, delay: float = 0.1):
     We deliberately do NOT use ``immutable=1``: it tells SQLite the file cannot
     change and to ignore the ``-wal`` sidecar, which would hide the very rows a
     just-fired ``Stop`` cares about. ``mode=ro`` respects the WAL. Retries a few
-    times on transient lock errors. Returns ``None`` on failure.
+    times on transient lock errors. Returns ``None`` on failure (like the rest
+    of this module, it never raises).
     """
     uri = f"file:{db_path}?mode=ro"
-    last: Exception | None = None
     for attempt in range(max(retries, 1)):
         try:
             return sqlite3.connect(uri, uri=True, timeout=1.0)
-        except sqlite3.Error as exc:  # pragma: no cover - timing dependent
-            last = exc
+        except sqlite3.Error:  # pragma: no cover - timing dependent
             if attempt + 1 < retries:
                 time.sleep(delay)
-    if last is not None:
-        raise last
     return None
+
+
+def _canonical_path(path: str) -> str:
+    """Canonicalize a path for comparison via ``Path.resolve()``.
+
+    Collapses trailing slashes and ``..`` segments and follows symlinks, so two
+    spellings of the same directory compare equal. Falls back to the raw string
+    if resolution fails, so a weird path can still match itself exactly.
+    """
+    try:
+        return str(Path(path).resolve())
+    except (OSError, RuntimeError, ValueError):
+        return path
 
 
 def resolve_session_id(con: sqlite3.Connection, project_dir: str) -> str | None:
@@ -123,14 +134,18 @@ def resolve_session_id(con: sqlite3.Connection, project_dir: str) -> str | None:
     if not project_dir:
         return None
     try:
-        row = con.execute(
-            "SELECT id FROM sessions WHERE working_directory = ? ORDER BY last_activity_at DESC LIMIT 1",
-            (project_dir,),
-        ).fetchone()
+        rows = con.execute(
+            "SELECT id, working_directory FROM sessions ORDER BY last_activity_at DESC",
+        ).fetchall()
     except sqlite3.Error:
         return None
-    if row and row[0]:
-        return str(row[0])
+    target = _canonical_path(project_dir)
+    for session_id, working_directory in rows:
+        working_directory = _as_str(working_directory)
+        if not session_id or not working_directory:
+            continue
+        if _canonical_path(working_directory) == target:
+            return str(session_id)
     return None
 
 
