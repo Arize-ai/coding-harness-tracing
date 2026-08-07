@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from getpass import getpass
 from pathlib import Path
 from typing import Optional
+
+from dotenv import dotenv_values
 
 from core.config import delete_value, load_config, save_config, set_value
 
@@ -109,7 +112,7 @@ def ensure_harness_installed(
     if checks:
         info(f"  (not found: {', '.join(checks)})")
 
-    if not sys.stdout.isatty():
+    if non_interactive() or not sys.stdout.isatty():
         info("  non-interactive — proceeding anyway")
         return True
 
@@ -139,6 +142,9 @@ def prompt_backend(
       phoenix: {"endpoint", "api_key"}
       arize:   {"endpoint", "api_key", "space_id"}
     """
+    if non_interactive():
+        return _backend_from_env()
+
     print("Which backend do you want to use?")
     print("")
     print("  1) Phoenix (self-hosted)")
@@ -194,6 +200,77 @@ def prompt_backend(
             "space_id": space_id,
         },
     )
+
+
+def _backend_from_env() -> tuple[str, dict]:
+    """Resolve backend + credentials from the environment, for non-interactive installs.
+
+    Backend selection is explicit via ``ARIZE_BACKEND``, otherwise inferred: a
+    space ID means Arize AX, a Phoenix endpoint means Phoenix. Nothing is
+    inferred from the API key alone — both backends use one.
+
+    Exits with an actionable message when a required value is missing; this
+    path must never fall back to a prompt, because there is nobody to answer it.
+    """
+    target = _env("ARIZE_BACKEND").lower()
+    if target in ("ax", "arize"):
+        target = "arize"
+    elif target and target != "phoenix":
+        err(f"Unknown ARIZE_BACKEND '{target}' — use 'arize' or 'phoenix'.")
+        sys.exit(1)
+
+    if not target:
+        if _env("ARIZE_SPACE_ID") and _env("PHOENIX_ENDPOINT"):
+            # Both backends signalled. Picking one would silently discard the
+            # other's credentials — a dev running Phoenix locally for their app
+            # has PHOENIX_ENDPOINT in its .env while wanting Arize AX here.
+            err(
+                "Both an Arize space ID and a Phoenix endpoint are configured, so the "
+                "backend is ambiguous. Set ARIZE_BACKEND to 'arize' or 'phoenix'."
+            )
+            sys.exit(1)
+        if _env("ARIZE_SPACE_ID"):
+            target = "arize"
+        elif _env("ARIZE_API_KEY") and _env("PHOENIX_ENDPOINT"):
+            # An Arize key with only a Phoenix endpoint: inferring Phoenix would
+            # throw the key away, which is never what the caller meant.
+            err(
+                "Found an Arize API key but only a Phoenix endpoint. Add ARIZE_SPACE_ID "
+                "for Arize AX, or set ARIZE_BACKEND=phoenix to use Phoenix deliberately."
+            )
+            sys.exit(1)
+        elif _env("PHOENIX_ENDPOINT"):
+            target = "phoenix"
+        elif _env("ARIZE_API_KEY"):
+            # Both backends take an API key, so a key on its own is ambiguous.
+            err(
+                "Found an API key but cannot tell which backend it is for. Add "
+                "ARIZE_SPACE_ID for Arize AX, or PHOENIX_ENDPOINT for Phoenix."
+            )
+            sys.exit(1)
+        else:
+            err(
+                "No credentials found. Set ARIZE_API_KEY and ARIZE_SPACE_ID for Arize AX "
+                "(in the environment or the file named by ARIZE_ENV_FILE), or PHOENIX_ENDPOINT for Phoenix."
+            )
+            sys.exit(1)
+
+    if target == "phoenix":
+        endpoint = _env("PHOENIX_ENDPOINT") or "http://localhost:6006"
+        api_key = _env("PHOENIX_API_KEY")
+        info(f"Backend: Phoenix at {endpoint} (from {_source_of('PHOENIX_ENDPOINT', fallback='default')})")
+        info(f"  API key: {'found' if api_key else 'none'} (from {_source_of('PHOENIX_API_KEY', fallback='unset')})")
+        return ("phoenix", {"endpoint": endpoint, "api_key": api_key})
+
+    # Arize AX. Read the key but never echo it — only report that it was found
+    # and where from, so a wrong-credentials install is diagnosable.
+    api_key = _require_env("ARIZE_API_KEY", "An Arize API key")
+    space_id = _require_env("ARIZE_SPACE_ID", "An Arize space ID")
+    endpoint = _env("ARIZE_OTLP_ENDPOINT") or "otlp.arize.com:443"
+    info(f"Backend: Arize AX at {endpoint} (from {_source_of('ARIZE_OTLP_ENDPOINT', fallback='default')})")
+    info(f"  space ID: {space_id} (from {_source_of('ARIZE_SPACE_ID')})")
+    info(f"  API key: found (from {_source_of('ARIZE_API_KEY')})")
+    return ("arize", {"endpoint": endpoint, "api_key": api_key, "space_id": space_id})
 
 
 def _try_copy_from(target: str, existing_harnesses: dict | None) -> dict | None:
@@ -265,6 +342,20 @@ def _try_copy_from(target: str, existing_harnesses: dict | None) -> dict | None:
 
 def prompt_project_name(default: str) -> str:
     """Prompt for project name. Returns default if blank."""
+    if non_interactive():
+        # Deliberately not _env(): the ambient ARIZE_PROJECT_NAME belongs to
+        # whichever harness is already installed and exports it into this
+        # session. Inheriting it would name *this* harness's project after a
+        # different one and collide their spans. Only an explicit dotenv entry
+        # or the harness default may set it.
+        name = _dotenv_only("ARIZE_PROJECT_NAME") or default
+        # "default" rather than "harness default": on a re-install the caller
+        # passes the stored project name as the default, so naming the harness
+        # would be wrong.
+        source = _source_of("ARIZE_PROJECT_NAME", fallback="default", include_env=False)
+        info(f"Project name: {name} (from {source})")
+        return name
+
     print("")
     name = input(f"Project name [{default}]: ").strip()
     return name if name else default
@@ -273,9 +364,32 @@ def prompt_project_name(default: str) -> str:
 def prompt_content_logging() -> dict:
     """Prompt for content logging settings. Returns the dict to write under `logging:`.
 
-    All three default to True to match the kit's existing capture-everything
-    behavior. Users opt out per category.
+    Interactively, all three default to True — the questions below are ``[Y/n]``
+    and users opt out per category, matching the kit's capture-everything
+    behaviour.
+
+    Non-interactively they default to **False**. That asymmetry is the point: a
+    ``[Y/n]`` default is a human declining to change an answer they were shown,
+    which is consent; the same default with nobody watching is capture of
+    prompts, commands and file contents that no one agreed to. Reaching it
+    needs no malice — ``update`` forces non-interactive mode whenever there is no
+    terminal, so a cron job or CI run against a config with no ``logging`` block
+    would have switched capture on silently. Each category now requires its
+    ``ARIZE_LOG_*`` setting to say so explicitly.
     """
+    if non_interactive():
+        block = {
+            "prompts": env_flag("ARIZE_LOG_PROMPTS", default=False),
+            "tool_details": env_flag("ARIZE_LOG_TOOL_DETAILS", default=False),
+            "tool_content": env_flag("ARIZE_LOG_TOOL_CONTENT", default=False),
+        }
+        enabled = ", ".join(f"{k}={'on' if v else 'off'}" for k, v in block.items())
+        info(f"Content logging: {enabled}")
+        if not any(block.values()):
+            info("No ARIZE_LOG_* settings given, so no content is captured — span structure only.")
+            info("Set ARIZE_LOG_PROMPTS, ARIZE_LOG_TOOL_DETAILS or ARIZE_LOG_TOOL_CONTENT to true to capture it.")
+        return block
+
     print("")
     if sys.stdout.isatty() and os.name != "nt":
         print("\033[1;33mSecurity:\033[0m Traces can contain sensitive data — credentials, PII, file contents.")
@@ -309,6 +423,9 @@ def write_logging_config(logging_block: dict, config_path: str | None = None) ->
 
 def prompt_user_id() -> str:
     """Optional user ID prompt. Returns "" if skipped."""
+    if non_interactive():
+        return _env("ARIZE_USER_ID")
+
     print("")
     if sys.stdout.isatty() and os.name != "nt":
         print("\033[0;34mOptional:\033[0m Set a user ID to identify your spans (useful for teams).")
@@ -371,6 +488,213 @@ def write_config(
 def dry_run() -> bool:
     """True when ARIZE_DRY_RUN env var is set to a truthy value ('1','true','yes')."""
     return os.environ.get("ARIZE_DRY_RUN", "").lower() in ("1", "true", "yes")
+
+
+def non_interactive() -> bool:
+    """True when ARIZE_NONINTERACTIVE is set to a truthy value ('1','true','yes').
+
+    In this mode the setup wizards never call ``input()``/``getpass()``: every
+    value is resolved from the environment (or a dotenv file, see
+    ``_dotenv_values``) and a missing required value is a hard error instead of
+    a prompt. Deliberately opt-in — without it, an exported ``ARIZE_API_KEY``
+    would silently stop the interactive wizard from asking its questions.
+    """
+    return os.environ.get("ARIZE_NONINTERACTIVE", "").lower() in ("1", "true", "yes")
+
+
+# Keys we will read out of a dotenv file. Everything else in the file is
+# ignored, so pointing at an app's .env can't inject unrelated settings.
+_DOTENV_KEYS = (
+    "ARIZE_API_KEY",
+    "ARIZE_SPACE_ID",
+    "ARIZE_BACKEND",
+    "ARIZE_OTLP_ENDPOINT",
+    "ARIZE_PROJECT_NAME",
+    "ARIZE_USER_ID",
+    "ARIZE_LOG_PROMPTS",
+    "ARIZE_LOG_TOOL_DETAILS",
+    "ARIZE_LOG_TOOL_CONTENT",
+    "PHOENIX_ENDPOINT",
+    "PHOENIX_API_KEY",
+)
+
+_dotenv_cache: Optional[dict] = None
+_dotenv_path: Optional[Path] = None
+
+
+def _dotenv_candidates() -> list:
+    """The dotenv file to read, from ARIZE_ENV_FILE only. Empty list when unset.
+
+    Deliberately does **not** fall back to ``./.env`` or ``./.env.local``.
+    Values from a dotenv file outrank the process environment (see ``_env``), and
+    the working directory is whatever repository the user happens to be sitting
+    in. An implicit search therefore let a cloned repo's dotenv supply the
+    *routing* — ``ARIZE_OTLP_ENDPOINT`` or ``PHOENIX_ENDPOINT`` — while the
+    user's real credentials came from the ambient environment, writing a config
+    that ships spans and a bearer API key to an endpoint the repo chose. Every
+    later session on that machine would keep doing it.
+
+    Requiring an explicit path keeps the precedence rule where it is useful
+    without handing the decision to untrusted content.
+
+    An explicit path that cannot be read is a hard error rather than a silent
+    fall-back to the environment: naming a file states where the credentials are
+    meant to come from, and a typo would otherwise quietly install with whatever
+    happened to be in the environment instead.
+    """
+    explicit = os.environ.get("ARIZE_ENV_FILE", "").strip()
+    if not explicit:
+        return []
+    path = Path(explicit).expanduser()
+    if not path.is_file():
+        err(f"ARIZE_ENV_FILE points at {path}, which is not a readable file.")
+        sys.exit(1)
+    return [path]
+
+
+def _parse_dotenv(path: Path) -> dict:
+    """Extract _DOTENV_KEYS from a dotenv file. Unreadable file → {}.
+
+    Handles ``export KEY=value``, surrounding quotes, comments and blank lines.
+    Values are not shell-expanded — a literal ``$FOO`` stays literal.
+
+    Parsing is ``python-dotenv``'s ``dotenv_values``, so quoting, ``export``
+    prefixes, inline comments and escapes follow the same rules as every other
+    dotenv consumer instead of a local approximation. It returns a dict and
+    touches no process state, which is what this needs — values here are
+    resolved per key by ``_env``, never exported.
+
+    Only ``_DOTENV_KEYS`` are kept, so a file holding unrelated application
+    settings is safe to point at.
+
+    A line ``dotenv_values`` cannot parse is dropped with a warning, which for a
+    credential is the wrong outcome: ``ARIZE_API_KEY="abc`` would silently fall
+    through to whatever was in the environment, and the install would report a
+    key it did not read from the file you named. So a key that is clearly
+    present in the text but absent from the parse is fatal.
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return {}
+
+    parsed = dotenv_values(path)
+    values = {key: (parsed.get(key) or "").strip() for key in _DOTENV_KEYS if parsed.get(key) is not None}
+
+    unparsed = [
+        key
+        for key in _DOTENV_KEYS
+        if key not in values and re.search(rf"^[ \t]*(?:export[ \t]+)?{key}[ \t]*=", text, re.MULTILINE)
+    ]
+    if unparsed:
+        err(f"{path}: could not parse {', '.join(sorted(unparsed))} — check for an unbalanced quote.")
+        err("Fix the line rather than leaving it: the value would otherwise be taken from the environment.")
+        sys.exit(1)
+
+    return values
+
+
+def _dotenv_values() -> dict:
+    """Load Arize/Phoenix values from a dotenv file, once per process.
+
+    Lets ``ax api-keys create --env-file .env`` feed the installer directly:
+    the key goes CLI → file → installer, never through argv, shell history, or
+    a coding agent's transcript. Values found here take precedence over the
+    real environment (see ``_env``).
+    """
+    global _dotenv_cache, _dotenv_path
+    if _dotenv_cache is not None:
+        return _dotenv_cache
+
+    _dotenv_cache = {}
+    for path in _dotenv_candidates():
+        if not path.is_file():
+            continue
+        found = _parse_dotenv(path)
+        if found:
+            info(f"Reading configuration from {path} ({len(found)} value(s))")
+            _dotenv_cache = found
+            _dotenv_path = path
+            break
+
+    return _dotenv_cache
+
+
+def _reset_dotenv_cache() -> None:
+    """Clear the dotenv cache. For tests, which vary cwd and file contents."""
+    global _dotenv_cache, _dotenv_path
+    _dotenv_cache = None
+    _dotenv_path = None
+
+
+def _dotenv_only(name: str) -> str:
+    """Resolve a value from the dotenv file alone, ignoring the environment."""
+    return _dotenv_values().get(name, "").strip()
+
+
+def _source_of(name: str, fallback: str = "unset", include_env: bool = True) -> str:
+    """Name where a value was resolved from, for reporting back to the user.
+
+    Answers the question the old output could not: whether a value came from the
+    file the caller wrote or from an inherited variable.
+
+    ``include_env=False`` for values that ignore the environment by design, so
+    the label never credits a source that was not consulted.
+    """
+    if _dotenv_only(name):
+        return str(_dotenv_path) if _dotenv_path else "dotenv file"
+    if include_env and os.environ.get(name, "").strip():
+        return f"${name}"
+    return fallback
+
+
+def _env(name: str) -> str:
+    """Resolve a config value: dotenv file first, then the real environment.
+
+    The file deliberately wins. A dotenv file is an explicit, inspectable
+    statement of intent; ``ARIZE_*`` variables are frequently *inherited* rather
+    than chosen — an installed harness exports ``ARIZE_API_KEY``,
+    ``ARIZE_SPACE_ID`` and ``ARIZE_PROJECT_NAME`` into every agent session via
+    the harness settings file. Reading the environment first let those stale
+    values silently beat the credentials the caller had just written, and could
+    pair a fresh key from the file with a space ID from the environment.
+    """
+    return _dotenv_only(name) or os.environ.get(name, "").strip()
+
+
+def env_value(name: str) -> str:
+    """Resolve a config value from the dotenv file or environment.
+
+    Public entry point for harness installers that have a prompt of their own
+    to resolve (currently only Kiro's agent name).
+    """
+    return _env(name)
+
+
+def env_flag(name: str, default: bool = True) -> bool:
+    """Read a boolean setting from the dotenv file or environment.
+
+    Only explicit falsey words turn a default-on setting off, and only explicit
+    truthy words turn a default-off setting on.
+    """
+    raw = _env(name).lower()
+    if not raw:
+        return default
+    if default:
+        return raw not in ("0", "false", "no", "n", "off")
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _require_env(name: str, what: str) -> str:
+    """Resolve a required value, or exit with an actionable message."""
+    value = _env(name)
+    if not value:
+        err(
+            f"{what} is required for a non-interactive install — set {name}, or add it to the file\n"
+            f"        named by ARIZE_ENV_FILE."
+        )
+        sys.exit(1)
+    return value
 
 
 def ensure_shared_runtime() -> None:
