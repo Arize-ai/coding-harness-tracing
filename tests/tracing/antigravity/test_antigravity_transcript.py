@@ -329,7 +329,8 @@ class TestParseTranscriptToolPairing:
         assert turns[0]["tool_steps"] == []
         assert len(turns[0]["llm_steps"]) == 1
 
-    def test_extra_tool_calls_without_results_are_dropped(self, tmp_path):
+    def test_call_without_result_keeps_args_and_empty_output(self, tmp_path):
+        """A call whose result never arrived becomes a step with args and no output."""
         f = tmp_path / "transcript.jsonl"
         _write_jsonl(
             f,
@@ -359,6 +360,198 @@ class TestParseTranscriptToolPairing:
             ],
         )
         turns = parse_transcript(f)
-        assert len(turns[0]["tool_steps"]) == 1
-        assert turns[0]["tool_steps"][0]["name"] == "tool_a"
-        assert turns[0]["tool_steps"][0]["args"] == {"x": 1}
+        steps = turns[0]["tool_steps"]
+        assert len(steps) == 2
+        assert steps[0]["name"] == "tool_a"
+        assert steps[0]["args"] == {"x": 1}
+        assert steps[0]["output"].endswith("ok")
+        assert steps[1]["name"] == "tool_b"
+        assert steps[1]["args"] == {"y": 2}
+        assert steps[1]["output"] == ""
+
+    def test_call_without_result_does_not_shift_later_pairings(self, tmp_path):
+        """A missing result only affects its own call; later pairings stay correct."""
+        f = tmp_path / "transcript.jsonl"
+        _write_jsonl(
+            f,
+            [
+                {
+                    "step_index": 0,
+                    "type": "USER_INPUT",
+                    "created_at": "2026-06-09T16:00:00Z",
+                    "content": "<USER_REQUEST>hi</USER_REQUEST>",
+                },
+                {
+                    "step_index": 1,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:01Z",
+                    "content": "calling a",
+                    "tool_calls": [{"name": "tool_a", "args": {"x": 1}}],
+                },
+                # tool_a's result never arrives.
+                {
+                    "step_index": 3,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:02Z",
+                    "content": "calling b",
+                    "tool_calls": [{"name": "tool_b", "args": {"y": 2}}],
+                },
+                {
+                    "step_index": 4,
+                    "type": "TOOL_B",
+                    "created_at": "2026-06-09T16:00:03Z",
+                    "content": "Created At: 2026-06-09T16:00:03Z\nCompleted At: 2026-06-09T16:00:04Z\nb result",
+                },
+            ],
+        )
+        turns = parse_transcript(f)
+        steps = turns[0]["tool_steps"]
+        assert [s["name"] for s in steps] == ["tool_a", "tool_b"]
+        assert steps[0]["output"] == ""
+        # tool_b must get its own result, not tool_a's slot.
+        assert steps[1]["output"].endswith("b result")
+
+    def test_extra_result_without_call_is_dropped(self, tmp_path):
+        """A result with no unconsumed call on the nearest planner is dropped locally."""
+        f = tmp_path / "transcript.jsonl"
+        _write_jsonl(
+            f,
+            [
+                {
+                    "step_index": 0,
+                    "type": "USER_INPUT",
+                    "created_at": "2026-06-09T16:00:00Z",
+                    "content": "<USER_REQUEST>hi</USER_REQUEST>",
+                },
+                {
+                    "step_index": 1,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:01Z",
+                    "content": "calling a",
+                    "tool_calls": [{"name": "tool_a", "args": {"x": 1}}],
+                },
+                {
+                    "step_index": 2,
+                    "type": "TOOL_A",
+                    "created_at": "2026-06-09T16:00:02Z",
+                    "content": "Created At: 2026-06-09T16:00:02Z\nCompleted At: 2026-06-09T16:00:03Z\na result",
+                },
+                # Extra result: no unconsumed call left on the nearest planner.
+                {
+                    "step_index": 3,
+                    "type": "TOOL_EXTRA",
+                    "created_at": "2026-06-09T16:00:03Z",
+                    "content": "phantom result",
+                },
+                {
+                    "step_index": 4,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:04Z",
+                    "content": "calling b",
+                    "tool_calls": [{"name": "tool_b", "args": {"y": 2}}],
+                },
+                {
+                    "step_index": 5,
+                    "type": "TOOL_B",
+                    "created_at": "2026-06-09T16:00:05Z",
+                    "content": "Created At: 2026-06-09T16:00:05Z\nCompleted At: 2026-06-09T16:00:06Z\nb result",
+                },
+            ],
+        )
+        turns = parse_transcript(f)
+        steps = turns[0]["tool_steps"]
+        assert [s["name"] for s in steps] == ["tool_a", "tool_b"]
+        assert steps[0]["output"].endswith("a result")
+        # The phantom result must not consume tool_b's slot.
+        assert steps[1]["output"].endswith("b result")
+
+    def test_phantom_record_mid_turn_does_not_shift_pairings(self, tmp_path):
+        """An un-modeled record between resolved planners leaves pairings intact."""
+        f = tmp_path / "transcript.jsonl"
+        _write_jsonl(
+            f,
+            [
+                {
+                    "step_index": 0,
+                    "type": "USER_INPUT",
+                    "created_at": "2026-06-09T16:00:00Z",
+                    "content": "<USER_REQUEST>hi</USER_REQUEST>",
+                },
+                {
+                    "step_index": 1,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:01Z",
+                    "content": "calling a",
+                    "tool_calls": [{"name": "tool_a", "args": {"x": 1}}],
+                },
+                {
+                    "step_index": 2,
+                    "type": "TOOL_A",
+                    "created_at": "2026-06-09T16:00:02Z",
+                    "content": "Created At: 2026-06-09T16:00:02Z\nCompleted At: 2026-06-09T16:00:03Z\na result",
+                },
+                # Phantom record of a type we never modeled.
+                {
+                    "step_index": 3,
+                    "type": "SOME_FUTURE_RECORD",
+                    "created_at": "2026-06-09T16:00:03Z",
+                    "content": "not a tool result",
+                },
+                {
+                    "step_index": 4,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:04Z",
+                    "content": "calling b",
+                    "tool_calls": [{"name": "tool_b", "args": {"y": 2}}],
+                },
+                {
+                    "step_index": 5,
+                    "type": "TOOL_B",
+                    "created_at": "2026-06-09T16:00:05Z",
+                    "content": "Created At: 2026-06-09T16:00:05Z\nCompleted At: 2026-06-09T16:00:06Z\nb result",
+                },
+            ],
+        )
+        turns = parse_transcript(f)
+        steps = turns[0]["tool_steps"]
+        assert [s["name"] for s in steps] == ["tool_a", "tool_b"]
+        assert steps[0]["output"].endswith("a result")
+        assert steps[1]["output"].endswith("b result")
+
+    def test_untyped_record_is_ignored(self, tmp_path):
+        """A record with no ``type`` never consumes a call slot."""
+        f = tmp_path / "transcript.jsonl"
+        _write_jsonl(
+            f,
+            [
+                {
+                    "step_index": 0,
+                    "type": "USER_INPUT",
+                    "created_at": "2026-06-09T16:00:00Z",
+                    "content": "<USER_REQUEST>hi</USER_REQUEST>",
+                },
+                {
+                    "step_index": 1,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:01Z",
+                    "content": "calling a",
+                    "tool_calls": [{"name": "tool_a", "args": {"x": 1}}],
+                },
+                {
+                    "step_index": 2,
+                    "created_at": "2026-06-09T16:00:02Z",
+                    "content": "typeless record",
+                },
+                {
+                    "step_index": 3,
+                    "type": "TOOL_A",
+                    "created_at": "2026-06-09T16:00:03Z",
+                    "content": "Created At: 2026-06-09T16:00:03Z\nCompleted At: 2026-06-09T16:00:04Z\na result",
+                },
+            ],
+        )
+        turns = parse_transcript(f)
+        steps = turns[0]["tool_steps"]
+        assert len(steps) == 1
+        assert steps[0]["name"] == "tool_a"
+        assert steps[0]["output"].endswith("a result")

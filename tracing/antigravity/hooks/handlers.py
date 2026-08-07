@@ -14,10 +14,6 @@ Two hook events drive emission:
   once ``Stop`` arrives.
 * ``Stop`` — fires when the agent loop ends. Emits the just-finished turn.
 
-A high-water mark stored in state (``last_emitted_step``) makes the emission
-idempotent: turns whose ``max_step_index`` is already ``<=`` the watermark are
-skipped on subsequent runs.
-
 Stdout discipline: each entry point prints exactly ``{}`` (never
 ``{"decision": "continue"}``, which would force Antigravity's agent loop to
 re-enter). All diagnostics go through ``core.common.log``/``error`` (stderr).
@@ -133,7 +129,7 @@ def _send_span_async(span_dict: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _emit_turn_spans(state, turn: dict, session_id: str, project_name: str, user_id: str) -> None:
+def _emit_turn_spans(turn: dict, session_id: str, project_name: str, user_id: str) -> None:
     """Emit one CHAIN Turn span plus its LLM and TOOL children for a single turn."""
     trace_id = generate_trace_id()
     root_span_id = generate_span_id()
@@ -212,12 +208,23 @@ def _emit_turn_spans(state, turn: dict, session_id: str, project_name: str, user
             args_json = str(args)
 
         # Build a short tool description from the most informative arg value
-        # (command/file_path/url/query) so Arize lists are scannable without
-        # opening every span. Fall back to the args blob when no canonical
-        # key is present.
+        # so lists are scannable without opening every span.
+        # Antigravity's arg keys are PascalCase (e.g. ``CommandLine`` for
+        # run_command, ``Query`` for grep_search), except ``search_web``,
+        # whose ``query`` key is lowercase. Fall back to the truncated args
+        # blob when no canonical key is present.
         description = ""
         if isinstance(args, dict):
-            for key in ("command", "file_path", "absolute_path", "path", "url", "query", "pattern"):
+            for key in (
+                "CommandLine",
+                "AbsolutePath",
+                "FilePath",
+                "DirectoryPath",
+                "Url",
+                "Query",
+                "query",
+                "SearchPath",
+            ):
                 val = args.get(key)
                 if isinstance(val, str) and val:
                     description = val
@@ -233,7 +240,7 @@ def _emit_turn_spans(state, turn: dict, session_id: str, project_name: str, user
             "project.name": project_name,
             "openinference.span.kind": "TOOL",
             "tool.name": tool_name,
-            "input.value": redact_content(env.log_tool_content, args_json),
+            "input.value": redact_content(env.log_tool_details, args_json),
             "output.value": redact_content(env.log_tool_content, output_text),
             "tool.description": redact_content(env.log_tool_details, description),
         }
@@ -257,7 +264,7 @@ def _emit_turn_spans(state, turn: dict, session_id: str, project_name: str, user
 
 
 def _emit_completed_turns(state, turns: list[dict], include_last: bool) -> None:
-    """Emit spans for every completed turn whose step index is past the watermark.
+    """Emit spans for every completed turn whose ordinal is past the watermark.
 
     A turn is "complete" when it is not the most recent turn in ``turns``, or
     when ``include_last`` is True (set by ``Stop``). ``PreInvocation`` calls
@@ -267,10 +274,19 @@ def _emit_completed_turns(state, turns: list[dict], include_last: bool) -> None:
     if not turns:
         return
 
-    try:
-        last = int(state.get("last_emitted_step") or "-1")
-    except ValueError:
-        last = -1
+    last_turn = -1
+    legacy_step = -1
+    raw_last_turn = state.get("last_emitted_turn")
+    if raw_last_turn is None:
+        try:
+            legacy_step = int(state.get("last_emitted_step") or "-1")
+        except ValueError:
+            legacy_step = -1
+    else:
+        try:
+            last_turn = int(raw_last_turn)
+        except ValueError:
+            last_turn = -1
 
     session_id = state.get("session_id") or ""
     project_name = state.get("project_name") or ""
@@ -281,13 +297,17 @@ def _emit_completed_turns(state, turns: list[dict], include_last: bool) -> None:
         is_final = i == final_idx
         if is_final and not include_last:
             continue
-        max_step = int(turn.get("max_step_index", 0) or 0)
-        if max_step <= last:
+        if i <= last_turn:
             continue
-        _emit_turn_spans(state, turn, session_id, project_name, user_id)
-        last = max_step
+        max_step = int(turn.get("max_step_index", 0) or 0)
+        if 0 < max_step <= legacy_step:
+            # Already emitted under the legacy step watermark.
+            last_turn = i
+            continue
+        _emit_turn_spans(turn, session_id, project_name, user_id)
+        last_turn = i
 
-    state.set("last_emitted_step", str(last))
+    state.set("last_emitted_turn", str(last_turn))
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +319,9 @@ def _handle_pre_invocation(input_json: dict) -> None:
     """Backstop: emit spans for any earlier turn whose Stop was missed."""
     debug_dump("antigravity_pre_invocation", input_json)
     state = resolve_session(input_json)
+    if state is None:
+        log("antigravity pre_invocation: no conversationId or transcriptPath; skipping")
+        return
     ensure_session_initialized(state, input_json)
     turns = parse_transcript(input_json.get("transcriptPath", "") or "")
     _emit_completed_turns(state, turns, include_last=False)
@@ -308,13 +331,16 @@ def _handle_stop(input_json: dict) -> None:
     """Emit spans for the just-finished turn (and any earlier missed turns)."""
     debug_dump("antigravity_stop", input_json)
     state = resolve_session(input_json)
+    if state is None:
+        log("antigravity stop: no conversationId or transcriptPath; skipping")
+        return
     ensure_session_initialized(state, input_json)
     turns = parse_transcript(input_json.get("transcriptPath", "") or "")
     _emit_completed_turns(state, turns, include_last=True)
     gc_stale_state_files()
     session_id = state.get("session_id") or ""
     if session_id:
-        log(f"antigravity stop: emitted up to step {state.get('last_emitted_step')}")
+        log(f"antigravity stop: emitted up to turn {state.get('last_emitted_turn')}")
 
 
 # ---------------------------------------------------------------------------

@@ -54,7 +54,7 @@ def state(tmp_path):
     sm.set("session_id", "test-session-antigravity")
     sm.set("project_name", "test-antigravity-project")
     sm.set("user_id", "test-user")
-    sm.set("last_emitted_step", "-1")
+    sm.set("last_emitted_turn", "-1")
     return sm
 
 
@@ -181,6 +181,32 @@ class TestEntryStdoutDiscipline:
 
 
 # ---------------------------------------------------------------------------
+# No conversationId and no transcriptPath: hooks no-op instead of emitting
+# unkeyed duplicates
+# ---------------------------------------------------------------------------
+
+
+class TestNoSessionKey:
+    @pytest.fixture
+    def temp_state_dir(self, tmp_path, monkeypatch):
+        from tracing.antigravity.hooks import adapter
+
+        monkeypatch.setattr(adapter, "STATE_DIR", tmp_path / "state")
+
+    def test_stop_without_key_emits_nothing(self, capsys, trace_enabled, temp_state_dir, captured_spans):
+        with mock.patch.object(sys, "stdin", new=io.StringIO("{}")):
+            stop()
+        assert captured_spans == []
+        assert json.loads(capsys.readouterr().out.strip()) == {}
+
+    def test_pre_invocation_without_key_emits_nothing(self, capsys, trace_enabled, temp_state_dir, captured_spans):
+        with mock.patch.object(sys, "stdin", new=io.StringIO("{}")):
+            pre_invocation()
+        assert captured_spans == []
+        assert json.loads(capsys.readouterr().out.strip()) == {}
+
+
+# ---------------------------------------------------------------------------
 # Single-turn emission from the real fixture
 # ---------------------------------------------------------------------------
 
@@ -292,6 +318,89 @@ class TestStopSingleTurnFixture:
 
 
 # ---------------------------------------------------------------------------
+# Tool descriptions come from Antigravity's PascalCase arg keys
+# ---------------------------------------------------------------------------
+
+
+class TestToolDescription:
+    def _tool_descriptions(self, spans) -> dict:
+        out = {}
+        for p in spans:
+            span = _get_span(p)
+            attrs = {a["key"]: a["value"] for a in span["attributes"]}
+            kind = attrs.get("openinference.span.kind", {}).get("stringValue", "")
+            if kind == "TOOL":
+                out[span["name"]] = attrs["tool.description"]["stringValue"]
+        return out
+
+    @pytest.fixture
+    def fixture_descriptions(self, trace_enabled, mock_resolve, mock_ensure, mock_gc, captured_spans):
+        stdin_payload = {
+            "conversationId": "c1",
+            "transcriptPath": str(FIXTURE_DIR / "transcript_full.jsonl"),
+            "workspacePaths": ["/home/user/proj"],
+        }
+        with mock.patch.object(sys, "stdin", new=io.StringIO(json.dumps(stdin_payload))):
+            stop()
+        return self._tool_descriptions(captured_spans)
+
+    def test_run_command_uses_commandline_key(self, fixture_descriptions):
+        assert fixture_descriptions["run_command"] == (
+            "curl -X POST --data-binary @codecov.yml https://api.codecov.io/validate"
+        )
+
+    def test_view_file_uses_absolutepath_key(self, fixture_descriptions):
+        assert fixture_descriptions["view_file"] == ("/home/user/Documents/code/coding-harness-tracing/codecov.yml")
+
+    def test_list_dir_uses_directorypath_key(self, fixture_descriptions):
+        assert fixture_descriptions["list_dir"] == "/home/user/Documents/code/coding-harness-tracing"
+
+    def test_grep_search_uses_pascalcase_query_key(self, fixture_descriptions):
+        assert fixture_descriptions["grep_search"] == "codecov.yml"
+
+    def test_search_web_keeps_lowercase_query_key(self, fixture_descriptions):
+        assert fixture_descriptions["search_web"] == (
+            "codecov yml validation schema spec comment layout behavior require_changes"
+        )
+
+    def test_unknown_args_fall_back_to_truncated_json_blob(
+        self, tmp_path, trace_enabled, mock_resolve, mock_ensure, mock_gc, captured_spans
+    ):
+        transcript = tmp_path / "transcript.jsonl"
+        args = {"SomethingElse": "z" * 300}
+        _write_jsonl(
+            transcript,
+            [
+                {
+                    "step_index": 0,
+                    "type": "USER_INPUT",
+                    "created_at": "2026-06-09T16:00:00Z",
+                    "content": "<USER_REQUEST>hi</USER_REQUEST>",
+                },
+                {
+                    "step_index": 1,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-06-09T16:00:01Z",
+                    "content": "calling",
+                    "tool_calls": [{"name": "mystery_tool", "args": args}],
+                },
+                {
+                    "step_index": 2,
+                    "type": "MYSTERY_TOOL",
+                    "created_at": "2026-06-09T16:00:02Z",
+                    "content": "ok",
+                },
+            ],
+        )
+        stdin_payload = {"conversationId": "c1", "transcriptPath": str(transcript)}
+        with mock.patch.object(sys, "stdin", new=io.StringIO(json.dumps(stdin_payload))):
+            stop()
+        desc = self._tool_descriptions(captured_spans)["mystery_tool"]
+        assert desc == json.dumps(args)[:200]
+        assert len(desc) == 200
+
+
+# ---------------------------------------------------------------------------
 # High-water-mark dedup: re-running Stop emits nothing the second time
 # ---------------------------------------------------------------------------
 
@@ -311,6 +420,95 @@ class TestStopIdempotent:
         with mock.patch.object(sys, "stdin", new=io.StringIO(json.dumps(stdin_payload))):
             stop()
         assert len(captured_spans) == first_count
+
+
+# ---------------------------------------------------------------------------
+# Watermark is turn-based: missing step_index must not stop tracing
+# ---------------------------------------------------------------------------
+
+
+class TestTurnWatermark:
+    def _chain_spans(self, spans):
+        return [
+            p
+            for p in spans
+            if any(
+                a["key"] == "openinference.span.kind" and a["value"]["stringValue"] == "CHAIN"
+                for a in _get_span(p)["attributes"]
+            )
+        ]
+
+    def test_missing_step_index_does_not_stop_tracing(
+        self, tmp_path, trace_enabled, mock_resolve, mock_ensure, mock_gc, captured_spans
+    ):
+        """Records without ``step_index`` (max_step_index 0) must not freeze the
+        watermark after the first turn."""
+        transcript = tmp_path / "transcript.jsonl"
+        turn_one = [
+            {
+                "type": "USER_INPUT",
+                "created_at": "2026-06-09T16:00:00Z",
+                "content": "<USER_REQUEST>first</USER_REQUEST>",
+            },
+            {
+                "type": "PLANNER_RESPONSE",
+                "created_at": "2026-06-09T16:00:01Z",
+                "content": "first answer",
+            },
+        ]
+        _write_jsonl(transcript, turn_one)
+        stdin_payload = {"conversationId": "c1", "transcriptPath": str(transcript)}
+        with mock.patch.object(sys, "stdin", new=io.StringIO(json.dumps(stdin_payload))):
+            stop()
+        assert len(self._chain_spans(captured_spans)) == 1
+
+        turn_two = [
+            {
+                "type": "USER_INPUT",
+                "created_at": "2026-06-09T16:00:10Z",
+                "content": "<USER_REQUEST>second</USER_REQUEST>",
+            },
+            {
+                "type": "PLANNER_RESPONSE",
+                "created_at": "2026-06-09T16:00:11Z",
+                "content": "second answer",
+            },
+        ]
+        _write_jsonl(transcript, turn_one + turn_two)
+        with mock.patch.object(sys, "stdin", new=io.StringIO(json.dumps(stdin_payload))):
+            stop()
+
+        chains = self._chain_spans(captured_spans)
+        assert len(chains) == 2
+        outputs = [_get_span_attrs(p)["output.value"]["stringValue"] for p in chains]
+        assert outputs == ["first answer", "second answer"]
+
+    def test_legacy_step_watermark_still_honored(self, tmp_path, trace_enabled, mock_ensure, mock_gc, captured_spans):
+        """A pre-existing state file carrying only ``last_emitted_step`` must not
+        re-emit turns it already covers."""
+        sf = tmp_path / "state_legacy.json"
+        lp = tmp_path / ".lock_legacy"
+        sm = StateManager(state_dir=tmp_path, state_file=sf, lock_path=lp)
+        sm.init_state()
+        sm.set("session_id", "legacy-session")
+        sm.set("project_name", "legacy-project")
+        sm.set("user_id", "legacy-user")
+        # Fixture max_step_index is 13; the legacy watermark covers it.
+        sm.set("last_emitted_step", "13")
+
+        stdin_payload = {
+            "conversationId": "c1",
+            "transcriptPath": str(FIXTURE_DIR / "transcript_full.jsonl"),
+            "workspacePaths": ["/home/user/proj"],
+        }
+        with (
+            mock.patch("tracing.antigravity.hooks.handlers.resolve_session", return_value=sm),
+            mock.patch.object(sys, "stdin", new=io.StringIO(json.dumps(stdin_payload))),
+        ):
+            stop()
+
+        assert captured_spans == []
+        assert sm.get("last_emitted_turn") == "0"
 
 
 # ---------------------------------------------------------------------------
@@ -424,9 +622,10 @@ class TestRedaction:
         llm_attrs = _get_span_attrs(llm_payload)
         assert "redacted" in llm_attrs["output.value"]["stringValue"]
 
-    def test_tool_content_redacted(
+    def test_tool_content_redacts_outputs_only(
         self, trace_enabled, mock_resolve, mock_ensure, mock_gc, captured_spans, monkeypatch
     ):
+        """tool_content gates tool *outputs*; tool inputs stay visible."""
         monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "false")
         stdin_payload = {
             "conversationId": "c1",
@@ -445,8 +644,35 @@ class TestRedaction:
             )
         )
         attrs = _get_span_attrs(tool_payload)
-        assert "redacted" in attrs["input.value"]["stringValue"]
         assert "redacted" in attrs["output.value"]["stringValue"]
+        assert "redacted" not in attrs["input.value"]["stringValue"]
+        assert "redacted" not in attrs["tool.description"]["stringValue"]
+
+    def test_tool_details_redacts_inputs_only(
+        self, trace_enabled, mock_resolve, mock_ensure, mock_gc, captured_spans, monkeypatch
+    ):
+        """tool_details gates tool *inputs* (args, description); outputs stay visible."""
+        monkeypatch.setenv("ARIZE_LOG_TOOL_DETAILS", "false")
+        stdin_payload = {
+            "conversationId": "c1",
+            "transcriptPath": str(FIXTURE_DIR / "transcript_full.jsonl"),
+            "workspacePaths": ["/home/user/proj"],
+        }
+        with mock.patch.object(sys, "stdin", new=io.StringIO(json.dumps(stdin_payload))):
+            stop()
+
+        tool_payload = next(
+            p
+            for p in captured_spans
+            if any(
+                a["key"] == "openinference.span.kind" and a["value"]["stringValue"] == "TOOL"
+                for a in _get_span(p)["attributes"]
+            )
+        )
+        attrs = _get_span_attrs(tool_payload)
+        assert "redacted" in attrs["input.value"]["stringValue"]
+        assert "redacted" in attrs["tool.description"]["stringValue"]
+        assert "redacted" not in attrs["output.value"]["stringValue"]
 
 
 # ---------------------------------------------------------------------------

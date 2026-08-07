@@ -78,18 +78,35 @@ class TestResolveSession:
         assert sm.state_file == antigravity_state_dir / "state_abc.json"
         assert sm.state_file.exists()
 
-    def test_falls_back_to_pid_when_missing(self, antigravity_state_dir, disable_env_vars):
-        """Missing conversationId falls back to the current PID."""
-        sm = adapter.resolve_session({})
+    def test_falls_back_to_transcript_path_when_missing(self, antigravity_state_dir, disable_env_vars):
+        """Missing conversationId falls back to a transcript-path-derived key."""
+        sm = adapter.resolve_session({"transcriptPath": "/tmp/antigravity/transcript.jsonl"})
+        assert sm is not None
         assert sm.state_file.exists()
         key = sm.state_file.stem.replace("state_", "", 1)
-        assert key == str(os.getpid())
+        assert key.startswith("transcript-")
 
-    def test_falls_back_to_pid_when_empty_string(self, antigravity_state_dir, disable_env_vars):
-        """Empty-string conversationId also falls back to PID."""
-        sm = adapter.resolve_session({"conversationId": ""})
-        key = sm.state_file.stem.replace("state_", "", 1)
-        assert key == str(os.getpid())
+    def test_transcript_path_key_is_process_independent(self, antigravity_state_dir, disable_env_vars):
+        """Same transcriptPath -> same state file, so PreInvocation and Stop
+        (separate processes) share the emission watermark."""
+        payload = {"transcriptPath": "/tmp/antigravity/transcript.jsonl"}
+        sm1 = adapter.resolve_session(payload)
+        sm2 = adapter.resolve_session(payload)
+        assert sm1 is not None and sm2 is not None
+        assert sm1.state_file == sm2.state_file
+
+    def test_different_transcript_paths_get_different_keys(self, antigravity_state_dir, disable_env_vars):
+        sm1 = adapter.resolve_session({"transcriptPath": "/tmp/a/transcript.jsonl"})
+        sm2 = adapter.resolve_session({"transcriptPath": "/tmp/b/transcript.jsonl"})
+        assert sm1 is not None and sm2 is not None
+        assert sm1.state_file != sm2.state_file
+
+    def test_returns_none_without_any_key(self, antigravity_state_dir, disable_env_vars):
+        """No conversationId and no transcriptPath -> no usable key -> None."""
+        assert adapter.resolve_session({}) is None
+
+    def test_returns_none_with_empty_strings(self, antigravity_state_dir, disable_env_vars):
+        assert adapter.resolve_session({"conversationId": "", "transcriptPath": ""}) is None
 
     def test_init_state_called(self, antigravity_state_dir, disable_env_vars):
         """Returned StateManager has init_state() called (file exists with {})."""
@@ -124,24 +141,24 @@ class TestEnsureSessionInitialized:
         return sm
 
     def test_sets_expected_keys(self, antigravity_state_dir, disable_env_vars):
-        """First call sets session_id, project_name, user_id, last_emitted_step."""
+        """First call sets session_id, project_name, user_id, last_emitted_turn."""
         sm = self._make_state(antigravity_state_dir, "all-keys")
         adapter.ensure_session_initialized(sm, {"conversationId": "abc"})
         assert sm.get("session_id") == "abc"
         assert sm.get("project_name") is not None
         assert sm.get("user_id") is not None
-        assert sm.get("last_emitted_step") == "-1"
+        assert sm.get("last_emitted_turn") == "-1"
 
     def test_idempotent(self, antigravity_state_dir, disable_env_vars):
         """Second call is a no-op — values unchanged."""
         sm = self._make_state(antigravity_state_dir, "idempotent")
         adapter.ensure_session_initialized(sm, {"conversationId": "first"})
         session_id = sm.get("session_id")
-        last_step = sm.get("last_emitted_step")
+        last_turn = sm.get("last_emitted_turn")
         # Second call with different conversationId should not overwrite.
         adapter.ensure_session_initialized(sm, {"conversationId": "second"})
         assert sm.get("session_id") == session_id
-        assert sm.get("last_emitted_step") == last_step
+        assert sm.get("last_emitted_turn") == last_turn
 
     def test_session_id_falls_back_to_generated_trace_id(self, antigravity_state_dir, disable_env_vars):
         """No conversationId -> session_id is a generated trace ID (32 hex chars)."""

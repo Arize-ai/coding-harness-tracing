@@ -82,6 +82,7 @@ EXPECTED_SETUP_ENTRY_POINTS = {
     "arize-setup-cursor": "core.setup.cursor:main",
     "arize-setup-gemini": "core.setup.gemini:main",
     "arize-setup-kiro": "core.setup.kiro:main",
+    "arize-setup-antigravity": "core.setup.antigravity:main",
     "arize-setup-opencode": "core.setup.opencode:main",
     "arize-setup-omp": "core.setup.omp:main",
 }

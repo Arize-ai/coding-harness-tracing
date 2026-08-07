@@ -322,6 +322,39 @@ class TestMalformedJson:
 
 
 # ---------------------------------------------------------------------------
+# Valid JSON that is not an object aborts without overwriting
+# ---------------------------------------------------------------------------
+
+
+class TestNonDictJson:
+    def test_install_raises_systemexit_on_non_dict(self, settings_file, monkeypatch):
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        original = '["valid json", "but not an object"]\n'
+        settings_file.write_text(original)
+
+        _mock_prompts(monkeypatch)
+
+        with pytest.raises(SystemExit) as exc_info:
+            install()
+        assert exc_info.value.code == 1
+
+        # File must not be overwritten
+        assert settings_file.read_text() == original
+
+    def test_uninstall_raises_systemexit_on_non_dict(self, settings_file, monkeypatch):
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        original = '"just a string"\n'
+        settings_file.write_text(original)
+
+        monkeypatch.setattr("sys.stdout", _fake_stdout())
+        with pytest.raises(SystemExit) as exc_info:
+            uninstall()
+        assert exc_info.value.code == 1
+
+        assert settings_file.read_text() == original
+
+
+# ---------------------------------------------------------------------------
 # Empty file is treated as {}
 # ---------------------------------------------------------------------------
 

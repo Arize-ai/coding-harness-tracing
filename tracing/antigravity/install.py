@@ -19,9 +19,9 @@ import json
 import sys
 
 from core.config import get_value, load_config
+from core.setup import dry_run, ensure_shared_runtime
+from core.setup import err as _err
 from core.setup import (
-    dry_run,
-    ensure_shared_runtime,
     info,
     merge_harness_entry,
     prompt_backend,
@@ -63,20 +63,20 @@ def _read_settings() -> dict:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        from core.setup import err as _err
-
         _err(f"Cannot read {path}: {exc}")
         raise SystemExit(1)
     if not text.strip():
         info("hooks.json is empty, treating as {}")
         return {}
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except json.JSONDecodeError as exc:
-        from core.setup import err as _err
-
         _err(f"{path} contains invalid JSON; aborting. Please fix the file and retry.\n  {exc}")
         raise SystemExit(1)
+    if not isinstance(data, dict):
+        _err(f"{path} does not contain a JSON object; aborting. Please fix the file and retry.")
+        raise SystemExit(1)
+    return data
 
 
 def _write_settings(data: dict) -> None:

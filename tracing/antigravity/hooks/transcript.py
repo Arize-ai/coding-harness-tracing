@@ -97,13 +97,29 @@ def _build_turn(records: list[dict[str, Any]]) -> dict[str, Any]:
         turn["start_ms"] = timestamps[0]
         turn["end_ms"] = timestamps[-1]
 
-    tool_calls: list[tuple[str, dict[str, Any]]] = []
-    tool_results: list[dict[str, Any]] = []
+    # A missing record should only affect its own planner's calls
+    pending_calls: list[dict[str, Any]] = []
     last_planner_content = ""
+
+    def _flush_pending_calls() -> None:
+        """Emit any call whose result never arrived: args, no output."""
+        for call in pending_calls:
+            turn["tool_steps"].append(
+                {
+                    "name": call["name"],
+                    "args": call["args"],
+                    "output": "",
+                    "step_index": call["step_index"],
+                    "start_ms": call["planner_ms"],
+                    "end_ms": call["planner_ms"],
+                }
+            )
+        pending_calls.clear()
 
     for idx, rec in enumerate(records):
         rec_type = rec.get("type", "")
         if rec_type == "PLANNER_RESPONSE":
+            _flush_pending_calls()
             start_ms = _iso_to_ms(rec.get("created_at", "") or "")
             if idx + 1 < len(records):
                 end_ms = _iso_to_ms(records[idx + 1].get("created_at", "") or "")
@@ -130,35 +146,48 @@ def _build_turn(records: list[dict[str, Any]]) -> dict[str, Any]:
                 args = call.get("args", {}) or {}
                 if not isinstance(args, dict):
                     args = {}
-                tool_calls.append((name, args))
+                pending_calls.append(
+                    {
+                        "name": name,
+                        "args": args,
+                        "step_index": rec.get("step_index", 0),
+                        "planner_ms": start_ms,
+                    }
+                )
         elif rec_type == "USER_INPUT":
             continue
         elif rec_type and rec_type not in _NON_TOOL_TYPES:
-            tool_results.append(rec)
+            if not pending_calls:
+                # Drop the phantom result locally rather than let it consume
+                # a slot and shift every pairing after it.
+                continue
+            call = pending_calls.pop(0)
+            result_content = rec.get("content", "") or ""
+            created_match = _CREATED_AT_RE.search(result_content)
+            completed_match = _COMPLETED_AT_RE.search(result_content)
+            fallback_ms = _iso_to_ms(rec.get("created_at", "") or "")
+            start_ms = _iso_to_ms(created_match.group(1)) if created_match else 0
+            end_ms = _iso_to_ms(completed_match.group(1)) if completed_match else 0
+            if start_ms == 0:
+                start_ms = fallback_ms
+            if end_ms == 0:
+                end_ms = fallback_ms
+            turn["tool_steps"].append(
+                {
+                    "name": call["name"],
+                    "args": call["args"],
+                    "output": result_content,
+                    "step_index": rec.get("step_index", 0),
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                }
+            )
+        else:
+            # Un-modeled record (e.g. missing/blank ``type``): drop it locally
+            continue
 
+    _flush_pending_calls()
     turn["final_response"] = last_planner_content
-
-    for (name, args), result in zip(tool_calls, tool_results):
-        result_content = result.get("content", "") or ""
-        created_match = _CREATED_AT_RE.search(result_content)
-        completed_match = _COMPLETED_AT_RE.search(result_content)
-        fallback_ms = _iso_to_ms(result.get("created_at", "") or "")
-        start_ms = _iso_to_ms(created_match.group(1)) if created_match else 0
-        end_ms = _iso_to_ms(completed_match.group(1)) if completed_match else 0
-        if start_ms == 0:
-            start_ms = fallback_ms
-        if end_ms == 0:
-            end_ms = fallback_ms
-        turn["tool_steps"].append(
-            {
-                "name": name,
-                "args": args,
-                "output": result_content,
-                "step_index": result.get("step_index", 0),
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-            }
-        )
 
     return turn
 

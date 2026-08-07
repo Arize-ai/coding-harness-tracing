@@ -3,11 +3,14 @@
 
 Antigravity provides ``conversationId`` on every hook invocation, so session
 keying is straightforward: no environment variable fallback, no grandparent-PID
-lookup. If the field is somehow missing we fall back to the current PID so the
-hook still has a state file to write to.
+lookup. If the field is somehow missing we derive a key from the transcript
+path instead — PreInvocation and Stop run as separate processes, so the key
+must be process-independent for the pair to share the emission watermark. With
+neither field present there is no usable key and the hooks no-op.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 
@@ -33,16 +36,19 @@ def check_requirements() -> bool:
     return True
 
 
-def resolve_session(input_json: dict) -> StateManager:
+def resolve_session(input_json: dict) -> StateManager | None:
     """Build a StateManager keyed off ``conversationId`` from the hook payload.
 
     Antigravity supplies ``conversationId`` on every hook invocation. If it is
-    missing (degenerate case), fall back to the current PID so the hook still
-    has a place to persist state for this process.
+    missing, fall back to a key derived from ``transcriptPath`` (which both
+    PreInvocation and Stop receive).
     """
     key = input_json.get("conversationId") or ""
     if not key:
-        key = str(os.getpid())
+        transcript_path = input_json.get("transcriptPath") or ""
+        if not transcript_path:
+            return None
+        key = "transcript-" + hashlib.sha256(str(transcript_path).encode("utf-8")).hexdigest()[:16]
 
     state_file = STATE_DIR / f"state_{key}.json"
     lock_path = STATE_DIR / f".lock_{key}"
@@ -73,7 +79,7 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     state.set("session_id", session_id)
     state.set("project_name", project_name)
     state.set("user_id", env.user_id)
-    state.set("last_emitted_step", "-1")
+    state.set("last_emitted_turn", "-1")
 
     log(f"Session initialized: {session_id}")
 
