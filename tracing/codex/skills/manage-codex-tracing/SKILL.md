@@ -116,8 +116,8 @@ Check that the notify executable exists and configuration parses:
 test -x ~/.arize/harness/venv/bin/arize-hook-codex-notify
 ~/.arize/harness/venv/bin/python - <<'PY'
 from pathlib import Path
-from tracing.codex._toml import _toml_load
-print(_toml_load(Path.home()/'.codex/config.toml').get('notify'))
+from tracing.codex._toml import _toml_load_strict
+print(_toml_load_strict(Path.home()/'.codex/config.toml').get('notify'))
 PY
 ```
 

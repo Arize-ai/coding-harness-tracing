@@ -109,6 +109,16 @@ class TestFindRolloutFile:
         found = _find_rollout_file("sess-abc", sessions_root=tmp_path / "sessions")
         assert found == path
 
+    def test_uses_custom_codex_home(self, tmp_path, monkeypatch):
+        custom_home = tmp_path / "alternate-codex"
+        rollout_dir = custom_home / "sessions" / "2026" / "05" / "20"
+        rollout_dir.mkdir(parents=True)
+        path = rollout_dir / "rollout-2026-05-20T00-00-00-sess-custom.jsonl"
+        path.write_text(json.dumps(_evt({"type": "task_started", "turn_id": "t"})) + "\n")
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+
+        assert _find_rollout_file("sess-custom") == path
+
     @pytest.mark.parametrize("session_id", ["*", "../other", "a/b", "a\\b", "[abc]"])
     def test_rejects_pattern_and_path_characters(self, tmp_path, session_id):
         _write_rollout(tmp_path, "private-session", _evt({"type": "task_started", "turn_id": "t"}))
@@ -1421,6 +1431,22 @@ class TestSendLegacySingleSpan:
         attrs = _attrs_of_span(spans[0])
         assert attrs["input.value"]["stringValue"] == "first instruction\nfollow-up instruction"
         assert attrs["output.value"]["stringValue"] == "done"
+
+    def test_notify_loads_env_from_custom_codex_home(self, tmp_path, monkeypatch):
+        custom_home = tmp_path / "alternate-codex"
+        custom_home.mkdir()
+        (custom_home / "arize-env.sh").write_text(
+            "export ARIZE_TRACE_ENABLED=true\nexport TEST_CODEX_HOME_ENV=loaded\n"
+        )
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+        monkeypatch.delenv("TEST_CODEX_HOME_ENV", raising=False)
+        monkeypatch.setattr(sys, "argv", ["hook", '{"type":"other"}'])
+
+        with mock.patch("tracing.codex.hooks.handlers._handle_notify") as handle:
+            notify()
+
+        handle.assert_called_once_with({"type": "other"})
+        assert os.environ["TEST_CODEX_HOME_ENV"] == "loaded"
 
 
 class TestReviewerRegressions:

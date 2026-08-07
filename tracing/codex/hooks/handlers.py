@@ -21,6 +21,7 @@ JSON as a CLI argument). No stdout response expected.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -38,6 +39,7 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
+from tracing.codex.constants import get_codex_home
 from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 from tracing.codex.hooks.transcript import _extract_turn_from_rollout, _open_regular_text
 
@@ -115,7 +117,12 @@ def _find_rollout_file(session_id: str, sessions_root: "Path | None" = None) -> 
     File names embed the session_id, so a filename-pattern match is fast even
     on a deep directory tree.
     """
-    root = sessions_root or _CODEX_SESSIONS_ROOT
+    if sessions_root is not None:
+        root = sessions_root
+    elif os.environ.get("CODEX_HOME", ""):
+        root = get_codex_home() / "sessions"
+    else:
+        root = _CODEX_SESSIONS_ROOT
     if not root.is_dir() or not _SESSION_ID_RE.fullmatch(session_id):
         return None
     try:
@@ -467,7 +474,7 @@ def notify() -> None:
     expects no stdout response.
     """
     try:
-        load_env_file(Path.home() / ".codex" / "arize-env.sh")
+        load_env_file(get_codex_home() / "arize-env.sh")
         if not check_requirements():
             return
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
