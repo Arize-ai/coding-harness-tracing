@@ -559,6 +559,14 @@ def _parse_dotenv(path: Path) -> dict:
     convention: ``KEY=value # note`` yields ``value``. Quote the value to keep
     a literal ``#``. Without this, a commented credential line silently
     produced a malformed value rather than an error.
+
+    An unbalanced quote is fatal. ``KEY="abc`` used to yield ``"abc`` — a
+    credential with a stray quote welded on, which reads as "found" and then
+    fails authentication with nothing pointing at the typo. Checked against
+    ``python-dotenv``'s ``dotenv_values``, which rejects the same lines; the two
+    agree on every other case exercised in the tests, except that it expands
+    ``\\n`` inside double quotes. None of the keys read here want a newline, so
+    that expansion is deliberately not copied.
     """
     values: dict = {}
     try:
@@ -579,6 +587,10 @@ def _parse_dotenv(path: Path) -> dict:
         value = raw.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
+        elif value[:1] in ("'", '"'):
+            err(f"{path}: {key.strip()} has an unbalanced {value[:1]} quote.")
+            err("Fix the line or remove the quotes — a value cannot be read from it safely.")
+            sys.exit(1)
         else:
             value = _strip_inline_comment(value)
 

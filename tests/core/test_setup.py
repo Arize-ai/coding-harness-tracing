@@ -824,6 +824,75 @@ class TestDotenvResolution:
 
         assert _dotenv_values()["ARIZE_SPACE_ID"] == ""
 
+    @pytest.mark.parametrize(
+        "body,expected",
+        [
+            ("ARIZE_API_KEY=abc123", "abc123"),
+            ("export ARIZE_API_KEY=abc123", "abc123"),
+            ('ARIZE_API_KEY="abc123"', "abc123"),
+            ("ARIZE_API_KEY='abc123'", "abc123"),
+            ("ARIZE_API_KEY=abc123 # my key", "abc123"),
+            ("ARIZE_API_KEY=abc\t# my key", "abc"),
+            ('ARIZE_API_KEY="abc#123"', "abc#123"),
+            ("ARIZE_API_KEY=abc#123", "abc#123"),
+            ("ARIZE_API_KEY=a=b=c", "a=b=c"),
+            ("   ARIZE_API_KEY=abc123   ", "abc123"),
+            ("ARIZE_API_KEY = abc123", "abc123"),
+            ("ARIZE_API_KEY=abc123\r", "abc123"),
+            ("ARIZE_API_KEY=first\nARIZE_API_KEY=second", "second"),
+            ("ARIZE_API_KEY=$HOME", "$HOME"),
+            ('ARIZE_API_KEY=ab"cd', 'ab"cd'),
+            ("ARIZE_API_KEY=", ""),
+        ],
+    )
+    def test_matches_reference_dotenv_semantics(self, tmp_path, body, expected):
+        """Each case was checked against python-dotenv's dotenv_values.
+
+        The parser is hand-rolled because the package ships with zero runtime
+        dependencies, and adding one would also have to be bundled for the
+        offline install. So the behaviour is pinned here instead. The one
+        deliberate divergence is that python-dotenv expands ``\\n`` inside
+        double quotes; none of the keys read here want a newline.
+        """
+        from core.setup import _parse_dotenv
+
+        path = tmp_path / "ref.env"
+        path.write_text(body + "\n")
+
+        assert _parse_dotenv(path).get("ARIZE_API_KEY") == expected
+
+    @pytest.mark.parametrize(
+        "body",
+        ['ARIZE_API_KEY="abc123', "ARIZE_API_KEY='abc123", "ARIZE_API_KEY=\"abc123'"],
+    )
+    def test_unbalanced_quote_is_fatal(self, tmp_path, body, capsys):
+        """It used to yield the value with the stray quote still attached.
+
+        `ARIZE_API_KEY="abc` became `"abc` — a credential that reports as found
+        and then fails authentication with nothing pointing at the typo.
+        python-dotenv rejects these lines; we stop, because the file was named
+        explicitly and a corrupted credential is worse than a missing one.
+        """
+        from core.setup import _parse_dotenv
+
+        path = tmp_path / "bad.env"
+        path.write_text(body + "\n")
+
+        with pytest.raises(SystemExit) as exc:
+            _parse_dotenv(path)
+
+        assert exc.value.code == 1
+        assert "unbalanced" in capsys.readouterr().err
+
+    def test_backslash_n_stays_literal(self, tmp_path):
+        """Deliberate divergence from python-dotenv, which would expand it."""
+        from core.setup import _parse_dotenv
+
+        path = tmp_path / "nl.env"
+        path.write_text('ARIZE_API_KEY="a\\nb"\n')
+
+        assert _parse_dotenv(path)["ARIZE_API_KEY"] == "a\\nb"
+
     def test_reports_source_per_value(self, tmp_path, monkeypatch, capsys):
         """Mixed sources must be visible: which value came from where."""
         from core.setup import prompt_backend
