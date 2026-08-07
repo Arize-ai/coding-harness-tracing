@@ -1060,7 +1060,7 @@ class TestWriteConfig:
 class TestClaudeSetup:
     """Tests for core.setup.claude."""
 
-    def test_settings_json_phoenix(self, tmp_path, monkeypatch):
+    def test_settings_json_phoenix(self, tmp_path):
         """Claude setup creates settings.json with Phoenix env block."""
         settings_path = tmp_path / ".claude" / "settings.local.json"
 
@@ -1079,7 +1079,7 @@ class TestClaudeSetup:
         assert result["env"]["PHOENIX_ENDPOINT"] == "http://localhost:6006"
         assert result["env"]["ARIZE_TRACE_ENABLED"] == "true"
 
-    def test_settings_json_arize(self, tmp_path, monkeypatch):
+    def test_settings_json_arize(self, tmp_path):
         """Claude setup creates settings.json with Arize AX env block."""
         settings_path = tmp_path / ".claude" / "settings.local.json"
 
@@ -1100,7 +1100,7 @@ class TestClaudeSetup:
         assert result["env"]["ARIZE_OTLP_ENDPOINT"] == "otlp.arize.com:443"
         assert result["env"]["ARIZE_TRACE_ENABLED"] == "true"
 
-    def test_existing_settings_merged(self, tmp_path, monkeypatch):
+    def test_existing_settings_merged(self, tmp_path):
         """Existing settings.json keys are preserved when adding env block."""
         settings_path = tmp_path / ".claude" / "settings.local.json"
         settings_path.parent.mkdir(parents=True)
@@ -1125,7 +1125,7 @@ class TestClaudeSetup:
         assert result["env"]["EXISTING_VAR"] == "keep_me"
         assert result["env"]["PHOENIX_ENDPOINT"] == "http://localhost:6006"
 
-    def test_check_existing_config_no_overwrite(self, tmp_path, monkeypatch):
+    def test_check_existing_config_no_overwrite(self, tmp_path):
         """Declining overwrite returns False."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"env": {"PHOENIX_ENDPOINT": "http://localhost:6006"}}))
@@ -1136,7 +1136,7 @@ class TestClaudeSetup:
             result = _check_existing_configuration(settings_path)
         assert result is False
 
-    def test_check_existing_config_overwrite(self, tmp_path, monkeypatch):
+    def test_check_existing_config_overwrite(self, tmp_path):
         """Accepting overwrite returns True."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"env": {"PHOENIX_ENDPOINT": "http://localhost:6006"}}))
@@ -1147,7 +1147,7 @@ class TestClaudeSetup:
             result = _check_existing_configuration(settings_path)
         assert result is True
 
-    def test_check_existing_config_arize_no_overwrite(self, tmp_path, monkeypatch):
+    def test_check_existing_config_arize_no_overwrite(self, tmp_path):
         """Declining overwrite for Arize config returns False."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"env": {"ARIZE_API_KEY": "some-key"}}))
@@ -1158,7 +1158,7 @@ class TestClaudeSetup:
             result = _check_existing_configuration(settings_path)
         assert result is False
 
-    def test_check_no_existing_config(self, tmp_path, monkeypatch):
+    def test_check_no_existing_config(self, tmp_path):
         """No existing config returns True (proceed)."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text("{}")
@@ -1168,14 +1168,14 @@ class TestClaudeSetup:
         result = _check_existing_configuration(settings_path)
         assert result is True
 
-    def test_load_settings_missing_file(self, tmp_path, monkeypatch):
+    def test_load_settings_missing_file(self, tmp_path):
         """_load_settings returns {} for missing file."""
         from core.setup.claude import _load_settings
 
         result = _load_settings(tmp_path / "nonexistent.json")
         assert result == {}
 
-    def test_load_settings_invalid_json(self, tmp_path, monkeypatch):
+    def test_load_settings_invalid_json(self, tmp_path):
         """_load_settings returns {} for invalid JSON."""
         path = tmp_path / "bad.json"
         path.write_text("not json{{{")
@@ -1304,7 +1304,7 @@ class TestClaudeSetup:
 class TestCodexWriteEnvFile:
     """Tests for _write_env_file()."""
 
-    def test_phoenix_env_file(self, tmp_path, monkeypatch):
+    def test_phoenix_env_file(self, tmp_path):
         """Env file for Phoenix backend has correct exports."""
         env_path = tmp_path / ".codex" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1318,7 +1318,7 @@ class TestCodexWriteEnvFile:
         # project_name lives in config.json only; not baked into the env file (#74).
         assert "ARIZE_PROJECT_NAME" not in content
 
-    def test_phoenix_env_file_with_api_key(self, tmp_path, monkeypatch):
+    def test_phoenix_env_file_with_api_key(self, tmp_path):
         """Env file for Phoenix with API key includes it."""
         env_path = tmp_path / ".codex" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1328,7 +1328,7 @@ class TestCodexWriteEnvFile:
         content = env_path.read_text()
         assert 'export PHOENIX_API_KEY="my-key"' in content
 
-    def test_arize_env_file(self, tmp_path, monkeypatch):
+    def test_arize_env_file(self, tmp_path):
         """Env file for Arize AX backend has correct exports."""
         env_path = tmp_path / ".codex" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1351,7 +1351,7 @@ class TestCodexWriteEnvFile:
         # project_name lives in config.json only; not baked into the env file (#74).
         assert "ARIZE_PROJECT_NAME" not in content
 
-    def test_env_file_creates_parent_dir(self, tmp_path, monkeypatch):
+    def test_env_file_creates_parent_dir(self, tmp_path):
         """_write_env_file creates parent directories."""
         env_path = tmp_path / "deep" / "nested" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1359,7 +1359,7 @@ class TestCodexWriteEnvFile:
         _write_env_file(env_path, "phoenix", {"endpoint": "http://localhost:6006", "api_key": ""})
         assert env_path.exists()
 
-    def test_env_file_permissions(self, tmp_path, monkeypatch):
+    def test_env_file_permissions(self, tmp_path):
         """Env file should be chmod 600 on Unix."""
         if os.name == "nt":
             pytest.skip("chmod test only on Unix")
@@ -1374,7 +1374,7 @@ class TestCodexWriteEnvFile:
 class TestCodexUpdateToml:
     """Tests for _update_toml_otel_section()."""
 
-    def test_adds_otel_to_empty_file(self, tmp_path, monkeypatch):
+    def test_adds_otel_to_empty_file(self, tmp_path):
         """Adds [otel] section to a new/empty file."""
         toml_path = tmp_path / ".codex" / "config.toml"
         from core.setup.codex import _update_toml_otel_section
@@ -1387,7 +1387,7 @@ class TestCodexUpdateToml:
         assert 'endpoint = "http://127.0.0.1:4318/v1/logs"' in content
         assert 'protocol = "json"' in content
 
-    def test_replaces_existing_otel_section(self, tmp_path, monkeypatch):
+    def test_replaces_existing_otel_section(self, tmp_path):
         """Replaces existing [otel] section with new one."""
         toml_path = tmp_path / "config.toml"
         toml_path.write_text(
@@ -1404,7 +1404,7 @@ class TestCodexUpdateToml:
         assert "[other]" in content
         assert 'foo = "bar"' in content
 
-    def test_preserves_other_sections(self, tmp_path, monkeypatch):
+    def test_preserves_other_sections(self, tmp_path):
         """Other TOML sections are preserved when replacing [otel]."""
         toml_path = tmp_path / "config.toml"
         original = '[auth]\ntoken = "secret"\n\n[otel]\nnotify = ["old-cmd"]\n'
@@ -1420,7 +1420,7 @@ class TestCodexUpdateToml:
         assert "old-cmd" not in content
         assert "[otel]" in content
 
-    def test_replaces_otel_subsection(self, tmp_path, monkeypatch):
+    def test_replaces_otel_subsection(self, tmp_path):
         """Replaces [otel.exporter.otlp-http] as part of otel section."""
         toml_path = tmp_path / "config.toml"
         toml_path.write_text(
@@ -1436,7 +1436,7 @@ class TestCodexUpdateToml:
         assert 'endpoint = "http://127.0.0.1:5555/v1/logs"' in content
         assert "[other]" in content
 
-    def test_preserves_otelother_section(self, tmp_path, monkeypatch):
+    def test_preserves_otelother_section(self, tmp_path):
         """A section named [otelother] should NOT be removed as part of [otel]."""
         toml_path = tmp_path / "config.toml"
         toml_path.write_text('[otel]\nold = "val"\n\n' '[otelother]\nkeep = "this"\n')
@@ -1449,7 +1449,18 @@ class TestCodexUpdateToml:
         assert 'keep = "this"' in content
         assert 'old = "val"' not in content
 
-    def test_custom_port(self, tmp_path, monkeypatch):
+    def test_malformed_toml_is_left_untouched(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        original = "[otel\nendpoint = 'broken'\n"
+        toml_path.write_text(original)
+        from core.setup.codex import _update_toml_otel_section
+
+        with pytest.raises(ValueError, match="Malformed TOML"):
+            _update_toml_otel_section(toml_path, 4318)
+
+        assert toml_path.read_text() == original
+
+    def test_custom_port(self, tmp_path):
         """Uses the provided collector port."""
         toml_path = tmp_path / "config.toml"
         from core.setup.codex import _update_toml_otel_section
@@ -1575,6 +1586,41 @@ class TestCodexRunFlow:
         # env file and toml should still be written
         assert (codex_dir / "arize-env.sh").exists()
         assert (codex_dir / "config.toml").exists()
+
+    def test_run_uses_custom_codex_home(self, tmp_path, monkeypatch):
+        config_path = str(tmp_path / "config.json")
+        custom_codex_dir = tmp_path / "alternate-codex"
+        custom_codex_dir.mkdir()
+
+        import core.config
+
+        monkeypatch.setattr(core.config, "CONFIG_FILE", config_path)
+        monkeypatch.setenv("CODEX_HOME", str(custom_codex_dir))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        inputs = iter(["", "1", "", ""])
+        monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+        monkeypatch.setattr("core.setup.getpass", lambda prompt="": "")
+        monkeypatch.setattr(
+            "sys.stdout",
+            type(
+                "FakeOut",
+                (),
+                {
+                    "isatty": lambda self: False,
+                    "write": lambda self, s: None,
+                    "flush": lambda self: None,
+                },
+            )(),
+        )
+
+        from core.setup.codex import _run
+
+        _run()
+
+        assert (custom_codex_dir / "arize-env.sh").exists()
+        assert (custom_codex_dir / "config.toml").exists()
+        assert not (tmp_path / ".codex").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -265,8 +265,8 @@ class TestDispatchLogic:
         self.text = _read_install_sh()
 
     def test_dispatches_harness_commands(self):
-        """claude|codex|copilot|cursor|gemini|kiro|opencode|omp should be dispatched."""
-        assert "claude|codex|copilot|cursor|gemini|kiro|opencode|omp)" in self.text
+        """claude|codex|copilot|cursor|gemini|kiro|opencode|omp|devin should be dispatched."""
+        assert "claude|codex|copilot|cursor|gemini|kiro|opencode|omp|devin)" in self.text
 
     def test_install_harness_called(self):
         """install_harness function should be called for harness commands."""
@@ -557,5 +557,10 @@ class TestConfigKeysResolveInHarnessDir:
 
         The alias is for resolving discovered config keys. Making it a second way
         to install the same harness would imply there are two harnesses.
+
+        Asserts the property rather than the exact harness list, which adding a
+        harness would otherwise break — as Devin did.
         """
-        assert "claude|codex|copilot|cursor|gemini|kiro|opencode|omp)" in _read_install_sh()
+        dispatch = re.search(r"^        (claude\|[a-z|]+)\)$", _read_install_sh(), re.MULTILINE)
+        assert dispatch, "could not find the harness dispatch line"
+        assert "claude-code" not in dispatch.group(1).split("|")

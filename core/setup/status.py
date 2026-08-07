@@ -26,7 +26,11 @@ from core.setup import CONFIG_FILE, INSTALL_DIR, VENV_DIR
 # declarative so a new harness is one line rather than a bespoke check.
 _REGISTRATION = {
     "claude-code": ("tracing.claude_code.constants", ("SETTINGS_FILE",)),
-    "codex": ("tracing.codex.constants", ("CODEX_CONFIG_FILE",)),
+    # A callable, not a constant: Codex honours CODEX_HOME, so its location is
+    # resolved per call. It yields the home directory, which _references_install
+    # scans — the same treatment Kiro's agents directory gets.
+    "codex": ("tracing.codex.constants", ("get_codex_home",)),
+    "devin": ("tracing.devin.constants", ("CONFIG_FILE",)),
     "copilot": ("tracing.copilot.constants", ("HOOKS_FILE",)),
     "cursor": ("tracing.cursor.constants", ("HOOKS_FILE",)),
     "gemini": ("tracing.gemini.constants", ("SETTINGS_FILE",)),
@@ -39,8 +43,15 @@ _REGISTRATION = {
 def _registration_paths(harness: str) -> list:
     """Resolve the candidate registration paths for a harness.
 
-    Returns [] when the harness is unknown or its constants can't be imported —
-    reported as an unknown registration rather than a crash.
+    A name may be a ``Path`` constant or a zero-argument callable returning one,
+    because a harness whose location depends on the environment — Codex reads
+    ``CODEX_HOME`` — cannot express it as a module constant.
+
+    Returns [] when the harness is unknown, its constants can't be imported, or
+    an accessor refuses to resolve. All three are reported as an unknown
+    registration rather than a crash: `status` exists to describe the install, so
+    it must not be the thing that fails. An invalid ``CODEX_HOME`` raises here,
+    and saying "cannot tell" beats taking the command down.
     """
     entry = _REGISTRATION.get(harness)
     if not entry:
@@ -55,6 +66,11 @@ def _registration_paths(harness: str) -> list:
     paths = []
     for name in names:
         value = getattr(module, name, None)
+        if callable(value):
+            try:
+                value = value()
+            except Exception:
+                continue
         if isinstance(value, Path):
             paths.append(value)
     return paths

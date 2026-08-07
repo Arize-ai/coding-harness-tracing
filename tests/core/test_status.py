@@ -243,6 +243,29 @@ class TestRegistrationDetection:
 
         assert status_mod._registration_state("kiro")[0] is True
 
+    def test_every_installable_harness_is_in_the_map(self):
+        """A harness install.sh can install must be one status can check.
+
+        Devin landed on main while this was in review and was missing here, so
+        `status` reported "registration unknown" for it — and since only an
+        explicit False counts as unregistered, the install still reported healthy
+        with its hooks absent. Derived from install.sh so the next harness fails
+        here instead of going unnoticed.
+        """
+        import re
+
+        from core.setup.status import _REGISTRATION
+
+        install_sh = Path(__file__).resolve().parents[2] / "install.sh"
+        dispatch = re.search(r"^        (claude\|[a-z|]+)\)$", install_sh.read_text(), re.MULTILINE)
+        assert dispatch, "could not find the harness dispatch line in install.sh"
+        cli_names = set(dispatch.group(1).split("|"))
+
+        # status keys are config keys (HARNESS_NAME); claude is the one that differs.
+        covered = set(_REGISTRATION) | {"claude"}
+        missing = cli_names - covered
+        assert not missing, f"harnesses installable but unknown to status: {sorted(missing)}"
+
     def test_every_known_harness_has_resolvable_paths(self):
         """Guards against a harness being added to the map with a bad constant."""
         from core.setup.status import _REGISTRATION, _registration_paths

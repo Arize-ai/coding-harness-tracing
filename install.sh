@@ -236,6 +236,7 @@ harness_dir() {
         kiro)    echo "tracing/kiro" ;;
         opencode) echo "tracing/opencode" ;;
         omp)     echo "tracing/omp" ;;
+        devin)   echo "tracing/devin" ;;
         *)       return 1 ;;
     esac
 }
@@ -275,6 +276,7 @@ Commands:
   kiro        Install and configure tracing for Kiro CLI
   opencode    Install and configure tracing for opencode
   omp         Install and configure tracing for Oh My Pi (omp)
+  devin       Install and configure tracing for Devin CLI
   status      Report configured harnesses and whether their hooks are wired up
   update      Update the installed coding-harness-tracing and re-register all harnesses
   uninstall <harness>   Tear down one harness
@@ -349,7 +351,7 @@ main() {
     done
 
     case "$cmd" in
-        claude|codex|copilot|cursor|gemini|kiro|opencode|omp)
+        claude|codex|copilot|cursor|gemini|kiro|opencode|omp|devin)
             install_harness "$cmd" "$with_skills"
             ;;
         uninstall)
