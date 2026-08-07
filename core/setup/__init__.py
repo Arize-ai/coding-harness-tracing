@@ -361,17 +361,30 @@ def prompt_project_name(default: str) -> str:
 def prompt_content_logging() -> dict:
     """Prompt for content logging settings. Returns the dict to write under `logging:`.
 
-    All three default to True to match the kit's existing capture-everything
-    behavior. Users opt out per category.
+    Interactively, all three default to True — the questions below are ``[Y/n]``
+    and users opt out per category, matching the kit's capture-everything
+    behaviour.
+
+    Non-interactively they default to **False**. That asymmetry is the point: a
+    ``[Y/n]`` default is a human declining to change an answer they were shown,
+    which is consent; the same default with nobody watching is capture of
+    prompts, commands and file contents that no one agreed to. Reaching it
+    needs no malice — ``update`` forces non-interactive mode whenever there is no
+    terminal, so a cron job or CI run against a config with no ``logging`` block
+    would have switched capture on silently. Each category now requires its
+    ``ARIZE_LOG_*`` setting to say so explicitly.
     """
     if non_interactive():
         block = {
-            "prompts": env_flag("ARIZE_LOG_PROMPTS"),
-            "tool_details": env_flag("ARIZE_LOG_TOOL_DETAILS"),
-            "tool_content": env_flag("ARIZE_LOG_TOOL_CONTENT"),
+            "prompts": env_flag("ARIZE_LOG_PROMPTS", default=False),
+            "tool_details": env_flag("ARIZE_LOG_TOOL_DETAILS", default=False),
+            "tool_content": env_flag("ARIZE_LOG_TOOL_CONTENT", default=False),
         }
         enabled = ", ".join(f"{k}={'on' if v else 'off'}" for k, v in block.items())
         info(f"Content logging: {enabled}")
+        if not any(block.values()):
+            info("No ARIZE_LOG_* settings given, so no content is captured — span structure only.")
+            info("Set ARIZE_LOG_PROMPTS, ARIZE_LOG_TOOL_DETAILS or ARIZE_LOG_TOOL_CONTENT to true to capture it.")
         return block
 
     print("")
@@ -507,7 +520,19 @@ _dotenv_path: Optional[Path] = None
 
 
 def _dotenv_candidates() -> list:
-    """Dotenv files to consider, in order. ARIZE_ENV_FILE overrides the search.
+    """The dotenv file to read, from ARIZE_ENV_FILE only. Empty list when unset.
+
+    Deliberately does **not** fall back to ``./.env`` or ``./.env.local``.
+    Values from a dotenv file outrank the process environment (see ``_env``), and
+    the working directory is whatever repository the user happens to be sitting
+    in. An implicit search therefore let a cloned repo's dotenv supply the
+    *routing* — ``ARIZE_OTLP_ENDPOINT`` or ``PHOENIX_ENDPOINT`` — while the
+    user's real credentials came from the ambient environment, writing a config
+    that ships spans and a bearer API key to an endpoint the repo chose. Every
+    later session on that machine would keep doing it.
+
+    Requiring an explicit path keeps the precedence rule where it is useful
+    without handing the decision to untrusted content.
 
     An explicit path that cannot be read is a hard error rather than a silent
     fall-back to the environment: naming a file states where the credentials are
@@ -515,14 +540,13 @@ def _dotenv_candidates() -> list:
     happened to be in the environment instead.
     """
     explicit = os.environ.get("ARIZE_ENV_FILE", "").strip()
-    if explicit:
-        path = Path(explicit).expanduser()
-        if not path.is_file():
-            err(f"ARIZE_ENV_FILE points at {path}, which is not a readable file.")
-            sys.exit(1)
-        return [path]
-    cwd = Path.cwd()
-    return [cwd / ".env", cwd / ".env.local"]
+    if not explicit:
+        return []
+    path = Path(explicit).expanduser()
+    if not path.is_file():
+        err(f"ARIZE_ENV_FILE points at {path}, which is not a readable file.")
+        sys.exit(1)
+    return [path]
 
 
 def _parse_dotenv(path: Path) -> dict:

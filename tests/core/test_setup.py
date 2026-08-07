@@ -475,19 +475,38 @@ class TestNonInteractive:
         with self._no_prompts():
             assert prompt_user_id() == "alice"
 
-    def test_logging_defaults_to_capture_everything(self):
-        """Parity with the interactive wizard, whose three prompts default to yes."""
+    def test_logging_defaults_to_capturing_nothing(self):
+        """Unattended, every category must be opted into explicitly.
+
+        The interactive wizard's three questions still default to yes — a person
+        declining to change an answer they were shown is consent. The same
+        default with nobody watching is not: `update` runs non-interactively
+        whenever there is no terminal, so a cron job against a config with no
+        logging block would have switched prompt and file-content capture on.
+        """
         from core.setup import prompt_content_logging
 
         with self._no_prompts():
             block = prompt_content_logging()
 
-        assert block == {"prompts": True, "tool_details": True, "tool_content": True}
+        assert block == {"prompts": False, "tool_details": False, "tool_content": False}
+
+    def test_logging_opt_in_per_category(self, monkeypatch):
+        from core.setup import prompt_content_logging
+
+        monkeypatch.setenv("ARIZE_LOG_PROMPTS", "true")
+        monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "1")
+
+        with self._no_prompts():
+            block = prompt_content_logging()
+
+        assert block == {"prompts": True, "tool_details": False, "tool_content": True}
 
     def test_logging_opt_out(self, monkeypatch):
         from core.setup import prompt_content_logging
 
         monkeypatch.setenv("ARIZE_LOG_PROMPTS", "false")
+        monkeypatch.setenv("ARIZE_LOG_TOOL_DETAILS", "true")
         monkeypatch.setenv("ARIZE_LOG_TOOL_CONTENT", "0")
 
         with self._no_prompts():
@@ -553,6 +572,22 @@ class TestNonInteractive:
             assert ensure_harness_installed("Nope", home_subdir=".no-such-harness-dir") is True
 
 
+def _named_env(tmp_path, monkeypatch, content, name="creds.env"):
+    """Write a dotenv and point ARIZE_ENV_FILE at it.
+
+    There is no automatic ./.env search: a named file outranks the process
+    environment, so an implicit one would let a cloned repo's dotenv choose where
+    credentials get sent. Tests therefore name the file, like real callers do.
+    """
+    from core.setup import _reset_dotenv_cache
+
+    path = tmp_path / name
+    path.write_text(content)
+    monkeypatch.setenv("ARIZE_ENV_FILE", str(path))
+    _reset_dotenv_cache()
+    return path
+
+
 class TestDotenvResolution:
     """Non-interactive installs can read credentials from a dotenv file.
 
@@ -571,11 +606,10 @@ class TestDotenvResolution:
         yield
         _reset_dotenv_cache()
 
-    def test_reads_dotenv_from_cwd(self, tmp_path):
-        """tmp_path is cwd via the module-level _isolate_cwd fixture."""
+    def test_named_file_is_read(self, tmp_path, monkeypatch):
         from core.setup import prompt_backend
 
-        (tmp_path / ".env").write_text("ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
             target, creds = prompt_backend()
@@ -584,34 +618,34 @@ class TestDotenvResolution:
         assert creds["api_key"] == "file-key"
         assert creds["space_id"] == "file-space"
 
-    def test_env_local_fallback(self, tmp_path):
-        from core.setup import prompt_backend
+    def test_cwd_dotenv_is_ignored(self, tmp_path, monkeypatch):
+        """A dotenv in the working directory must never be read.
 
-        (tmp_path / ".env.local").write_text("ARIZE_API_KEY=local-key\nARIZE_SPACE_ID=local-space\n")
+        Security boundary: a file's values outrank the process environment, and
+        cwd is whatever repo the user is sitting in. Reading it let a cloned
+        repo's .env choose ARIZE_OTLP_ENDPOINT while the user's real key came
+        from the environment, so every later session shipped spans and a bearer
+        token to an endpoint the repo picked.
+        """
+        from core.setup import _reset_dotenv_cache, prompt_backend
+
+        (tmp_path / ".env").write_text("ARIZE_OTLP_ENDPOINT=otlp.attacker.example:443\n")
+        (tmp_path / ".env.local").write_text("ARIZE_OTLP_ENDPOINT=otlp.attacker.example:443\n")
+        monkeypatch.setenv("ARIZE_API_KEY", "real-key")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "real-space")
+        _reset_dotenv_cache()
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
             _, creds = prompt_backend()
 
-        assert creds["api_key"] == "local-key"
-
-    def test_explicit_path_wins(self, tmp_path, monkeypatch):
-        from core.setup import prompt_backend
-
-        (tmp_path / ".env").write_text("ARIZE_API_KEY=wrong\nARIZE_SPACE_ID=wrong\n")
-        custom = tmp_path / "creds.env"
-        custom.write_text("ARIZE_API_KEY=right\nARIZE_SPACE_ID=right-space\n")
-        monkeypatch.setenv("ARIZE_ENV_FILE", str(custom))
-
-        with patch("builtins.input", side_effect=AssertionError("prompted")):
-            _, creds = prompt_backend()
-
-        assert creds["api_key"] == "right"
+        assert "attacker" not in creds["endpoint"], "cwd dotenv must not choose the endpoint"
+        assert creds["endpoint"] == "otlp.arize.com:443"
 
     def test_file_beats_real_env(self, tmp_path, monkeypatch):
         """The file wins: it is chosen, whereas ARIZE_* vars are often inherited."""
         from core.setup import prompt_backend
 
-        (tmp_path / ".env").write_text("ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
         monkeypatch.setenv("ARIZE_API_KEY", "env-key")
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
@@ -629,8 +663,10 @@ class TestDotenvResolution:
         """
         from core.setup import prompt_backend, prompt_project_name
 
-        (tmp_path / ".env").write_text(
-            "ARIZE_API_KEY=fresh-key\nARIZE_SPACE_ID=intended-space\nARIZE_PROJECT_NAME=intended-project\n"
+        _named_env(
+            tmp_path,
+            monkeypatch,
+            "ARIZE_API_KEY=fresh-key\nARIZE_SPACE_ID=intended-space\nARIZE_PROJECT_NAME=intended-project\n",
         )
         monkeypatch.setenv("ARIZE_API_KEY", "stale-key")
         monkeypatch.setenv("ARIZE_SPACE_ID", "stale-space")
@@ -648,7 +684,7 @@ class TestDotenvResolution:
         """The file overrides only what it actually defines."""
         from core.setup import prompt_backend
 
-        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=file-space\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_SPACE_ID=file-space\n")
         monkeypatch.setenv("ARIZE_API_KEY", "env-key")
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
@@ -657,16 +693,18 @@ class TestDotenvResolution:
         assert creds["api_key"] == "env-key"
         assert creds["space_id"] == "file-space"
 
-    def test_parses_export_quotes_and_comments(self, tmp_path):
+    def test_parses_export_quotes_and_comments(self, tmp_path, monkeypatch):
         from core.setup import prompt_backend, prompt_project_name
 
-        (tmp_path / ".env").write_text(
+        _named_env(
+            tmp_path,
+            monkeypatch,
             "# Arize credentials\n"
             "\n"
             'export ARIZE_API_KEY="quoted-key"\n'
             "ARIZE_SPACE_ID='single-quoted'\n"
             "ARIZE_PROJECT_NAME = spaced-out \n"
-            "MALFORMED_LINE\n"
+            "MALFORMED_LINE\n",
         )
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
@@ -677,11 +715,11 @@ class TestDotenvResolution:
         assert creds["space_id"] == "single-quoted"
         assert project == "spaced-out"
 
-    def test_unrelated_keys_ignored(self, tmp_path):
+    def test_unrelated_keys_ignored(self, tmp_path, monkeypatch):
         """An app's .env holds all sorts of things; only our keys are read."""
         from core.setup import _dotenv_values
 
-        (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-nope\nDATABASE_URL=postgres://x\nARIZE_SPACE_ID=space\n")
+        _named_env(tmp_path, monkeypatch, "OPENAI_API_KEY=sk-nope\nDATABASE_URL=postgres://x\nARIZE_SPACE_ID=space\n")
 
         assert _dotenv_values() == {"ARIZE_SPACE_ID": "space"}
 
@@ -690,7 +728,7 @@ class TestDotenvResolution:
         from core.setup import prompt_backend
 
         monkeypatch.delenv("ARIZE_NONINTERACTIVE", raising=False)
-        (tmp_path / ".env").write_text("ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_API_KEY=file-key\nARIZE_SPACE_ID=file-space\n")
 
         with patch("builtins.input", side_effect=["2", "typed-space", ""]):
             with patch("core.setup.getpass", return_value="typed-key"):
@@ -731,20 +769,22 @@ class TestDotenvResolution:
         with pytest.raises(SystemExit):
             _dotenv_values()
 
-    def test_project_name_read_from_file(self, tmp_path):
+    def test_project_name_read_from_file(self, tmp_path, monkeypatch):
         """The file may set the project name; only the environment is ignored."""
         from core.setup import prompt_project_name
 
-        (tmp_path / ".env").write_text("ARIZE_PROJECT_NAME=from-file\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_PROJECT_NAME=from-file\n")
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
             assert prompt_project_name("codex") == "from-file"
 
-    def test_inline_comment_stripped(self, tmp_path):
+    def test_inline_comment_stripped(self, tmp_path, monkeypatch):
         """`KEY=value # note` must not yield a value with the comment attached."""
         from core.setup import prompt_backend
 
-        (tmp_path / ".env").write_text(
+        _named_env(
+            tmp_path,
+            monkeypatch,
             "ARIZE_API_KEY=k # the key\nARIZE_SPACE_ID=space-abc # my main space\n",
         )
 
@@ -754,33 +794,33 @@ class TestDotenvResolution:
         assert creds["space_id"] == "space-abc"
         assert creds["api_key"] == "k"
 
-    def test_tab_before_comment_stripped(self, tmp_path):
+    def test_tab_before_comment_stripped(self, tmp_path, monkeypatch):
         from core.setup import _dotenv_values
 
-        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=space-abc\t# tabbed note\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_SPACE_ID=space-abc\t# tabbed note\n")
 
         assert _dotenv_values()["ARIZE_SPACE_ID"] == "space-abc"
 
-    def test_hash_in_quoted_value_preserved(self, tmp_path):
+    def test_hash_in_quoted_value_preserved(self, tmp_path, monkeypatch):
         """Quoting is the documented way to keep a literal '#'."""
         from core.setup import _dotenv_values
 
-        (tmp_path / ".env").write_text('ARIZE_PROJECT_NAME="has # hash"\n')
+        _named_env(tmp_path, monkeypatch, 'ARIZE_PROJECT_NAME="has # hash"\n')
 
         assert _dotenv_values()["ARIZE_PROJECT_NAME"] == "has # hash"
 
-    def test_hash_without_leading_space_is_kept(self, tmp_path):
+    def test_hash_without_leading_space_is_kept(self, tmp_path, monkeypatch):
         """A '#' with no preceding whitespace is part of the value, per dotenv."""
         from core.setup import _dotenv_values
 
-        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=space#abc\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_SPACE_ID=space#abc\n")
 
         assert _dotenv_values()["ARIZE_SPACE_ID"] == "space#abc"
 
-    def test_comment_only_value_is_empty(self, tmp_path):
+    def test_comment_only_value_is_empty(self, tmp_path, monkeypatch):
         from core.setup import _dotenv_values
 
-        (tmp_path / ".env").write_text("ARIZE_SPACE_ID=#nothing here\nARIZE_API_KEY=k\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_SPACE_ID=#nothing here\nARIZE_API_KEY=k\n")
 
         assert _dotenv_values()["ARIZE_SPACE_ID"] == ""
 
@@ -788,7 +828,7 @@ class TestDotenvResolution:
         """Mixed sources must be visible: which value came from where."""
         from core.setup import prompt_backend
 
-        (tmp_path / ".env").write_text("ARIZE_API_KEY=fresh-key\n")
+        _named_env(tmp_path, monkeypatch, "ARIZE_API_KEY=fresh-key\n")
         monkeypatch.setenv("ARIZE_SPACE_ID", "space-from-env")
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
@@ -796,7 +836,7 @@ class TestDotenvResolution:
 
         out = capsys.readouterr().out
         assert "$ARIZE_SPACE_ID" in out
-        assert str(tmp_path / ".env") in out
+        assert str(tmp_path / "creds.env") in out
         assert "fresh-key" not in out
 
 
@@ -924,7 +964,7 @@ class TestWriteConfig:
 class TestClaudeSetup:
     """Tests for core.setup.claude."""
 
-    def test_settings_json_phoenix(self, tmp_path):
+    def test_settings_json_phoenix(self, tmp_path, monkeypatch):
         """Claude setup creates settings.json with Phoenix env block."""
         settings_path = tmp_path / ".claude" / "settings.local.json"
 
@@ -943,7 +983,7 @@ class TestClaudeSetup:
         assert result["env"]["PHOENIX_ENDPOINT"] == "http://localhost:6006"
         assert result["env"]["ARIZE_TRACE_ENABLED"] == "true"
 
-    def test_settings_json_arize(self, tmp_path):
+    def test_settings_json_arize(self, tmp_path, monkeypatch):
         """Claude setup creates settings.json with Arize AX env block."""
         settings_path = tmp_path / ".claude" / "settings.local.json"
 
@@ -964,7 +1004,7 @@ class TestClaudeSetup:
         assert result["env"]["ARIZE_OTLP_ENDPOINT"] == "otlp.arize.com:443"
         assert result["env"]["ARIZE_TRACE_ENABLED"] == "true"
 
-    def test_existing_settings_merged(self, tmp_path):
+    def test_existing_settings_merged(self, tmp_path, monkeypatch):
         """Existing settings.json keys are preserved when adding env block."""
         settings_path = tmp_path / ".claude" / "settings.local.json"
         settings_path.parent.mkdir(parents=True)
@@ -989,7 +1029,7 @@ class TestClaudeSetup:
         assert result["env"]["EXISTING_VAR"] == "keep_me"
         assert result["env"]["PHOENIX_ENDPOINT"] == "http://localhost:6006"
 
-    def test_check_existing_config_no_overwrite(self, tmp_path):
+    def test_check_existing_config_no_overwrite(self, tmp_path, monkeypatch):
         """Declining overwrite returns False."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"env": {"PHOENIX_ENDPOINT": "http://localhost:6006"}}))
@@ -1000,7 +1040,7 @@ class TestClaudeSetup:
             result = _check_existing_configuration(settings_path)
         assert result is False
 
-    def test_check_existing_config_overwrite(self, tmp_path):
+    def test_check_existing_config_overwrite(self, tmp_path, monkeypatch):
         """Accepting overwrite returns True."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"env": {"PHOENIX_ENDPOINT": "http://localhost:6006"}}))
@@ -1011,7 +1051,7 @@ class TestClaudeSetup:
             result = _check_existing_configuration(settings_path)
         assert result is True
 
-    def test_check_existing_config_arize_no_overwrite(self, tmp_path):
+    def test_check_existing_config_arize_no_overwrite(self, tmp_path, monkeypatch):
         """Declining overwrite for Arize config returns False."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"env": {"ARIZE_API_KEY": "some-key"}}))
@@ -1022,7 +1062,7 @@ class TestClaudeSetup:
             result = _check_existing_configuration(settings_path)
         assert result is False
 
-    def test_check_no_existing_config(self, tmp_path):
+    def test_check_no_existing_config(self, tmp_path, monkeypatch):
         """No existing config returns True (proceed)."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text("{}")
@@ -1032,14 +1072,14 @@ class TestClaudeSetup:
         result = _check_existing_configuration(settings_path)
         assert result is True
 
-    def test_load_settings_missing_file(self, tmp_path):
+    def test_load_settings_missing_file(self, tmp_path, monkeypatch):
         """_load_settings returns {} for missing file."""
         from core.setup.claude import _load_settings
 
         result = _load_settings(tmp_path / "nonexistent.json")
         assert result == {}
 
-    def test_load_settings_invalid_json(self, tmp_path):
+    def test_load_settings_invalid_json(self, tmp_path, monkeypatch):
         """_load_settings returns {} for invalid JSON."""
         path = tmp_path / "bad.json"
         path.write_text("not json{{{")
@@ -1168,7 +1208,7 @@ class TestClaudeSetup:
 class TestCodexWriteEnvFile:
     """Tests for _write_env_file()."""
 
-    def test_phoenix_env_file(self, tmp_path):
+    def test_phoenix_env_file(self, tmp_path, monkeypatch):
         """Env file for Phoenix backend has correct exports."""
         env_path = tmp_path / ".codex" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1182,7 +1222,7 @@ class TestCodexWriteEnvFile:
         # project_name lives in config.json only; not baked into the env file (#74).
         assert "ARIZE_PROJECT_NAME" not in content
 
-    def test_phoenix_env_file_with_api_key(self, tmp_path):
+    def test_phoenix_env_file_with_api_key(self, tmp_path, monkeypatch):
         """Env file for Phoenix with API key includes it."""
         env_path = tmp_path / ".codex" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1192,7 +1232,7 @@ class TestCodexWriteEnvFile:
         content = env_path.read_text()
         assert 'export PHOENIX_API_KEY="my-key"' in content
 
-    def test_arize_env_file(self, tmp_path):
+    def test_arize_env_file(self, tmp_path, monkeypatch):
         """Env file for Arize AX backend has correct exports."""
         env_path = tmp_path / ".codex" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1215,7 +1255,7 @@ class TestCodexWriteEnvFile:
         # project_name lives in config.json only; not baked into the env file (#74).
         assert "ARIZE_PROJECT_NAME" not in content
 
-    def test_env_file_creates_parent_dir(self, tmp_path):
+    def test_env_file_creates_parent_dir(self, tmp_path, monkeypatch):
         """_write_env_file creates parent directories."""
         env_path = tmp_path / "deep" / "nested" / "arize-env.sh"
         from core.setup.codex import _write_env_file
@@ -1223,7 +1263,7 @@ class TestCodexWriteEnvFile:
         _write_env_file(env_path, "phoenix", {"endpoint": "http://localhost:6006", "api_key": ""})
         assert env_path.exists()
 
-    def test_env_file_permissions(self, tmp_path):
+    def test_env_file_permissions(self, tmp_path, monkeypatch):
         """Env file should be chmod 600 on Unix."""
         if os.name == "nt":
             pytest.skip("chmod test only on Unix")
@@ -1238,7 +1278,7 @@ class TestCodexWriteEnvFile:
 class TestCodexUpdateToml:
     """Tests for _update_toml_otel_section()."""
 
-    def test_adds_otel_to_empty_file(self, tmp_path):
+    def test_adds_otel_to_empty_file(self, tmp_path, monkeypatch):
         """Adds [otel] section to a new/empty file."""
         toml_path = tmp_path / ".codex" / "config.toml"
         from core.setup.codex import _update_toml_otel_section
@@ -1251,7 +1291,7 @@ class TestCodexUpdateToml:
         assert 'endpoint = "http://127.0.0.1:4318/v1/logs"' in content
         assert 'protocol = "json"' in content
 
-    def test_replaces_existing_otel_section(self, tmp_path):
+    def test_replaces_existing_otel_section(self, tmp_path, monkeypatch):
         """Replaces existing [otel] section with new one."""
         toml_path = tmp_path / "config.toml"
         toml_path.write_text(
@@ -1268,7 +1308,7 @@ class TestCodexUpdateToml:
         assert "[other]" in content
         assert 'foo = "bar"' in content
 
-    def test_preserves_other_sections(self, tmp_path):
+    def test_preserves_other_sections(self, tmp_path, monkeypatch):
         """Other TOML sections are preserved when replacing [otel]."""
         toml_path = tmp_path / "config.toml"
         original = '[auth]\ntoken = "secret"\n\n[otel]\nnotify = ["old-cmd"]\n'
@@ -1284,7 +1324,7 @@ class TestCodexUpdateToml:
         assert "old-cmd" not in content
         assert "[otel]" in content
 
-    def test_replaces_otel_subsection(self, tmp_path):
+    def test_replaces_otel_subsection(self, tmp_path, monkeypatch):
         """Replaces [otel.exporter.otlp-http] as part of otel section."""
         toml_path = tmp_path / "config.toml"
         toml_path.write_text(
@@ -1300,7 +1340,7 @@ class TestCodexUpdateToml:
         assert 'endpoint = "http://127.0.0.1:5555/v1/logs"' in content
         assert "[other]" in content
 
-    def test_preserves_otelother_section(self, tmp_path):
+    def test_preserves_otelother_section(self, tmp_path, monkeypatch):
         """A section named [otelother] should NOT be removed as part of [otel]."""
         toml_path = tmp_path / "config.toml"
         toml_path.write_text('[otel]\nold = "val"\n\n' '[otelother]\nkeep = "this"\n')
@@ -1313,7 +1353,7 @@ class TestCodexUpdateToml:
         assert 'keep = "this"' in content
         assert 'old = "val"' not in content
 
-    def test_custom_port(self, tmp_path):
+    def test_custom_port(self, tmp_path, monkeypatch):
         """Uses the provided collector port."""
         toml_path = tmp_path / "config.toml"
         from core.setup.codex import _update_toml_otel_section

@@ -72,7 +72,15 @@ You're only asked these the first time you install a harness — subsequent inst
 
 Pass `--non-interactive` (or `-y`) to skip every prompt above and take each value from the environment instead. Nothing is asked, and a missing required value is an error rather than a prompt — so this is the mode to use from a script, from CI, or when a coding agent is driving the install itself.
 
-Values are read from `./.env` or `./.env.local` (point somewhere else with `ARIZE_ENV_FILE`), falling back to the environment for anything the file doesn't define. **The file takes precedence over existing environment variables** — an already-installed harness exports `ARIZE_API_KEY`, `ARIZE_SPACE_ID` and `ARIZE_PROJECT_NAME` into every agent session, and those inherited values should not beat credentials you just wrote to a file. Only the keys below are read out of a dotenv file, so an app's `.env` full of unrelated settings is safe to use.
+Values come from the environment, or from a dotenv file named explicitly with `ARIZE_ENV_FILE`. Using a file keeps the API key out of the command line and shell history.
+
+**A named file takes precedence over existing environment variables** — an already-installed harness exports `ARIZE_API_KEY`, `ARIZE_SPACE_ID` and `ARIZE_PROJECT_NAME` into every agent session, and those inherited values should not beat credentials you just wrote to a file. Only the keys below are read out of it, so a file full of unrelated settings is safe to use.
+
+There is deliberately **no automatic `./.env` search**. Because a named file outranks the environment, reading the working directory would let a cloned repository's dotenv choose `ARIZE_OTLP_ENDPOINT` or `PHOENIX_ENDPOINT` while your real credentials came from the environment — installing a config that sends spans and a bearer API key to an endpoint the repo picked, for every later session on the machine. Name the file you mean:
+
+```bash
+ARIZE_ENV_FILE=~/.arize/onboarding.env ./install.sh claude --non-interactive
+```
 
 ```bash
 ./install.sh claude --non-interactive
@@ -86,16 +94,16 @@ Values are read from `./.env` or `./.env.local` (point somewhere else with `ARIZ
 | `ARIZE_PROJECT_NAME` | harness name | Project spans are grouped under. **Read from the dotenv file only** — an environment value is ignored here, since an installed harness exports its own project name into every session and inheriting it would name this harness's project after a different one. |
 | `ARIZE_USER_ID` | — | Optional `user.id` on every span. |
 | `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
-| `ARIZE_LOG_PROMPTS` | `true` | Set `false` to omit prompt text. |
-| `ARIZE_LOG_TOOL_DETAILS` | `true` | Set `false` to omit tool commands, file paths and URLs. |
-| `ARIZE_LOG_TOOL_CONTENT` | `true` | Set `false` to omit tool output. |
-| `ARIZE_ENV_FILE` | `./.env`, `./.env.local` | Explicit dotenv path to read instead of searching. A path that is not a readable file is an error, not a fall-back to the environment. |
+| `ARIZE_LOG_PROMPTS` | `false` | Set `true` to capture prompt text. |
+| `ARIZE_LOG_TOOL_DETAILS` | `false` | Set `true` to capture tool commands, file paths and URLs. |
+| `ARIZE_LOG_TOOL_CONTENT` | `false` | Set `true` to capture tool output. |
+| `ARIZE_ENV_FILE` | — | Dotenv file to read. No file is read unless this is set. A path that is not a readable file is an error, not a fall-back to the environment. |
 | `ARIZE_KIRO_AGENT` | `arize-traced` | Kiro only — which agent to install hooks into. |
 | `ARIZE_KIRO_SET_DEFAULT` | `false` | Kiro only — also make that agent Kiro's default. |
 
 In a dotenv file, an unquoted value ends at a whitespace-preceded `#`, so `ARIZE_SPACE_ID=abc # my space` yields `abc`. Quote the value to keep a literal `#`.
 
-Content logging defaults match the interactive wizard: everything on. Set the three `ARIZE_LOG_*` variables explicitly if you need a narrower capture.
+Content logging is **off by default here**, unlike the interactive wizard where each question defaults to yes. A `[Y/n]` default is a person declining to change an answer they were shown; the same default unattended would capture prompts, commands and file contents that nobody agreed to — and `update` runs non-interactively whenever there is no terminal. Set the `ARIZE_LOG_*` variables you want to `true`.
 
 The API key is never echoed — the installer reports only that it found one, and where it came from. Every resolved value is reported with its source (dotenv path, `$VAR`, or default) so a wrong-credentials install is diagnosable:
 

@@ -309,9 +309,11 @@ Flags:
                         .env file. Missing required values are an error.
 
 Non-interactive install:
-  Values are read from the environment first, then from ./.env or ./.env.local
-  (override the path with ARIZE_ENV_FILE). Because credentials can come from a
-  file, the API key never has to appear in a command line or shell history.
+  Values come from the environment, or from a dotenv file named with
+  ARIZE_ENV_FILE — which keeps the API key out of the command line and shell
+  history. A named file outranks the environment, so there is no automatic
+  ./.env search: a cloned repo's dotenv must not get to choose the endpoint
+  your credentials are sent to.
 
   ARIZE_API_KEY, ARIZE_SPACE_ID     Arize AX credentials (both required)
   PHOENIX_ENDPOINT, PHOENIX_API_KEY Phoenix credentials
@@ -321,14 +323,14 @@ Non-interactive install:
   ARIZE_PROJECT_NAME                Project name (default: the harness name)
   ARIZE_USER_ID                     Optional user ID stamped on spans
   ARIZE_OTLP_ENDPOINT               Override otlp.arize.com:443
-  ARIZE_LOG_PROMPTS                 Set false to omit prompt text
-  ARIZE_LOG_TOOL_DETAILS            Set false to omit tool commands and paths
-  ARIZE_LOG_TOOL_CONTENT            Set false to omit tool output
+  ARIZE_LOG_PROMPTS                 Set true to capture prompt text (off here)
+  ARIZE_LOG_TOOL_DETAILS            Set true to capture tool commands and paths
+  ARIZE_LOG_TOOL_CONTENT            Set true to capture tool output
 
   Example — credentials straight from a dotenv file, nothing exported:
-    ax api-keys create --env-file .env   # writes ARIZE_API_KEY
-    echo 'ARIZE_SPACE_ID=<space-id>' >> .env
-    ./install.sh claude --non-interactive
+    ax api-keys create --env-file ~/.arize/onboarding.env
+    echo 'ARIZE_SPACE_ID=<space-id>' >> ~/.arize/onboarding.env
+    ARIZE_ENV_FILE=~/.arize/onboarding.env ./install.sh claude --non-interactive
 
 EOF
 }

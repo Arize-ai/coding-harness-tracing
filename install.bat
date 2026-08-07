@@ -259,11 +259,12 @@ echo     --json          With status: emit machine-readable JSON
 echo     --non-interactive, -y  Ask nothing; read values from the environment
 echo                     or a .env file. Missing required values are an error.
 echo.
-echo   Non-interactive install reads (environment first, then .env/.env.local,
-echo   or ARIZE_ENV_FILE): ARIZE_API_KEY and ARIZE_SPACE_ID for Arize AX,
+echo   Non-interactive install reads the environment, plus a dotenv file named
+echo   with ARIZE_ENV_FILE (no automatic .env search): ARIZE_API_KEY and ARIZE_SPACE_ID for Arize AX,
 echo   PHOENIX_ENDPOINT and PHOENIX_API_KEY for Phoenix, plus optional
 echo   ARIZE_BACKEND, ARIZE_PROJECT_NAME, ARIZE_USER_ID, ARIZE_OTLP_ENDPOINT,
-echo   ARIZE_LOG_PROMPTS, ARIZE_LOG_TOOL_DETAILS, ARIZE_LOG_TOOL_CONTENT.
+echo   ARIZE_LOG_PROMPTS, ARIZE_LOG_TOOL_DETAILS, ARIZE_LOG_TOOL_CONTENT (all
+echo   off unless set to true).
 echo.
 echo   Examples:
 echo     install.bat claude
