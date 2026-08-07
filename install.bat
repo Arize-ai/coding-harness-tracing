@@ -257,7 +257,8 @@ echo     --with-skills   Symlink harness skills into .agents\skills\
 echo     --branch NAME   Install from a specific git branch (default: main)
 echo     --json          With status: emit machine-readable JSON
 echo     --non-interactive, -y  Ask nothing; read values from the environment
-echo                     or a .env file. Missing required values are an error.
+echo                     or the file named by ARIZE_ENV_FILE. Missing required
+echo                     values are an error.
 echo.
 echo   Non-interactive install reads the environment, plus a dotenv file named
 echo   with ARIZE_ENV_FILE (no automatic .env search): ARIZE_API_KEY and ARIZE_SPACE_ID for Arize AX,

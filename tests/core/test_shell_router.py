@@ -22,6 +22,25 @@ def _read_install_sh() -> str:
         return f.read()
 
 
+def _run_install_sh(*args, home=None, wheel_dir=None, env_extra=None, timeout=90):
+    """Run install.sh with a predictable environment.
+
+    One helper because three call sites were building this by hand. stdin is
+    always /dev/null: a test that hangs on a prompt is worse than one that fails,
+    and the harness installers do prompt.
+    """
+    env = {**os.environ, "NO_COLOR": "1"}
+    env.pop("ARIZE_WHEEL_DIR", None)
+    if home is not None:
+        env["HOME"] = str(home)
+    if env_extra:
+        env.update(env_extra)
+    cmd = ["bash", INSTALL_SH, *args]
+    if wheel_dir is not None:
+        cmd += ["--wheel-dir", str(wheel_dir)]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+
+
 # ---------------------------------------------------------------------------
 # Syntax & structure tests
 # ---------------------------------------------------------------------------
@@ -85,8 +104,6 @@ class TestFunctionsDefined:
             "err",
             "header",
             "command_exists",
-            "tty_input",
-            "tty_read_masked_line",
             "find_python",
             "venv_python",
             "venv_pip",
@@ -117,6 +134,10 @@ class TestFunctionsDefined:
             "write_config",
             "collect_backend_credentials",
             "install_skills",
+            # Dead when removed: never called, and Python's getpass replaced the
+            # masked-input one. Guarded here so they cannot creep back.
+            "tty_input",
+            "tty_read_masked_line",
         ]:
             pattern = rf"^{old_func}\s*\(\)"
             assert not re.search(
@@ -195,51 +216,39 @@ class TestUsageOutput:
 class TestSmokeTests:
     """Run the actual script with safe arguments."""
 
-    def _run(self, *args: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
-        env = {**os.environ, "NO_COLOR": "1"}
-        if env_extra:
-            env.update(env_extra)
-        return subprocess.run(
-            ["bash", INSTALL_SH, *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-
     def test_help_exits_zero(self):
-        result = self._run("--help")
+        result = _run_install_sh("--help")
         assert result.returncode == 0
         assert "Arize Coding Harness Tracing Installer" in result.stdout
 
     def test_help_flag_h(self):
-        result = self._run("-h")
+        result = _run_install_sh("-h")
         assert result.returncode == 0
         assert "Usage:" in result.stdout
 
     def test_help_word(self):
-        result = self._run("help")
+        result = _run_install_sh("help")
         assert result.returncode == 0
 
     def test_no_args_exits_nonzero(self):
-        result = self._run()
+        result = _run_install_sh()
         assert result.returncode != 0
         assert "Usage:" in result.stdout
 
     def test_bogus_command_exits_nonzero(self):
-        result = self._run("bogus")
+        result = _run_install_sh("bogus")
         assert result.returncode != 0
         assert "Unknown command" in result.stderr
 
     def test_uninstall_bogus_harness_exits_nonzero(self):
         """uninstall <invalid> should fail."""
-        result = self._run("uninstall", "invalid-harness")
+        result = _run_install_sh("uninstall", "invalid-harness")
         assert result.returncode != 0
 
     def test_update_without_install_fails(self):
         """update should fail if no venv exists at ~/.arize/harness/venv."""
         # Use a fake HOME so we don't touch real install
-        result = self._run("update", env_extra={"HOME": "/tmp/arize-test-nonexistent"})
+        result = _run_install_sh("update", env_extra={"HOME": "/tmp/arize-test-nonexistent"})
         assert result.returncode != 0
 
 
@@ -427,16 +436,8 @@ class TestWheelDirParsing:
 class TestWheelDirBehaviour:
     """Run the script for real, with a throwaway HOME and no network."""
 
-    def _run(self, *args: str, home, wheel_dir=None, timeout=90):
-        env = {**os.environ, "NO_COLOR": "1", "HOME": str(home)}
-        env.pop("ARIZE_WHEEL_DIR", None)
-        cmd = ["bash", INSTALL_SH, *args]
-        if wheel_dir is not None:
-            cmd += ["--wheel-dir", str(wheel_dir)]
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
-
     def test_missing_directory_is_fatal(self, tmp_path):
-        result = self._run("claude", home=tmp_path, wheel_dir=tmp_path / "nope")
+        result = _run_install_sh("claude", home=tmp_path, wheel_dir=tmp_path / "nope")
         assert result.returncode != 0
         assert "needs a directory" in result.stderr
 
@@ -444,7 +445,7 @@ class TestWheelDirBehaviour:
         """Fail before touching anything, rather than silently falling back."""
         empty = tmp_path / "wheels"
         empty.mkdir()
-        result = self._run("claude", home=tmp_path, wheel_dir=empty)
+        result = _run_install_sh("claude", home=tmp_path, wheel_dir=empty)
         assert result.returncode != 0
         assert "No coding_harness_tracing-*.whl" in result.stderr
         assert not (tmp_path / ".arize").exists()
@@ -459,7 +460,7 @@ class TestWheelDirBehaviour:
         wheels.mkdir()
         (wheels / "coding_harness_tracing-0.1.0-py3-none-any.whl").write_bytes(b"not a wheel")
 
-        result = self._run("claude", home=tmp_path, wheel_dir=wheels)
+        result = _run_install_sh("claude", home=tmp_path, wheel_dir=wheels)
 
         assert result.returncode != 0
         combined = result.stdout + result.stderr
@@ -476,7 +477,7 @@ class TestWheelDirBehaviour:
         wheels.mkdir()
         (wheels / "coding_harness_tracing-0.1.0-py3-none-any.whl").write_bytes(b"not a wheel")
 
-        self._run("claude", home=tmp_path, wheel_dir=wheels)
+        _run_install_sh("claude", home=tmp_path, wheel_dir=wheels)
 
         placed = tmp_path / ".arize" / "harness" / "install.sh"
         assert placed.is_file()
@@ -490,7 +491,7 @@ class TestWheelDirBehaviour:
         (harness / "venv" / "bin" / "python").symlink_to(sys.executable)
         (harness / "venv" / "bin" / "pip").symlink_to(sys.executable)
 
-        result = self._run("update", home=tmp_path)
+        result = _run_install_sh("update", home=tmp_path)
 
         assert result.returncode != 0
         assert "no source tree to update" in result.stderr
@@ -542,14 +543,7 @@ class TestConfigKeysResolveInHarnessDir:
         name that did not resolve from one that did.
         """
         for key in self._config_keys():
-            result = subprocess.run(
-                ["bash", INSTALL_SH, "uninstall", key],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env={**os.environ, "NO_COLOR": "1", "HOME": str(tmp_path)},
-                stdin=subprocess.DEVNULL,
-            )
+            result = _run_install_sh("uninstall", key, home=tmp_path, timeout=30)
             assert "Unknown harness" not in result.stderr, f"config key {key!r} does not resolve in harness_dir()"
 
     def test_cli_names_still_resolve(self):

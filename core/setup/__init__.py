@@ -251,7 +251,7 @@ def _backend_from_env() -> tuple[str, dict]:
         else:
             err(
                 "No credentials found. Set ARIZE_API_KEY and ARIZE_SPACE_ID for Arize AX "
-                "(in the environment or a .env file), or PHOENIX_ENDPOINT for Phoenix."
+                "(in the environment or the file named by ARIZE_ENV_FILE), or PHOENIX_ENDPOINT for Phoenix."
             )
             sys.exit(1)
 
@@ -659,10 +659,7 @@ def _env(name: str) -> str:
     values silently beat the credentials the caller had just written, and could
     pair a fresh key from the file with a space ID from the environment.
     """
-    value = _dotenv_values().get(name, "").strip()
-    if value:
-        return value
-    return os.environ.get(name, "").strip()
+    return _dotenv_only(name) or os.environ.get(name, "").strip()
 
 
 def env_value(name: str) -> str:
@@ -692,7 +689,10 @@ def _require_env(name: str, what: str) -> str:
     """Resolve a required value, or exit with an actionable message."""
     value = _env(name)
     if not value:
-        err(f"{what} is required for a non-interactive install — set {name} or put it in a .env file.")
+        err(
+            f"{what} is required for a non-interactive install — set {name}, or add it to the file\n"
+            f"        named by ARIZE_ENV_FILE."
+        )
         sys.exit(1)
     return value
 

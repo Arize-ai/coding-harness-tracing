@@ -37,12 +37,6 @@ _tty_in=""
 if [[ -t 0 ]]; then _tty_in="/dev/stdin"
 elif (exec 3< /dev/tty) 2>/dev/null; then exec 3<&-; _tty_in="/dev/tty"; fi
 
-tty_input() {
-    local prompt="$1" reply=""
-    [[ -n "$_tty_in" ]] && read -rp "$prompt" reply < "$_tty_in"
-    echo "$reply"
-}
-
 # Run a command with stdin wired to the user's TTY when possible.
 # Under `curl | bash`, our own stdin is the pipe — not a terminal — so any
 # subprocess that calls input() (e.g. tracing/<harness>/install.py) would hit
@@ -54,25 +48,6 @@ run_with_tty() {
     else
         "$@"
     fi
-}
-
-tty_read_masked_line() {
-    REPLY=""
-    [[ -n "${_tty_in:-}" ]] || return 1
-    local prompt="$1" char
-    printf '%s' "$prompt" >&2
-    while IFS= read -rs -n 1 char < "$_tty_in"; do
-        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
-            printf '\n' >&2; return 0
-        fi
-        if [[ "$char" == $'\177' || "$char" == $'\b' ]]; then
-            [[ -n "$REPLY" ]] && { REPLY="${REPLY%?}"; printf '\b \b' >&2; }
-            continue
-        fi
-        [[ "$char" =~ [[:cntrl:]] ]] && continue
-        REPLY+="$char"; printf '*' >&2
-    done
-    printf '\n' >&2
 }
 
 # -- Python discovery --------------------------------------------------------
@@ -207,6 +182,22 @@ PYEOF
     info "SSL certificates configured via certifi"
 }
 
+# Install the package into the venv. Extra args go to pip (`-U` for update).
+# Shared so install and update cannot drift: they were the same wheel/repo branch
+# twice, differing only by -U, and a flag added to one would have missed the other.
+pip_install_harness() {
+    local pip="$1"; shift
+    if [[ -n "$WHEEL_DIR" ]]; then
+        # --no-index so a missing wheel fails loudly instead of quietly reaching
+        # PyPI, which would defeat the point of installing offline.
+        "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
+            || { err "Failed to install coding-harness-tracing from ${WHEEL_DIR}"; return 1; }
+    else
+        "$pip" install --quiet "$@" "$INSTALL_DIR" 2>/dev/null \
+            || { err "Failed to install coding-harness-tracing package"; return 1; }
+    fi
+}
+
 setup_venv() {
     local python_cmd="$1"
     if ! venv_python &>/dev/null; then
@@ -219,14 +210,7 @@ setup_venv() {
     fi
     local pip; pip=$(venv_pip) || { err "pip not found in venv"; return 1; }
     info "Installing coding-harness-tracing into venv..."
-    if [[ -n "$WHEEL_DIR" ]]; then
-        # --no-index so a missing wheel fails loudly instead of quietly reaching
-        # PyPI, which would defeat the point of installing offline.
-        "$pip" install --quiet --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
-            || { err "Failed to install coding-harness-tracing from ${WHEEL_DIR}"; return 1; }
-    else
-        "$pip" install --quiet "$INSTALL_DIR" 2>/dev/null || { err "Failed to install coding-harness-tracing package"; return 1; }
-    fi
+    pip_install_harness "$pip" || return 1
 
     [[ "$(uname)" == "Darwin" ]] && _fix_macos_ssl_certs "$pip"
 
@@ -306,7 +290,8 @@ Flags:
   --json                With `status`: emit machine-readable JSON. Exit code is
                         0 all wired up, 1 nothing configured, 2 hooks missing.
   --non-interactive, -y Ask nothing; read every value from the environment or a
-                        .env file. Missing required values are an error.
+                        file named by ARIZE_ENV_FILE. Missing required
+                        values are an error.
 
 Non-interactive install:
   Values come from the environment, or from a dotenv file named with
@@ -424,12 +409,7 @@ main() {
             else install_repo_tarball; fi
             local pip; pip=$(venv_pip) || { err "Venv not found — run install first"; exit 1; }
             info "Reinstalling coding-harness-tracing..."
-            if [[ -n "$WHEEL_DIR" ]]; then
-                "$pip" install --quiet -U --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
-                    || { err "Failed to reinstall from ${WHEEL_DIR}"; exit 1; }
-            else
-                "$pip" install --quiet -U "$INSTALL_DIR" 2>/dev/null || { err "Failed to reinstall package"; exit 1; }
-            fi
+            pip_install_harness "$pip" -U || exit 1
             local vp; vp=$(venv_python) || { err "venv python not found"; exit 1; }
             info "Migrating legacy config.yaml to config.json (if present)..."
             "$vp" -m core.config migrate || true

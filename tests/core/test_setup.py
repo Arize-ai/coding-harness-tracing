@@ -17,6 +17,38 @@ def _isolate_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
+# Every variable the non-interactive resolver reads. Two fixtures used to keep
+# their own subsets, and the shorter one let PHOENIX_ENDPOINT, ARIZE_BACKEND and
+# the ARIZE_LOG_* vars leak in from the developer's shell — the same
+# non-hermetic failure mode that already bites this suite elsewhere.
+_RESOLVED_ENV_KEYS = (
+    "ARIZE_API_KEY",
+    "ARIZE_SPACE_ID",
+    "ARIZE_BACKEND",
+    "ARIZE_OTLP_ENDPOINT",
+    "ARIZE_PROJECT_NAME",
+    "ARIZE_USER_ID",
+    "ARIZE_LOG_PROMPTS",
+    "ARIZE_LOG_TOOL_DETAILS",
+    "ARIZE_LOG_TOOL_CONTENT",
+    "ARIZE_ENV_FILE",
+    "ARIZE_KIRO_AGENT",
+    "ARIZE_KIRO_SET_DEFAULT",
+    "PHOENIX_ENDPOINT",
+    "PHOENIX_API_KEY",
+)
+
+
+def _isolate_resolver_env(monkeypatch):
+    """Turn on non-interactive mode and clear every value the resolver reads."""
+    from core.setup import _reset_dotenv_cache
+
+    monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
+    for key in _RESOLVED_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _reset_dotenv_cache()
+
+
 def _patched_path_class(tmp_path):
     """Create a Path subclass that redirects home() and relative .claude/ to tmp_path."""
     _real_path = Path
@@ -198,26 +230,9 @@ class TestNonInteractive:
 
     @pytest.fixture(autouse=True)
     def _non_interactive_env(self, monkeypatch):
-        """Enable the flag and clear every value the resolver reads."""
         from core.setup import _reset_dotenv_cache
 
-        monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
-        for key in (
-            "ARIZE_API_KEY",
-            "ARIZE_SPACE_ID",
-            "ARIZE_BACKEND",
-            "ARIZE_OTLP_ENDPOINT",
-            "ARIZE_PROJECT_NAME",
-            "ARIZE_USER_ID",
-            "ARIZE_LOG_PROMPTS",
-            "ARIZE_LOG_TOOL_DETAILS",
-            "ARIZE_LOG_TOOL_CONTENT",
-            "ARIZE_ENV_FILE",
-            "PHOENIX_ENDPOINT",
-            "PHOENIX_API_KEY",
-        ):
-            monkeypatch.delenv(key, raising=False)
-        _reset_dotenv_cache()
+        _isolate_resolver_env(monkeypatch)
         yield
         _reset_dotenv_cache()
 
@@ -599,10 +614,7 @@ class TestDotenvResolution:
     def _clean_env(self, monkeypatch):
         from core.setup import _reset_dotenv_cache
 
-        monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
-        for key in ("ARIZE_API_KEY", "ARIZE_SPACE_ID", "ARIZE_PROJECT_NAME", "ARIZE_ENV_FILE"):
-            monkeypatch.delenv(key, raising=False)
-        _reset_dotenv_cache()
+        _isolate_resolver_env(monkeypatch)
         yield
         _reset_dotenv_cache()
 
