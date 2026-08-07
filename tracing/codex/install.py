@@ -35,16 +35,14 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
-from tracing.codex._toml import _toml_load, _toml_write
+from tracing.codex._toml import _toml_load_strict, _toml_write
 from tracing.codex.constants import (
-    CODEX_CONFIG_DIR,
-    CODEX_CONFIG_FILE,
-    CODEX_ENV_FILE,
     DISPLAY_NAME,
     HARNESS_BIN,
     HARNESS_HOME,
     HARNESS_NAME,
     NOTIFY_BIN_NAME,
+    get_codex_home,
 )
 from tracing.codex.install_legacy import cleanup_legacy_install
 
@@ -120,7 +118,7 @@ def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
         info(f"would add notify entry to {path}")
         return
 
-    data = _toml_load(path)
+    data = _toml_load_strict(path)
 
     existing_notify = data.get("notify", [])
     if not isinstance(existing_notify, list):
@@ -142,7 +140,7 @@ def _codex_toml_remove(path: Path, notify_cmd: str) -> None:
         info(f"would revert {path}: remove notify={notify_cmd} and any legacy hook entries")
         return
 
-    data = _toml_load(path)
+    data = _toml_load_strict(path)
     changed = False
 
     existing_notify = data.get("notify", [])
@@ -208,12 +206,18 @@ def _is_our_env_file(path: Path) -> bool:
 
 def install(with_skills: bool = False) -> None:
     """Install codex tracing harness (hooks-based v2 layout)."""
+    codex_home = get_codex_home()
+    codex_config_file = codex_home / "config.toml"
+    codex_env_file = codex_home / "arize-env.sh"
+    load_config(str(CONFIG_FILE))
+    _toml_load_strict(codex_config_file)
+
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
 
     # 1. Migrate any v1 artifacts (idempotent; no-op on fresh installs).
-    cleanup_legacy_install(CODEX_CONFIG_FILE)
+    cleanup_legacy_install(codex_config_file)
 
     # 2. Shared runtime + harness entry.
     ensure_shared_runtime()
@@ -248,15 +252,15 @@ def install(with_skills: bool = False) -> None:
 
     # 3. Codex config dir + env file.
     if not dry_run():
-        CODEX_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        codex_home.mkdir(parents=True, exist_ok=True)
     else:
-        info(f"would create {CODEX_CONFIG_DIR}")
-    _write_env_file(CODEX_ENV_FILE, user_id=user_id)
+        info(f"would create {codex_home}")
+    _write_env_file(codex_env_file, user_id=user_id)
 
     # 4. Write the notify-only TOML layout.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    _codex_toml_apply(CODEX_CONFIG_FILE, notify_cmd)
-    info(f"Updated TOML config: {CODEX_CONFIG_FILE}")
+    _codex_toml_apply(codex_config_file, notify_cmd)
+    info(f"Updated TOML config: {codex_config_file}")
 
     # 5. Skills.
     if with_skills:
@@ -269,24 +273,30 @@ def install(with_skills: bool = False) -> None:
 
 def uninstall() -> None:
     """Uninstall codex tracing harness."""
+    codex_home = get_codex_home()
+    codex_config_file = codex_home / "config.toml"
+    codex_env_file = codex_home / "arize-env.sh"
+    load_config(str(CONFIG_FILE))
+    _toml_load_strict(codex_config_file)
+
     # 1. Clean up any lingering v1 artifacts first (no-op if absent).
-    cleanup_legacy_install(CODEX_CONFIG_FILE)
+    cleanup_legacy_install(codex_config_file)
 
     # 2. Revert TOML — remove our notify entry and any legacy hook entries.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    _codex_toml_remove(CODEX_CONFIG_FILE, notify_cmd)
-    info(f"Reverted TOML config: {CODEX_CONFIG_FILE}")
+    _codex_toml_remove(codex_config_file, notify_cmd)
+    info(f"Reverted TOML config: {codex_config_file}")
 
     # 3. Remove env file if ours.
-    if CODEX_ENV_FILE.is_file():
-        if _is_our_env_file(CODEX_ENV_FILE):
+    if codex_env_file.is_file():
+        if _is_our_env_file(codex_env_file):
             if dry_run():
-                info(f"would remove {CODEX_ENV_FILE}")
+                info(f"would remove {codex_env_file}")
             else:
-                CODEX_ENV_FILE.unlink()
-                info(f"Removed env file: {CODEX_ENV_FILE}")
+                codex_env_file.unlink()
+                info(f"Removed env file: {codex_env_file}")
         else:
-            info(f"Skipping {CODEX_ENV_FILE} — does not look like our file")
+            info(f"Skipping {codex_env_file} — does not look like our file")
 
     # 4. Remove harness entry + unlink skills.
     remove_harness_entry(HARNESS_NAME)
