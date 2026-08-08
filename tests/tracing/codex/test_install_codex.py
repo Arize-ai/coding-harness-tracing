@@ -147,6 +147,17 @@ class TestTomlHelpers:
         parsed = codex_toml._toml_load_strict(p)
         assert parsed["notify"] == [win_path]
 
+    def test_strict_parser_handles_multiline_array(self, tmp_path):
+        p = tmp_path / "config.toml"
+        p.write_text(
+            "notify = [\n"
+            '  "/path/with]bracket", # bracket inside the string\n'
+            '  "turn-ended", # comment with a closing ]\n'
+            "]\n"
+        )
+
+        assert codex_toml._toml_load_strict(p)["notify"] == ["/path/with]bracket", "turn-ended"]
+
     def test_roundtrip_value_with_single_quote_falls_back_to_basic(self, tmp_path):
         data = {"desc": "it's a value"}
         p = tmp_path / "config.toml"
@@ -411,6 +422,60 @@ class TestInstall:
         assert data.get("model", {}).get("name") == "gpt-4"
         assert "notify" in data
 
+    def test_install_rejects_foreign_notify_before_writing_arize_files(self, fake_home, mock_prompts):
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        original = 'notify = ["/path/to/SkyComputerUseClient", "turn-ended"]\n'
+        toml_path.write_text(original)
+
+        with pytest.raises(codex_install.CodexNotifyConflict) as exc_info:
+            codex_install.install()
+
+        assert "one `notify` command" in str(exc_info.value)
+        assert "wrapper" in str(exc_info.value)
+        assert "SkyComputerUseClient" not in str(exc_info.value)
+        assert toml_path.read_text() == original
+        assert not (fake_home / ".codex" / "arize-env.sh").exists()
+        assert not (fake_home / ".arize" / "harness" / "config.json").exists()
+
+    def test_install_rejects_foreign_notify_in_custom_codex_home(self, fake_home, mock_prompts, monkeypatch):
+        default_home = fake_home / ".codex"
+        default_home.mkdir()
+        default_toml = default_home / "config.toml"
+        default_original = '[model]\nname = "default-profile"\n'
+        default_toml.write_text(default_original)
+
+        custom_home = fake_home / "alternate-codex"
+        custom_home.mkdir()
+        custom_toml = custom_home / "config.toml"
+        custom_original = 'notify = ["/usr/bin/other-hook", "turn-ended"]\n'
+        custom_toml.write_text(custom_original)
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+
+        with pytest.raises(codex_install.CodexNotifyConflict):
+            codex_install.install()
+
+        assert custom_toml.read_text() == custom_original
+        assert default_toml.read_text() == default_original
+        assert not (custom_home / "arize-env.sh").exists()
+        assert not (fake_home / ".arize" / "harness" / "config.json").exists()
+
+    def test_install_rechecks_notify_immediately_before_toml_write(self, fake_home, mock_prompts, monkeypatch):
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text('[model]\nname = "gpt-4"\n')
+        foreign = 'notify = ["/usr/bin/late-hook", "turn-ended"]\n'
+
+        def introduce_conflict(_path, user_id=""):
+            toml_path.write_text(foreign)
+
+        monkeypatch.setattr(codex_install, "_write_env_file", introduce_conflict)
+
+        with pytest.raises(codex_install.CodexNotifyConflict):
+            codex_install.install()
+
+        assert toml_path.read_text() == foreign
+
     def test_install_rejects_invalid_codex_home_without_touching_default(self, fake_home, mock_prompts, monkeypatch):
         default_home = fake_home / ".codex"
         default_home.mkdir()
@@ -645,13 +710,45 @@ class TestTomlApplyRemove:
         data = codex_toml._toml_load_strict(p)
         assert data["notify"] == ["/venv/bin/notify"]
 
-    def test_apply_preserves_existing_notify(self, tmp_path):
+    def test_apply_rejects_existing_foreign_notify_without_write(self, tmp_path):
         p = tmp_path / "config.toml"
-        p.write_text('notify = ["/usr/bin/other-hook"]\n')
+        original = 'notify = ["/usr/bin/other-hook", "turn-ended"]\n'
+        p.write_text(original)
+
+        with pytest.raises(codex_install.CodexNotifyConflict):
+            self._apply(p)
+
+        assert p.read_text() == original
+
+    def test_apply_rejects_multiline_foreign_notify_with_strict_parser(self, tmp_path):
+        p = tmp_path / "config.toml"
+        original = "notify = [\n" '  "/usr/bin/other-hook",\n' '  "turn-ended",\n' "]\n"
+        p.write_text(original)
+
+        with pytest.raises(codex_install.CodexNotifyConflict):
+            self._apply(p)
+
+        assert p.read_text() == original
+
+    @pytest.mark.parametrize("raw_key", ["'notify'", r'"\u006eotify"'])
+    def test_apply_rejects_quoted_foreign_notify_key_with_strict_parser(self, tmp_path, raw_key):
+        p = tmp_path / "config.toml"
+        original = f'{raw_key} = ["/usr/bin/other-hook", "turn-ended"]\n'
+        p.write_text(original)
+
+        with pytest.raises(codex_install.CodexNotifyConflict):
+            self._apply(p)
+
+        assert p.read_text() == original
+
+    def test_apply_preserves_control_escaped_key_with_strict_parser(self, tmp_path):
+        p = tmp_path / "config.toml"
+        p.write_text(r'"line\nkey" = "preserve-me"' + "\n")
+
         self._apply(p)
         data = codex_toml._toml_load_strict(p)
-        assert "/usr/bin/other-hook" in data["notify"]
-        assert "/venv/bin/notify" in data["notify"]
+        assert data["line\nkey"] == "preserve-me"
+        assert data["notify"] == ["/venv/bin/notify"]
 
     def test_apply_preserves_unrelated_sections(self, tmp_path):
         p = tmp_path / "config.toml"
@@ -831,6 +928,17 @@ class TestCLIDispatch:
             codex_install.cli_main(["install.py", "install", "--with-skills"])
             m.assert_called_once_with(with_skills=True)
 
+    def test_cli_install_reports_notify_conflict_without_traceback(self, capsys):
+        conflict = codex_install.CodexNotifyConflict("Codex already has a notify command")
+        with patch.object(codex_install, "install", side_effect=conflict):
+            with pytest.raises(SystemExit) as exc_info:
+                codex_install.cli_main(["install.py", "install"])
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Codex already has a notify command" in captured.err
+        assert "Traceback" not in captured.err
+
     def test_cli_uninstall(self, fake_home):
         with patch.object(codex_install, "uninstall") as m:
             codex_install.cli_main(["install.py", "uninstall"])
@@ -899,6 +1007,9 @@ class TestTomlQuoting:
 
     def test_unkey_bare_key_passthrough(self):
         assert codex_toml._toml_unkey("simple-key_0") == "simple-key_0"
+
+    def test_key_quotes_trailing_control_character(self):
+        assert codex_toml._toml_key("line\n") == '"line\\n"'
 
     def test_toml_key_idempotent_for_bare_keys(self):
         for bare in ["simple", "with-dash", "with_under", "CamelCase", "num123"]:
