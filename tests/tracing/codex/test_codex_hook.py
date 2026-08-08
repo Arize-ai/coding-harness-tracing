@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from unittest import mock
 
@@ -103,6 +104,16 @@ class TestFindRolloutFile:
         path = _write_rollout(tmp_path, "sess-abc", _evt({"type": "task_started", "turn_id": "t"}))
         found = _find_rollout_file("sess-abc", sessions_root=tmp_path / "sessions")
         assert found == path
+
+    def test_uses_custom_codex_home(self, tmp_path, monkeypatch):
+        custom_home = tmp_path / "alternate-codex"
+        rollout_dir = custom_home / "sessions" / "2026" / "05" / "20"
+        rollout_dir.mkdir(parents=True)
+        path = rollout_dir / "rollout-2026-05-20T00-00-00-sess-custom.jsonl"
+        path.write_text(json.dumps(_evt({"type": "task_started", "turn_id": "t"})) + "\n")
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+
+        assert _find_rollout_file("sess-custom") == path
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +258,40 @@ class TestExtractTurnFromRollout:
         assert tc["tool"] == "exec_command"
         assert tc["call_id"] == "c1"
         assert tc["args"] == '{"cmd":"ls"}'
+        assert tc["output"] == "file1\nfile2"
+        assert tc["end_ts"] > tc["start_ts"]
+
+    def test_custom_tool_call_pairs_with_output_by_call_id(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _resp(
+                {
+                    "type": "custom_tool_call",
+                    "status": "completed",
+                    "name": "exec",
+                    "call_id": "custom-1",
+                    "input": 'await tools.exec_command({cmd: "ls"});',
+                },
+                ts="2026-05-20T00:00:01.000Z",
+            ),
+            _resp(
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "custom-1",
+                    "output": "file1\nfile2",
+                },
+                ts="2026-05-20T00:00:02.000Z",
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert len(turn["tool_calls"]) == 1
+        tc = turn["tool_calls"][0]
+        assert tc["tool"] == "exec"
+        assert tc["call_id"] == "custom-1"
+        assert tc["args"] == 'await tools.exec_command({cmd: "ls"});'
         assert tc["output"] == "file1\nfile2"
         assert tc["end_ts"] > tc["start_ts"]
 
@@ -600,3 +645,34 @@ class TestSendLegacySingleSpan:
         assert attrs["codex.notify_fallback"]["stringValue"] == "true"
         assert attrs["input.value"]["stringValue"] == "yo"
         assert attrs["output.value"]["stringValue"] == "hi"
+
+    def test_extracts_string_array_prompt(self):
+        sent = []
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
+        ):
+            _send_legacy_single_span(
+                "sess-x",
+                "turn-x",
+                {"last-assistant-message": "hi", "input-messages": ["Rename foo to bar"]},
+            )
+
+        attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert attrs["input.value"]["stringValue"] == "Rename foo to bar"
+
+    def test_notify_loads_env_from_custom_codex_home(self, tmp_path, monkeypatch):
+        custom_home = tmp_path / "alternate-codex"
+        custom_home.mkdir()
+        (custom_home / "arize-env.sh").write_text(
+            "export ARIZE_TRACE_ENABLED=true\nexport TEST_CODEX_HOME_ENV=loaded\n"
+        )
+        monkeypatch.setenv("CODEX_HOME", str(custom_home))
+        monkeypatch.delenv("TEST_CODEX_HOME_ENV", raising=False)
+        monkeypatch.setattr(sys, "argv", ["hook", '{"type":"other"}'])
+
+        with mock.patch("tracing.codex.hooks.handlers._handle_notify") as handle:
+            notify()
+
+        handle.assert_called_once_with({"type": "other"})
+        assert os.environ["TEST_CODEX_HOME_ENV"] == "loaded"

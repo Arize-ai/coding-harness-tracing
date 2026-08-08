@@ -241,8 +241,8 @@ class TestDispatchLogic:
         self.text = _read_install_sh()
 
     def test_dispatches_harness_commands(self):
-        """claude|codex|copilot|cursor|gemini|kiro|opencode|omp should be dispatched."""
-        assert "claude|codex|copilot|cursor|gemini|kiro|opencode|omp)" in self.text
+        """claude|codex|copilot|cursor|gemini|kiro|opencode|omp|devin should be dispatched."""
+        assert "claude|codex|copilot|cursor|gemini|kiro|opencode|omp|devin)" in self.text
 
     def test_install_harness_called(self):
         """install_harness function should be called for harness commands."""
