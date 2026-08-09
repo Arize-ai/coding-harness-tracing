@@ -170,6 +170,12 @@ class TestTomlHelpers:
 class TestTomlLoadStrict:
     """Unit tests for _toml_load_strict's own contract, independent of install()."""
 
+    def test_tomli_is_a_runtime_dependency_for_legacy_python(self):
+        pyproject = Path(__file__).parents[3] / "pyproject.toml"
+        project = codex_toml._toml_load_strict(pyproject)["project"]
+
+        assert "tomli>=2.0.0; python_version < '3.11'" in project["dependencies"]
+
     def test_missing_file_returns_empty_dict(self, tmp_path):
         p = tmp_path / "does-not-exist.toml"
         assert codex_toml._toml_load_strict(p) == {}

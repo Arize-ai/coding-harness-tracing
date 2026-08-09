@@ -157,6 +157,9 @@ wheels = [
 name = "coding-harness-tracing"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+]
 
 [package.optional-dependencies]
 dev = [
@@ -185,6 +188,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pytest-timeout", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.0" },
 ]
 provides-extras = ["dev"]
 
