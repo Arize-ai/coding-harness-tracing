@@ -108,3 +108,26 @@ class TestWheelMode:
         """Each was a guard that skipped the harness when the file was absent —
         which is always, in wheel mode."""
         assert "install.py not found" not in _bat()
+
+
+class TestSelfDeletingUninstall:
+    """A full uninstall removes the directory install.bat is running from.
+
+    cmd reads a batch file from disk as it executes, so once that directory is
+    gone there is no next line to read: the uninstall completed but reported
+    "The system cannot find the path specified" and a non-zero exit. Keeping the
+    removal, the final message and the exit on one already-parsed line avoids it.
+
+    install.sh has no equivalent problem — unlinking a running script on Unix
+    leaves the open inode readable — which is why this only showed up once the
+    batch was executed on windows-latest.
+    """
+
+    def test_removal_and_exit_share_one_line(self):
+        # Scoped to :cmd_uninstall — update and bootstrap_repo also rmdir the
+        # install dir, but neither is running from inside it at the time.
+        section = _bat().split(":cmd_uninstall", 1)[1].split("REM ===", 1)[0]
+        lines = [ln for ln in section.splitlines() if 'rmdir /s /q "%INSTALL_DIR%"' in ln]
+        assert lines, "full uninstall no longer removes the install dir"
+        assert len(lines) == 1, f"expected one removal in cmd_uninstall, found {len(lines)}"
+        assert "exit /b 0" in lines[0], "the exit must be on the same line as the removal"

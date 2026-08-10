@@ -156,7 +156,12 @@ if exist "%VENV_PYTHON%" (
     )
     "%VENV_PYTHON%" -c "from core.setup.wipe import wipe_shared_runtime; wipe_shared_runtime()" 2>nul
 )
-if exist "%INSTALL_DIR%" ( rmdir /s /q "%INSTALL_DIR%" 2>nul & echo [arize] Removed %INSTALL_DIR% )
+REM Everything after this point must live on one line. A full uninstall deletes
+REM the directory this script is running from, and cmd reads a batch file from
+REM disk line by line — so once it is gone there is no next line to read. The
+REM uninstall then succeeded while reporting "The system cannot find the path
+REM specified" and a non-zero exit. Parsed as one line, cmd never looks back.
+if exist "%INSTALL_DIR%" ( rmdir /s /q "%INSTALL_DIR%" 2>nul & echo [arize] Removed %INSTALL_DIR% & echo [arize] Uninstall complete. & exit /b 0 )
 echo [arize] Uninstall complete.
 exit /b 0
 
