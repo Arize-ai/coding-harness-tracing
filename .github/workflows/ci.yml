@@ -119,6 +119,25 @@ jobs:
           echo Uninstall removed the install directory.
           exit /b 0
 
+      # run_harness_py replaced four call sites that repo mode uses too, so the
+      # normal network install has to be exercised as well — otherwise this job
+      # would pass while the path almost every Windows user takes was broken.
+      # A separate profile so it cannot inherit anything from the wheel install.
+      - name: Repo-mode install still works
+        shell: cmd
+        env:
+          ARIZE_ENV_FILE: ${{ github.workspace }}\creds.env
+        run: |
+          mkdir "%GITHUB_WORKSPACE%\repohome" 2>nul
+          set "USERPROFILE=%GITHUB_WORKSPACE%\repohome"
+          call install.bat claude --non-interactive
+          if errorlevel 1 ( echo repo-mode install failed & exit /b 1 )
+          if not exist "%USERPROFILE%\.arize\harness\pyproject.toml" ( echo no source tree - repo mode did not fetch & exit /b 1 )
+          call "%USERPROFILE%\.arize\harness\install.bat" status --json
+          if errorlevel 1 ( echo status reported unhealthy after repo-mode install & exit /b 1 )
+          echo Repo-mode install and status both fine.
+          exit /b 0
+
   lint:
     name: Lint (pre-commit)
     runs-on: ubuntu-latest
