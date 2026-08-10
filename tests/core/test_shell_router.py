@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +20,25 @@ INSTALL_SH = os.path.join(os.path.dirname(__file__), "..", "..", "install.sh")
 def _read_install_sh() -> str:
     with open(INSTALL_SH) as f:
         return f.read()
+
+
+def _run_install_sh(*args, home=None, wheel_dir=None, env_extra=None, timeout=90):
+    """Run install.sh with a predictable environment.
+
+    One helper because three call sites were building this by hand. stdin is
+    always /dev/null: a test that hangs on a prompt is worse than one that fails,
+    and the harness installers do prompt.
+    """
+    env = {**os.environ, "NO_COLOR": "1"}
+    env.pop("ARIZE_WHEEL_DIR", None)
+    if home is not None:
+        env["HOME"] = str(home)
+    if env_extra:
+        env.update(env_extra)
+    cmd = ["bash", INSTALL_SH, *args]
+    if wheel_dir is not None:
+        cmd += ["--wheel-dir", str(wheel_dir)]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
 
 
 # ---------------------------------------------------------------------------
@@ -46,11 +67,21 @@ class TestShellSyntax:
         text = _read_install_sh()
         assert "set -euo pipefail" in text, "Missing strict mode"
 
-    def test_line_count_under_400(self):
-        """Router should be ~200-330 lines, well under the old 1919."""
+    def test_line_count_under_460(self):
+        """Router should be ~350-450 lines, well under the old 1919.
+
+        The cap is a ratchet against bash creeping back in: logic here is not
+        unit-testable, not type-checked, and has to be mirrored in install.bat
+        for Windows. Anything that can live in `core/setup/` belongs there.
+
+        Raised from 400 when offline wheel install landed (--wheel-dir): flag
+        parsing and the pip invocation both run before the venv exists, so they
+        cannot move to Python. If you are raising it again, move something to
+        Python first — and change this docstring, not just the number.
+        """
         text = _read_install_sh()
         lines = text.strip().splitlines()
-        assert len(lines) <= 400, f"install.sh has {len(lines)} lines — should be under 400"
+        assert len(lines) <= 460, f"install.sh has {len(lines)} lines — should be under 460"
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +104,6 @@ class TestFunctionsDefined:
             "err",
             "header",
             "command_exists",
-            "tty_input",
-            "tty_read_masked_line",
             "find_python",
             "venv_python",
             "venv_pip",
@@ -105,6 +134,10 @@ class TestFunctionsDefined:
             "write_config",
             "collect_backend_credentials",
             "install_skills",
+            # Dead when removed: never called, and Python's getpass replaced the
+            # masked-input one. Guarded here so they cannot creep back.
+            "tty_input",
+            "tty_read_masked_line",
         ]:
             pattern = rf"^{old_func}\s*\(\)"
             assert not re.search(
@@ -125,7 +158,10 @@ class TestHarnessMapping:
         self.text = _read_install_sh()
 
     def test_claude_maps_to_tracing_claude_code(self):
-        assert 'claude)  echo "tracing/claude_code"' in self.text
+        # Both spellings: "claude" is the CLI name, "claude-code" the config key
+        # that list_installed_harnesses() hands back. See
+        # TestConfigKeysResolveInHarnessDir for why the alias exists.
+        assert 'claude|claude-code)  echo "tracing/claude_code"' in self.text
 
     def test_codex_maps_to_tracing_codex(self):
         assert 'codex)   echo "tracing/codex"' in self.text
@@ -180,51 +216,39 @@ class TestUsageOutput:
 class TestSmokeTests:
     """Run the actual script with safe arguments."""
 
-    def _run(self, *args: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
-        env = {**os.environ, "NO_COLOR": "1"}
-        if env_extra:
-            env.update(env_extra)
-        return subprocess.run(
-            ["bash", INSTALL_SH, *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-
     def test_help_exits_zero(self):
-        result = self._run("--help")
+        result = _run_install_sh("--help")
         assert result.returncode == 0
         assert "Arize Coding Harness Tracing Installer" in result.stdout
 
     def test_help_flag_h(self):
-        result = self._run("-h")
+        result = _run_install_sh("-h")
         assert result.returncode == 0
         assert "Usage:" in result.stdout
 
     def test_help_word(self):
-        result = self._run("help")
+        result = _run_install_sh("help")
         assert result.returncode == 0
 
     def test_no_args_exits_nonzero(self):
-        result = self._run()
+        result = _run_install_sh()
         assert result.returncode != 0
         assert "Usage:" in result.stdout
 
     def test_bogus_command_exits_nonzero(self):
-        result = self._run("bogus")
+        result = _run_install_sh("bogus")
         assert result.returncode != 0
         assert "Unknown command" in result.stderr
 
     def test_uninstall_bogus_harness_exits_nonzero(self):
         """uninstall <invalid> should fail."""
-        result = self._run("uninstall", "invalid-harness")
+        result = _run_install_sh("uninstall", "invalid-harness")
         assert result.returncode != 0
 
     def test_update_without_install_fails(self):
         """update should fail if no venv exists at ~/.arize/harness/venv."""
         # Use a fake HOME so we don't touch real install
-        result = self._run("update", env_extra={"HOME": "/tmp/arize-test-nonexistent"})
+        result = _run_install_sh("update", env_extra={"HOME": "/tmp/arize-test-nonexistent"})
         assert result.returncode != 0
 
 
@@ -291,9 +315,11 @@ class TestDispatchLogic:
         # between them.
         pre_wipe = text[:wipe_idx]
         assert "list_installed_harnesses" in pre_wipe, "Full uninstall does not iterate installed harnesses before wipe"
+        # run_harness_py dispatches to install.py — as a file in repo mode, as a
+        # module in wheel mode. Either way it must run before the wipe.
         assert (
-            'install.py" uninstall' in pre_wipe
-        ), "Full uninstall does not invoke per-harness install.py uninstall before wipe"
+            'run_harness_py "$key" "$vp" uninstall' in pre_wipe
+        ), "Full uninstall does not invoke per-harness uninstall before wipe"
 
     def test_update_calls_pip_install(self):
         assert "pip" in self.text and "install" in self.text
@@ -325,6 +351,39 @@ class TestFlagParsing:
     def test_env_var_default_branch(self):
         assert "ARIZE_INSTALL_BRANCH" in self.text
 
+    def test_non_interactive_flag_parsed(self):
+        assert "--non-interactive|-y)" in self.text
+        assert "export ARIZE_NONINTERACTIVE=1" in self.text
+
+    def test_json_flag_parsed(self):
+        assert "--json)" in self.text
+        assert 'status_args="--json"' in self.text
+
+
+class TestUpdateNonInteractiveGate:
+    """`update` re-registers harnesses, which prompts for each project name.
+
+    With no terminal that used to die with an EOFError. The fallback must be
+    gated on there being no terminal, so an interactive update keeps its prompts.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _load(self):
+        self.text = _read_install_sh()
+
+    def test_update_falls_back_when_no_terminal(self):
+        assert '[[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1' in self.text
+
+    def test_gate_lives_in_the_update_arm(self):
+        """Guard against the export drifting somewhere it would always apply."""
+        update_arm = self.text.split("        update)", 1)[1].split("        -h|--help|help)", 1)[0]
+        assert '[[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1' in update_arm
+
+    def test_gate_reuses_the_scripts_own_tty_detection(self):
+        """_tty_in is how the rest of the script already decides if it can prompt."""
+        assert '_tty_in="/dev/tty"' in self.text
+        assert self.text.index('_tty_in="/dev/tty"') < self.text.index('[[ -n "$_tty_in" ]] || export')
+
 
 # ---------------------------------------------------------------------------
 # Constants tests
@@ -349,3 +408,159 @@ class TestConstants:
 
     def test_tarball_url(self):
         assert "archive/refs/heads/" in self.text
+
+
+class TestWheelDirParsing:
+    """`--wheel-dir` installs from local wheels, fetching nothing."""
+
+    @pytest.fixture(autouse=True)
+    def _load(self):
+        self.text = _read_install_sh()
+
+    def test_flag_and_env_var_both_wired(self):
+        assert "--wheel-dir)" in self.text
+        assert "ARIZE_WHEEL_DIR" in self.text
+
+    def test_pip_uses_no_index(self):
+        """--no-index is what makes a missing wheel loud instead of a PyPI fetch."""
+        assert '--no-index --find-links "$WHEEL_DIR" coding-harness-tracing' in self.text
+
+    def test_documented_in_usage(self):
+        assert "--wheel-dir DIR" in self.text
+
+    def test_harness_py_falls_back_to_module(self):
+        """A wheel install has no source tree, so install.py runs as a module."""
+        assert 'run_with_tty "$vp" -m "${dir//\\//.}.install"' in self.text
+
+
+class TestWheelDirBehaviour:
+    """Run the script for real, with a throwaway HOME and no network."""
+
+    def test_missing_directory_is_fatal(self, tmp_path):
+        result = _run_install_sh("claude", home=tmp_path, wheel_dir=tmp_path / "nope")
+        assert result.returncode != 0
+        assert "needs a directory" in result.stderr
+
+    def test_directory_without_a_wheel_is_fatal(self, tmp_path):
+        """Fail before touching anything, rather than silently falling back."""
+        empty = tmp_path / "wheels"
+        empty.mkdir()
+        result = _run_install_sh("claude", home=tmp_path, wheel_dir=empty)
+        assert result.returncode != 0
+        assert "No coding_harness_tracing-*.whl" in result.stderr
+        assert not (tmp_path / ".arize").exists()
+
+    def test_never_downloads_the_repo(self, tmp_path):
+        """The whole point: no tarball, no clone, no source tree.
+
+        A deliberately corrupt wheel makes pip fail, which is fine — what
+        matters is that nothing was fetched on the way there.
+        """
+        wheels = tmp_path / "wheels"
+        wheels.mkdir()
+        (wheels / "coding_harness_tracing-0.1.0-py3-none-any.whl").write_bytes(b"not a wheel")
+
+        result = _run_install_sh("claude", home=tmp_path, wheel_dir=wheels)
+
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "Downloading coding-harness-tracing tarball" not in combined
+        assert "Extracted to" not in combined
+        assert not (tmp_path / ".arize" / "harness" / "pyproject.toml").exists()
+        assert not (tmp_path / ".arize" / "harness" / ".git").exists()
+
+    def test_places_install_sh_for_later_commands(self, tmp_path):
+        """`status`, `update` and `uninstall` are all documented as running from
+        ~/.arize/harness/install.sh, which repo mode gets via the extract.
+        Without this copy the install works and then cannot be verified."""
+        wheels = tmp_path / "wheels"
+        wheels.mkdir()
+        (wheels / "coding_harness_tracing-0.1.0-py3-none-any.whl").write_bytes(b"not a wheel")
+
+        _run_install_sh("claude", home=tmp_path, wheel_dir=wheels)
+
+        placed = tmp_path / ".arize" / "harness" / "install.sh"
+        assert placed.is_file()
+        assert os.access(placed, os.X_OK)
+
+    def test_update_refuses_without_a_source_tree(self, tmp_path):
+        """Rather than quietly converting an offline install to a network one."""
+        harness = tmp_path / ".arize" / "harness"
+        (harness / "venv" / "bin").mkdir(parents=True)
+        # A venv python that exists so update gets past its own guard.
+        (harness / "venv" / "bin" / "python").symlink_to(sys.executable)
+        (harness / "venv" / "bin" / "pip").symlink_to(sys.executable)
+
+        result = _run_install_sh("update", home=tmp_path)
+
+        assert result.returncode != 0
+        assert "no source tree to update" in result.stderr
+
+
+class TestConfigKeysResolveInHarnessDir:
+    """Every key that can appear in config.json must resolve in harness_dir().
+
+    `update` and full `uninstall` discover harnesses through
+    list_installed_harnesses(), which yields *config keys* (each harness's
+    HARNESS_NAME), then look each one up with harness_dir(), which knew only CLI
+    names. Claude Code writes "claude-code" while its CLI name is "claude", so
+    both loops skipped it with "Unknown harness: claude-code (skipping)".
+
+    The consequence was not cosmetic: a full uninstall wiped the venv and left 16
+    hook entries live in ~/.claude/settings.json pointing at the deleted path, so
+    Claude Code then tried to exec missing binaries on every hook event. wipe.py
+    deliberately does not touch settings.json — the per-harness uninstall is the
+    only thing that cleans it, and it was the step being skipped.
+
+    Discovered from the constants rather than hardcoded, so a new harness whose
+    HARNESS_NAME differs from its CLI name fails here instead of in the field.
+    """
+
+    @staticmethod
+    def _config_keys() -> list:
+        import importlib
+
+        repo_root = Path(INSTALL_SH).resolve().parent
+        keys = []
+        for constants in sorted((repo_root / "tracing").glob("*/constants.py")):
+            module = importlib.import_module(f"tracing.{constants.parent.name}.constants")
+            name = getattr(module, "HARNESS_NAME", None)
+            if name:
+                keys.append(name)
+        return keys
+
+    def test_constants_were_discovered(self):
+        """Guard the guard: an empty list would make every test below vacuous."""
+        keys = self._config_keys()
+        assert len(keys) >= 8, f"expected every harness's HARNESS_NAME, found {keys}"
+        assert "claude-code" in keys, "the regression case itself must be covered"
+
+    def test_every_config_key_resolves(self, tmp_path):
+        """Probe through `uninstall`, which is where the lookup actually happens.
+
+        With an empty HOME the command still fails — there is no venv — but it
+        fails *after* harness_dir(), so "Unknown harness" cleanly distinguishes a
+        name that did not resolve from one that did.
+        """
+        for key in self._config_keys():
+            result = _run_install_sh("uninstall", key, home=tmp_path, timeout=30)
+            assert "Unknown harness" not in result.stderr, f"config key {key!r} does not resolve in harness_dir()"
+
+    def test_cli_names_still_resolve(self):
+        """The alias must not cost us the original spelling."""
+        text = _read_install_sh()
+        for cli_name in ("claude", "codex", "copilot", "cursor", "gemini", "kiro", "opencode", "omp"):
+            assert re.search(rf"^\s+{cli_name}[)|]", text, re.MULTILINE), f"{cli_name} missing from harness_dir()"
+
+    def test_install_dispatch_does_not_gain_an_alias(self):
+        """`install.sh claude-code` should stay an unknown *command*.
+
+        The alias is for resolving discovered config keys. Making it a second way
+        to install the same harness would imply there are two harnesses.
+
+        Asserts the property rather than the exact harness list, which adding a
+        harness would otherwise break — as Devin did.
+        """
+        dispatch = re.search(r"^        (claude\|[a-z|]+)\)$", _read_install_sh(), re.MULTILINE)
+        assert dispatch, "could not find the harness dispatch line"
+        assert "claude-code" not in dispatch.group(1).split("|")
