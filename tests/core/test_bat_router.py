@@ -61,9 +61,9 @@ class TestFlagParity:
         dispatch = re.search(r"^        (claude\|[a-z|]+)\)$", _sh(), re.MULTILINE)
         assert dispatch, "could not find the harness dispatch line in install.sh"
         for harness in dispatch.group(1).split("|"):
-            assert f" {harness} " in _bat() or f"({harness} " in _bat() or f'"{harness}"' in _bat(), (
-                f"install.bat does not know the {harness} harness"
-            )
+            assert (
+                f" {harness} " in _bat() or f"({harness} " in _bat() or f'"{harness}"' in _bat()
+            ), f"install.bat does not know the {harness} harness"
 
 
 class TestWheelMode:
@@ -96,7 +96,7 @@ class TestWheelMode:
     def test_runs_install_py_as_a_module_without_a_source_tree(self):
         """A wheel install has no install.py on disk; the module is the same code."""
         bat = _bat()
-        assert ':run_harness_py' in bat
+        assert ":run_harness_py" in bat
         assert '"%VENV_PYTHON%" -m "!_MOD!"' in bat
         assert 'set "_MOD=!HARNESS_DIR:\\=.!.install"' in bat
 
