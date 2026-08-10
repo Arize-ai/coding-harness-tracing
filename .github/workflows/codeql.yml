@@ -9,25 +9,15 @@
 # must be turned OFF in Settings -> Code security -> Code scanning before this
 # workflow will run; otherwise GitHub reports a conflicting-configuration error.
 #
-# DISABLED FOR NOW: default setup is enforced at the Arize-ai org level, so a
-# repo-level disable does not stick and every advanced-config run is rejected at
-# SARIF upload ("cannot be processed when the default setup is enabled"). The
-# automatic triggers are therefore removed and this is left as
-# `workflow_dispatch` only, so the config is preserved but never runs (and never
-# conflicts). To re-enable once default setup is turned off at the org level,
-# restore the push / pull_request / schedule triggers below — that is what gives
-# fork PRs coverage:
-#
-#   on:
-#     push:
-#       branches: [main]
-#     pull_request:
-#       branches: [main]
-#     schedule:
-#       - cron: '31 7 * * 1'   # weekly, Monday 07:31 UTC
 name: CodeQL
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '31 7 * * 1' # weekly, Monday 07:31 UTC
   workflow_dispatch:
 
 concurrency:
