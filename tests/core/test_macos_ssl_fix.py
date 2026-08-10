@@ -52,7 +52,15 @@ class TestFixMacOSSslCertsDefined:
         assert "venv_python" in self.text
 
     def test_installs_certifi(self):
-        assert "install --quiet certifi" in self.text
+        # The offline array expands to nothing in repo mode, and to
+        # --no-index --find-links "$WHEEL_DIR" when installing from local wheels,
+        # so certifi resolves without network in an offline install too.
+        assert 'install --quiet "${offline[@]+"${offline[@]}"}" certifi' in self.text
+
+    def test_certifi_resolves_offline_when_wheels_are_local(self):
+        """Otherwise an offline macOS install completes and then fails at runtime
+        with CERTIFICATE_VERIFY_FAILED on the first span export."""
+        assert 'offline=(--no-index --find-links "$WHEEL_DIR")' in self.text
 
     def test_warns_on_certifi_failure(self):
         assert "Could not install certifi" in self.text
