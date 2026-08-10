@@ -2,6 +2,32 @@
 
 Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for the Claude Code CLI and the Claude Agent SDK. Spans are exported to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix).
 
+## Trace structure
+
+Each user turn is represented as a `CHAIN` with a separate `LLM` span for every model response. Tool calls are correlated by Claude's `tool_use_id` and parented to the model response that requested them. A foreground subagent is represented as an `AGENT` below its invoking tool, with its own model and tool spans.
+
+```text
+Turn 1 (CHAIN)
+├── LLM call 1 (LLM)
+│   └── Task (TOOL)
+│       └── Subagent: Explore (AGENT)
+│           ├── LLM call 2 (LLM)
+│           │   └── Grep (TOOL)
+│           └── LLM call 3 (LLM)
+└── LLM call 4 (LLM)
+    └── Bash (TOOL)
+```
+
+All spans for a turn share one trace ID. Turns from the same Claude Code session share `session.id`. Token and cache usage is attached to the individual `LLM` call that reported it.
+
+Transcript parsing and hook observations are fail-soft. Unknown or malformed records produce diagnostics where possible; missing parents, duplicate IDs, invalid timestamps, and interrupted exports do not prevent the remaining valid graph from being emitted. If the transcript is unavailable, the integration falls back to the legacy turn export instead of inventing model-call boundaries.
+
+### Current limitations
+
+- One foreground subagent is correlated into the main turn. Nested, background, cancelled, and concurrently running subagents are not yet reconstructed as complete subtrees.
+- High-fidelity model/tool parenting depends on a readable Claude transcript. The no-transcript fallback remains intentionally less detailed.
+- Unknown future Claude transcript schemas are handled fail-soft, but may produce partial graphs until fixtures and parser support are updated.
+
 ## Setup
 The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers the hooks in `~/.claude/settings.json`.
 
@@ -119,6 +145,20 @@ install.bat uninstall claude
 | Hook events registered | `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, `Notification`, `PermissionRequest`, `PermissionDenied`, `PreCompact`, `PostCompact` |
 | State directory | `~/.arize/harness/state/claude-code/` |
 | Log file | `~/.arize/harness/logs/claude-code.log` |
+
+## Content and privacy controls
+
+The capture flags apply to every span in the high-fidelity tree:
+
+| Flag | Protected content |
+|------|-------------------|
+| `ARIZE_LOG_PROMPTS` | Turn and model inputs/outputs, plus subagent prompts |
+| `ARIZE_LOG_TOOL_DETAILS` | Commands, file paths, queries, and URLs extracted from tool inputs |
+| `ARIZE_LOG_TOOL_CONTENT` | Tool arguments/results/errors and subagent output |
+
+When a category is disabled, its values are replaced with redaction markers throughout the serialized OTLP payload, including error status messages. Defaults are unchanged by the high-fidelity renderer.
+
+`ARIZE_TRACE_DEBUG=true` is different: it writes raw hook payloads under the harness state directory for troubleshooting. Treat those files as sensitive, enable the option only temporarily, and remove the debug directory when finished.
 
 ## Verifying tracing
 

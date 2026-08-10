@@ -16,6 +16,8 @@ from pathlib import Path
 from core.config import get_value, load_config, save_config, set_value
 from core.setup import err, info, print_color, prompt_backend, prompt_project_name, prompt_user_id, write_config
 from tracing.codex import install as _install_mod
+from tracing.codex._toml import _toml_load_strict
+from tracing.codex.constants import get_codex_home
 
 
 def install(with_skills: bool = False) -> None:
@@ -63,6 +65,7 @@ def _write_env_file(env_path: Path, target: str, credentials: dict) -> None:
 def _update_toml_otel_section(toml_path: Path, collector_port: int) -> None:
     """Add/replace [otel] section in codex config.toml."""
     if toml_path.exists():
+        _toml_load_strict(toml_path)
         lines = toml_path.read_text().splitlines()
         # Remove existing [otel] section(s)
         filtered = []
@@ -104,9 +107,12 @@ def main() -> None:
 
 
 def _run() -> None:
-    codex_config_dir = Path.home() / ".codex"
+    codex_config_dir = get_codex_home()
     codex_config = codex_config_dir / "config.toml"
     env_file = codex_config_dir / "arize-env.sh"
+
+    # User modified files should remain untouched
+    _toml_load_strict(codex_config)
 
     print("")
     print_color("▸ ARIZE Codex Tracing Setup", "green")
