@@ -89,6 +89,8 @@ jobs:
           if exist "%HARNESS%\.git" ( echo git clone present - wheel mode fetched the repo & exit /b 1 )
           if not exist "%HARNESS%\install.bat" ( echo install.bat was not placed for later commands & exit /b 1 )
           echo No source tree, and the bootstrap was placed.
+          REM cmd carries ERRORLEVEL over from earlier commands; be explicit.
+          exit /b 0
 
       - name: Verify update refuses without a source tree
         shell: cmd
@@ -107,6 +109,7 @@ jobs:
           set "USERPROFILE=%GITHUB_WORKSPACE%\fakehome"
           call "%USERPROFILE%\.arize\harness\install.bat" uninstall
           if errorlevel 1 ( echo uninstall failed & exit /b 1 )
+          exit /b 0
 
   lint:
     name: Lint (pre-commit)
