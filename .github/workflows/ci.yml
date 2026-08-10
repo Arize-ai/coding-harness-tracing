@@ -103,12 +103,20 @@ jobs:
           REM so without this the step fails despite the assertion passing.
           exit /b 0
 
-      - name: Verify uninstall cleans up
+      # Asserts the outcome, not the exit code. A full uninstall deletes the
+      # directory install.bat is running from, and on Windows cmd emits "The
+      # system cannot find the path specified" and a non-zero code afterwards even
+      # though the removal succeeded. That wart predates --wheel-dir and fixing it
+      # properly needs the script to re-exec from elsewhere before wiping, which
+      # is a change for its own PR. What matters here is that the install is gone.
+      - name: Verify uninstall removes the install
         shell: cmd
         run: |
           set "USERPROFILE=%GITHUB_WORKSPACE%\fakehome"
           call "%USERPROFILE%\.arize\harness\install.bat" uninstall
-          if errorlevel 1 ( echo uninstall failed & exit /b 1 )
+          if exist "%USERPROFILE%\.arize\harness\venv" ( echo venv survived the uninstall & exit /b 1 )
+          if exist "%USERPROFILE%\.arize\harness\config.json" ( echo config survived the uninstall & exit /b 1 )
+          echo Uninstall removed the install directory.
           exit /b 0
 
   lint:
