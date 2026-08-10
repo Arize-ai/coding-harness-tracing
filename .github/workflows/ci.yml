@@ -97,6 +97,9 @@ jobs:
           call "%USERPROFILE%\.arize\harness\install.bat" update
           if not errorlevel 1 ( echo update should have refused & exit /b 1 )
           echo update refused, as intended.
+          REM The refusal set ERRORLEVEL 1 on purpose, and echo does not clear it,
+          REM so without this the step fails despite the assertion passing.
+          exit /b 0
 
       - name: Verify uninstall cleans up
         shell: cmd
