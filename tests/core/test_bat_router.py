@@ -126,7 +126,9 @@ class TestSelfDeletingUninstall:
     def test_removal_and_exit_share_one_line(self):
         # Scoped to :cmd_uninstall — update and bootstrap_repo also rmdir the
         # install dir, but neither is running from inside it at the time.
-        section = _bat().split(":cmd_uninstall", 1)[1].split("REM ===", 1)[0]
+        # Split on the label at line start: ":cmd_uninstall" also appears in the
+        # dispatch line above, which would swallow cmd_status and cmd_update too.
+        section = _bat().split("\n:cmd_uninstall", 1)[1].split("\nREM ===", 1)[0]
         lines = [ln for ln in section.splitlines() if 'rmdir /s /q "%INSTALL_DIR%"' in ln]
         assert lines, "full uninstall no longer removes the install dir"
         assert len(lines) == 1, f"expected one removal in cmd_uninstall, found {len(lines)}"
