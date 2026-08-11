@@ -50,9 +50,6 @@ repos:
         name: mypy (tracing/devin)
         files: ^tracing/devin/
       - id: mypy
-        name: mypy (tracing/gemini)
-        files: ^tracing/gemini/
-      - id: mypy
         name: mypy (tracing/kiro)
         files: ^tracing/kiro/
       - id: mypy

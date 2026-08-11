@@ -25,6 +25,7 @@ from core.setup import CONFIG_FILE, INSTALL_DIR, VENV_DIR
 # candidate is checked — a harness may register through any one of them. Kept
 # declarative so a new harness is one line rather than a bespoke check.
 _REGISTRATION = {
+    "antigravity": ("tracing.antigravity.constants", ("SETTINGS_FILE",)),
     "claude-code": ("tracing.claude_code.constants", ("SETTINGS_FILE",)),
     # A callable, not a constant: Codex honours CODEX_HOME, so its location is
     # resolved per call. It yields the home directory, which _references_install
