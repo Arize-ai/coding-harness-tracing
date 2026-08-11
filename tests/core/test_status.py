@@ -172,6 +172,42 @@ class TestRegistrationDetection:
         assert registered is False
         assert path == str(missing)
 
+    def test_json_escaped_windows_path_counts(self, tmp_path, monkeypatch):
+        """A Windows hook path inside JSON has doubled separators.
+
+        Regression: matching only the raw marker reported every JSON-registered
+        harness as NOT registered on Windows, while the install had actually
+        worked — `status` exited 2, and the onboarding prompt gates on exit 0, so
+        Step 4A could never succeed there. Caught by running install.bat for real
+        on windows-latest; invisible on macOS and Linux, where `/` needs no
+        escaping.
+        """
+        import json
+
+        from core.setup import status as status_mod
+
+        win_install = "D:\\a\\repo\\fakehome\\.arize\\harness"
+        monkeypatch.setattr(status_mod, "INSTALL_DIR", Path(win_install))
+
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"hooks": {"Stop": win_install + "\\venv\\Scripts\\arize-hook-stop"}}))
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
+
+        assert status_mod._registration_state("claude-code") == (True, str(settings))
+
+    def test_forward_slash_windows_path_counts(self, tmp_path, monkeypatch):
+        """Some tools write Windows paths with forward slashes."""
+        from core.setup import status as status_mod
+
+        win_install = "D:\\a\\repo\\.arize\\harness"
+        monkeypatch.setattr(status_mod, "INSTALL_DIR", Path(win_install))
+
+        settings = tmp_path / "hooks.json"
+        settings.write_text("D:/a/repo/.arize/harness/venv/Scripts/arize-hook-stop")
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
+
+        assert status_mod._registration_state("claude-code")[0] is True
+
     def test_sibling_install_dir_does_not_count(self, status_paths, tmp_path, monkeypatch):
         """`harness-old` must not match the marker `harness` on prefix.
 

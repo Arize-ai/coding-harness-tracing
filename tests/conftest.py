@@ -13,11 +13,23 @@ REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 
+# Env-var prefixes that steer backend/target/project resolution (core.common).
+# Any of these leaking in from the developer's shell can flip a test's resolved
+# backend or project name (e.g. an exported ARIZE_API_KEY+ARIZE_SPACE_ID forces
+# target="arize" and shadows a config's phoenix target). Cleared per test so the
+# baseline is hermetic; a test that needs one sets it explicitly via monkeypatch.
+_ISOLATED_ENV_PREFIXES = ("ARIZE_", "PHOENIX_", "OTEL_")
+# ARIZE_LOG_FILE is not shell input — each adapter installs it via os.environ
+# .setdefault() at import time (a per-harness log path), and TestLogFileEnv
+# asserts that side effect. Keep it so the strip doesn't erase import artifacts.
+_ISOLATED_ENV_EXEMPT = frozenset({"ARIZE_LOG_FILE"})
+
+
 @pytest.fixture(autouse=True)
 def isolate_config(tmp_path, monkeypatch):
     """Isolate every test from the developer's real ~/.arize/harness/config.json.
 
-    Two independent leaks are closed here:
+    Three independent leaks are closed here:
 
     1. ``core.config.load_config`` binds its path via ``from core.constants
        import CONFIG_FILE``, so patching ``core.constants.CONFIG_FILE`` (as
@@ -29,9 +41,17 @@ def isolate_config(tmp_path, monkeypatch):
        config reads survive across tests. Clear them before and after each test
        so the next access re-reads the isolated config rather than a stale value
        cached from a sibling test.
+    3. ``ARIZE_*`` / ``PHOENIX_*`` / ``OTEL_*`` env vars exported in the
+       developer's shell steer backend, target, and project-name resolution.
+       Strip them so a test's result never depends on who is running it; tests
+       that exercise env precedence opt back in with ``monkeypatch.setenv``.
     """
+    import os
+
     from core.common import env
 
+    for key in [k for k in os.environ if k.startswith(_ISOLATED_ENV_PREFIXES) and k not in _ISOLATED_ENV_EXEMPT]:
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr("core.config.CONFIG_FILE", tmp_path / "no-such-config.json")
     env.invalidate_caches()
     yield

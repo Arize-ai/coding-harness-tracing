@@ -9,25 +9,15 @@
 # must be turned OFF in Settings -> Code security -> Code scanning before this
 # workflow will run; otherwise GitHub reports a conflicting-configuration error.
 #
-# DISABLED FOR NOW: default setup is enforced at the Arize-ai org level, so a
-# repo-level disable does not stick and every advanced-config run is rejected at
-# SARIF upload ("cannot be processed when the default setup is enabled"). The
-# automatic triggers are therefore removed and this is left as
-# `workflow_dispatch` only, so the config is preserved but never runs (and never
-# conflicts). To re-enable once default setup is turned off at the org level,
-# restore the push / pull_request / schedule triggers below — that is what gives
-# fork PRs coverage:
-#
-#   on:
-#     push:
-#       branches: [main]
-#     pull_request:
-#       branches: [main]
-#     schedule:
-#       - cron: '31 7 * * 1'   # weekly, Monday 07:31 UTC
 name: CodeQL
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '31 7 * * 1' # weekly, Monday 07:31 UTC
   workflow_dispatch:
 
 concurrency:
@@ -36,6 +26,7 @@ concurrency:
 
 jobs:
   analyze:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
@@ -73,3 +64,24 @@ jobs:
           # Category keeps this analysis's alerts distinct per language and
           # matches the categories default setup used, preserving alert history.
           category: "/language:${{ matrix.language }}"
+
+  requirement:
+    name: CodeQL requirement
+    needs: analyze
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require successful CodeQL analysis
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          ANALYSIS_RESULT: ${{ needs.analyze.result }}
+        run: |
+          if [ "$ANALYSIS_RESULT" != "success" ]; then
+            echo "CodeQL analysis did not succeed: $ANALYSIS_RESULT"
+            exit 1
+          fi
+
+      - name: Exempt fork pull requests
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: echo "CodeQL analysis is not required for pull requests from forks."
