@@ -101,6 +101,7 @@ ARIZE_ENV_FILE=~/.arize/onboarding.env ./install.sh claude --non-interactive
 | `ARIZE_LOG_TOOL_DETAILS` | `false` | Set `true` to capture tool commands, file paths and URLs. |
 | `ARIZE_LOG_TOOL_CONTENT` | `false` | Set `true` to capture tool output. |
 | `ARIZE_ENV_FILE` | — | Dotenv file to read. No file is read unless this is set. A path that is not a readable file is an error, not a fall-back to the environment. |
+| `ARIZE_WHEEL_DIR` | — | Install from local wheels in this directory instead of downloading the repo. Same as `--wheel-dir`; no network and no remote code execution. Supported by `install.sh` and `install.bat` alike. |
 | `ARIZE_KIRO_AGENT` | `arize-traced` | Kiro only — which agent to install hooks into. |
 | `ARIZE_KIRO_SET_DEFAULT` | `false` | Kiro only — also make that agent Kiro's default. |
 
