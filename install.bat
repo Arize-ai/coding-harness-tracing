@@ -123,11 +123,11 @@ if "!_UPDATE_NEED_VENV!"=="1" (
     if !ERRORLEVEL! neq 0 exit /b 1
 ) else if exist "%VENV_PIP%" (
     echo [arize] Reinstalling package...
-    if defined WHEEL_DIR (
-        "%VENV_PIP%" install --quiet -U --no-index --find-links "%WHEEL_DIR%" coding-harness-tracing >nul 2>&1
-    ) else (
-        "%VENV_PIP%" install --quiet -U "%INSTALL_DIR%" >nul 2>&1
-    )
+    call :pip_install_harness "-U"
+    REM Stop here on failure: migrating config and re-registering hooks against
+    REM the package that is still installed would report success for an update
+    REM that did not happen.
+    if !ERRORLEVEL! neq 0 exit /b 1
 )
 REM Migrate legacy config.yaml -> config.json (no-op if nothing to migrate)
 if exist "%VENV_PYTHON%" "%VENV_PYTHON%" -m core.config migrate
@@ -135,6 +135,7 @@ if exist "%VENV_PYTHON%" (
     for /f "usebackq delims=" %%H in (`"%VENV_PYTHON%" -c "from core.setup import list_installed_harnesses; [print(h) for h in list_installed_harnesses()]" 2^>nul`) do (
         echo [arize] Reinstalling %%H...
         call :run_harness_py "%%H" install
+        if !ERRORLEVEL! neq 0 echo [arize] %%H re-registration failed ^(continuing^) >&2
     )
 )
 echo [arize] Update complete!
@@ -239,14 +240,31 @@ echo [arize] Creating venv...
 if !ERRORLEVEL! neq 0 ( echo [arize] Failed to create venv >&2 & exit /b 1 )
 if not exist "%VENV_PIP%" ( echo [arize] pip not found in venv >&2 & exit /b 1 )
 echo [arize] Installing coding-harness-tracing...
-if defined WHEEL_DIR (
-    "%VENV_PIP%" install --quiet --no-index --find-links "%WHEEL_DIR%" coding-harness-tracing >nul 2>&1
-) else (
-    "%VENV_PIP%" install --quiet "%INSTALL_DIR%" >nul 2>&1
-)
-if !ERRORLEVEL! neq 0 ( echo [arize] pip install failed >&2 & exit /b 1 )
+call :pip_install_harness ""
+if !ERRORLEVEL! neq 0 exit /b 1
 echo [arize] Venv ready at %VENV_DIR%
 goto :eof
+
+REM --- pip_install_harness: install the package into the venv ---
+REM Extra args are passed through to pip (-U for update).
+REM
+REM Shared so the two callers cannot drift: setup_venv checked ERRORLEVEL and
+REM cmd_update did not, so a failed offline reinstall let update carry on to
+REM migrate config and re-register every harness against the OLD package, then
+REM print "Update complete!" and exit 0. install.sh has always checked this.
+REM
+REM Wheel mode deliberately does not send stderr to nul — pip's "No matching
+REM distribution found" is the only thing that explains the failure, and matching
+REM install.sh means a Windows user sees it too.
+:pip_install_harness
+if defined WHEEL_DIR (
+    "%VENV_PIP%" install --quiet %~1 --no-index --find-links "%WHEEL_DIR%" coding-harness-tracing
+    if !ERRORLEVEL! neq 0 ( echo [arize] Failed to install coding-harness-tracing from %WHEEL_DIR% >&2 & exit /b 1 )
+) else (
+    "%VENV_PIP%" install --quiet %~1 "%INSTALL_DIR%" >nul 2>&1
+    if !ERRORLEVEL! neq 0 ( echo [arize] Failed to install coding-harness-tracing package >&2 & exit /b 1 )
+)
+exit /b 0
 
 REM --- run_harness_py: invoke a harness installer ---
 REM %1 harness key, %2 verb (install/uninstall), %3 optional flags.
