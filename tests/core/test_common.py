@@ -14,7 +14,7 @@ from core.common import (
     FileLock,
     StateManager,
     _attrs_to_otlp,
-    _inject_phoenix_project_name,
+    _inject_openinference_project_resource_attr,
     _otlp_json_to_protobuf,
     _resolve_kind,
     _to_otlp_attr_value,
@@ -1045,7 +1045,7 @@ class TestPhoenixProjectNameInjection:
             ]
         }
 
-        result = _inject_phoenix_project_name(payload, "my-project")
+        result = _inject_openinference_project_resource_attr(payload, "my-project")
 
         resource_attrs = result["resourceSpans"][0]["resource"]["attributes"]
         assert {"key": "openinference.project.name", "value": {"stringValue": "my-project"}} in resource_attrs
@@ -1055,7 +1055,7 @@ class TestPhoenixProjectNameInjection:
     def test_creates_resource_when_missing(self):
         payload = {"resourceSpans": [{"scopeSpans": [{"spans": [{"name": "s"}]}]}]}
 
-        result = _inject_phoenix_project_name(payload, "proj")
+        result = _inject_openinference_project_resource_attr(payload, "proj")
 
         assert result["resourceSpans"][0]["resource"]["attributes"] == [
             {"key": "openinference.project.name", "value": {"stringValue": "proj"}}
@@ -1248,7 +1248,7 @@ class TestSendSpan:
         assert req.method == "POST"
         # Body is the OTLP payload with openinference.project.name appended to
         # the resource attributes for project routing, encoded as protobuf.
-        expected_payload = _inject_phoenix_project_name(self._SAMPLE_SPAN, "my-project")
+        expected_payload = _inject_openinference_project_resource_attr(self._SAMPLE_SPAN, "my-project")
         assert req.data == _otlp_json_to_protobuf(expected_payload)
         # Sanity-check the encoded resource attributes include the project name.
         rs = _pb_decode(_pb_decode(req.data)[1][0])

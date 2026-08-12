@@ -578,11 +578,11 @@ def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
     return payload
 
 
-def _inject_phoenix_project_name(span_dict: dict, project_name: str) -> dict:
-    """Return a copy of span_dict with openinference.project.name on every resource.
+def _inject_openinference_project_resource_attr(span_dict: dict, project_name: str) -> dict:
+    """Return a copy of span_dict with the openinference.project.name resource attribute.
 
-    Phoenix routes OTLP-ingested spans to a project via this resource attribute.
-    Modifies a deep copy — does not mutate the original.
+    Phoenix routes OTLP-ingested spans to a project via this OpenInference
+    resource attribute. Modifies a deep copy — does not mutate the original.
     """
     import copy
 
@@ -812,7 +812,7 @@ def send_span(span_dict: dict) -> bool:
             api_key = backend.get("api_key", "")
             url = f"{endpoint.rstrip('/')}/v1/traces"
             # Phoenix's OTLP HTTP endpoint only accepts binary protobuf.
-            payload = _inject_phoenix_project_name(span_dict, project)
+            payload = _inject_openinference_project_resource_attr(span_dict, project)
             body = _otlp_json_to_protobuf(payload)
             headers = {"Content-Type": "application/x-protobuf"}
             if api_key:
