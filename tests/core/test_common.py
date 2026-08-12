@@ -29,7 +29,7 @@ from core.common import (
     restore_stderr_from_log_file,
     send_span,
 )
-from core.otlp_proto import otlp_json_to_protobuf
+from test_otlp_proto import _pb_attrs, _pb_decode
 
 # ── Logging tests ──────────────────────────────────────────────────────────
 
@@ -1095,11 +1095,36 @@ class TestSendSpan:
         assert req.get_header("Content-type") == "application/x-protobuf"
         assert req.get_header("Authorization") == "Bearer test-key"
         assert req.method == "POST"
-        # Body is the OTLP payload with openinference.project.name appended to
-        # the resource attributes for project routing, encoded as protobuf.
-        # (Encoding correctness itself is covered in test_otlp_proto.py.)
-        expected_payload = _inject_openinference_project_resource_attr(self._SAMPLE_SPAN, "my-project")
-        assert req.data == otlp_json_to_protobuf(expected_payload)
+        # Decode the protobuf body independently to verify project routing and
+        # payload passthrough (full encoding coverage lives in test_otlp_proto.py).
+        rs = _pb_decode(_pb_decode(req.data)[1][0])
+        resource_attrs = _pb_attrs(_pb_decode(rs[1][0])[1])
+        assert resource_attrs[b"openinference.project.name"][1][0] == b"my-project"
+        assert resource_attrs[b"service.name"][1][0] == b"test-service"
+        span = _pb_decode(_pb_decode(rs[2][0])[2][0])
+        assert span[5][0] == b"test-span"
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_phoenix_endpoint_with_otlp_path_not_doubled(self, mock_urlopen, mock_resolve, monkeypatch):
+        """An endpoint already ending in /v1/traces does not get the path appended again."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "phoenix",
+            "endpoint": "http://phoenix:6006/v1/traces",
+            "api_key": "",
+            "project_name": "default",
+        }
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+        assert mock_urlopen.call_args[0][0].full_url == "http://phoenix:6006/v1/traces"
 
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")

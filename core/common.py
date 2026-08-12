@@ -8,7 +8,6 @@ build_span/build_multi_span from common.sh lines 277-317 / codex common.sh lines
 """
 
 import atexit
-import copy
 import functools
 import json
 import os
@@ -566,17 +565,24 @@ def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span:
     """Return a copy of span_dict with a project attribute on every resource.
 
     With per_span=True the attribute is also appended to each span's
-    attributes. Modifies a deep copy — does not mutate the original.
+    attributes. Copies only the mutated path (payloads carry full prompt and
+    tool output text, so a deep copy would be O(payload) per send); untouched
+    span data is shared with the original, which is never mutated.
     """
-    payload = copy.deepcopy(span_dict)
     project_attr = {"key": key, "value": _to_otlp_attr_value(project_name)}
-    for rs in payload.get("resourceSpans", []):
-        rs.setdefault("resource", {}).setdefault("attributes", []).append(project_attr)
+
+    def _with_attr(owner: dict) -> dict:
+        return {**owner, "attributes": [*owner.get("attributes", []), project_attr]}
+
+    new_resource_spans = []
+    for rs in span_dict.get("resourceSpans", []):
+        new_rs = {**rs, "resource": _with_attr(rs.get("resource", {}))}
         if per_span:
-            for ss in rs.get("scopeSpans", []):
-                for span in ss.get("spans", []):
-                    span.setdefault("attributes", []).append(project_attr)
-    return payload
+            new_rs["scopeSpans"] = [
+                {**ss, "spans": [_with_attr(span) for span in ss.get("spans", [])]} for ss in rs.get("scopeSpans", [])
+            ]
+        new_resource_spans.append(new_rs)
+    return {**span_dict, "resourceSpans": new_resource_spans}
 
 
 def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
@@ -641,7 +647,12 @@ def send_span(span_dict: dict) -> bool:
             project = backend["project_name"]
             endpoint = backend["endpoint"]
             api_key = backend.get("api_key", "")
-            url = f"{endpoint.rstrip('/')}/v1/traces"
+            # Tolerate endpoints configured as the full OTLP URL (Phoenix's
+            # PHOENIX_COLLECTOR_ENDPOINT convention) — avoid /v1/traces/v1/traces.
+            endpoint = endpoint.rstrip("/")
+            if endpoint.endswith("/v1/traces"):
+                endpoint = endpoint[: -len("/v1/traces")]
+            url = f"{endpoint}/v1/traces"
             # Phoenix's OTLP HTTP endpoint only accepts binary protobuf.
             payload = _inject_openinference_project_resource_attr(span_dict, project)
             body = otlp_json_to_protobuf(payload)
