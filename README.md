@@ -200,7 +200,7 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the contribution process, and the CLA.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the contribution process, and the CLA
 
 ## License
 
