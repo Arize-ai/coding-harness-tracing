@@ -11,6 +11,7 @@ from core.otlp_proto import otlp_json_to_protobuf
 
 
 def _pb_read_varint(data, i):
+    """Read a varint from data starting at index i; return (value, next index)."""
     result = shift = 0
     while True:
         byte = data[i]
@@ -44,10 +45,12 @@ def _pb_decode(data):
 
 
 def _pb_fixed64_int(raw):
+    """Unpack 8 little-endian bytes as an unsigned int."""
     return struct.unpack("<Q", raw)[0]
 
 
 def _pb_double_val(raw):
+    """Unpack 8 little-endian bytes as an IEEE-754 double."""
     return struct.unpack("<d", raw)[0]
 
 

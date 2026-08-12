@@ -25,26 +25,32 @@ def _pb_varint(n: int) -> bytes:
 
 
 def _pb_varint_field(field: int, n: int) -> bytes:
+    """Encode a varint field (wire type 0), masking the value to 64 bits."""
     return _pb_varint(field << 3) + _pb_varint(n & 0xFFFFFFFFFFFFFFFF)
 
 
 def _pb_fixed64_field(field: int, n: int) -> bytes:
+    """Encode a little-endian fixed64 field (wire type 1)."""
     return _pb_varint(field << 3 | 1) + struct.pack("<Q", n & 0xFFFFFFFFFFFFFFFF)
 
 
 def _pb_fixed32_field(field: int, n: int) -> bytes:
+    """Encode a little-endian fixed32 field (wire type 5)."""
     return _pb_varint(field << 3 | 5) + struct.pack("<I", n & 0xFFFFFFFF)
 
 
 def _pb_double_field(field: int, value: float) -> bytes:
+    """Encode an IEEE-754 double field (wire type 1)."""
     return _pb_varint(field << 3 | 1) + struct.pack("<d", float(value))
 
 
 def _pb_len_field(field: int, payload: bytes) -> bytes:
+    """Encode a length-delimited field (wire type 2): tag, length, payload."""
     return _pb_varint(field << 3 | 2) + _pb_varint(len(payload)) + payload
 
 
 def _pb_string_field(field: int, value: str) -> bytes:
+    """Encode a UTF-8 string as a length-delimited field."""
     return _pb_len_field(field, str(value).encode("utf-8"))
 
 
@@ -120,6 +126,11 @@ def _pb_hex_field(field: int, hex_str, label: str, required: bool = False) -> by
 
 
 def _pb_time_field(field: int, value, label: str) -> bytes:
+    """Encode a Unix-nanosecond timestamp as a fixed64 field.
+
+    Raises ValueError on a missing or non-integer timestamp — OTLP requires
+    both span timestamps, and a silently defaulted one would corrupt durations.
+    """
     try:
         return _pb_fixed64_field(field, int(value if value is not None else ""))
     except (TypeError, ValueError):
