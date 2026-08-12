@@ -5,10 +5,27 @@ hooks must run on the stdlib alone (no protobuf/OTel SDK dependency), so the
 OTLP JSON dicts built by build_span() are encoded to the protobuf wire format
 by hand. Field numbers follow the stable OTLP v1 trace schema
 (opentelemetry/proto/trace/v1/trace.proto).
+
+The module is layered bottom-up:
+
+1. Wire-format primitives — one encoder per protobuf wire type.
+2. OTLP value encoders — OTLP JSON leaf values (AnyValue, KeyValue,
+   hex-encoded ids, Unix-nanosecond timestamps).
+3. Trace message encoders — Span and Span.Link messages.
+4. Public API — otlp_json_to_protobuf(), the only intended entry point.
+
+Malformed *optional* values encode to nothing (fail-soft: a bad attribute
+should not drop the span), while malformed *required* values (ids,
+timestamps) raise ValueError so send_span() cannot report success for a span
+the backend would orphan or reject.
 """
 
 import base64
 import struct
+
+# ---------------------------------------------------------------------------
+# Wire-format primitives — one encoder per protobuf wire type
+# ---------------------------------------------------------------------------
 
 
 def _pb_varint(n: int) -> bytes:
@@ -52,6 +69,12 @@ def _pb_len_field(field: int, payload: bytes) -> bytes:
 def _pb_string_field(field: int, value: str) -> bytes:
     """Encode a UTF-8 string as a length-delimited field."""
     return _pb_len_field(field, str(value).encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# OTLP value encoders — OTLP JSON leaf values (fail-soft on optional fields,
+# ValueError on required ids/timestamps)
+# ---------------------------------------------------------------------------
 
 
 def _pb_uint_field(field: int, value) -> bytes:
@@ -137,6 +160,11 @@ def _pb_time_field(field: int, value, label: str) -> bytes:
         raise ValueError(f"Invalid Unix nanosecond timestamp for {label}: {value!r}")
 
 
+# ---------------------------------------------------------------------------
+# Trace message encoders — Span and Span.Link
+# ---------------------------------------------------------------------------
+
+
 def _pb_link(link: dict) -> bytes:
     """Encode an OTLP JSON span link as a Span.Link message."""
     out = _pb_hex_field(1, link.get("traceId", ""), "link traceId", required=True)
@@ -151,7 +179,12 @@ def _pb_link(link: dict) -> bytes:
 
 
 def _pb_span(span: dict) -> bytes:
-    """Encode an OTLP JSON span as a Span message."""
+    """Encode an OTLP JSON span as a Span message.
+
+    Events and Status are encoded inline (they have no other callers); links
+    delegate to _pb_link. Raises ValueError via _pb_hex_field/_pb_time_field
+    on missing or malformed ids and timestamps.
+    """
     out = _pb_hex_field(1, span.get("traceId", ""), "traceId", required=True)
     out += _pb_hex_field(2, span.get("spanId", ""), "spanId", required=True)
     if span.get("traceState"):
@@ -195,8 +228,19 @@ def _pb_span(span: dict) -> bytes:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
 def otlp_json_to_protobuf(span_dict: dict) -> bytes:
-    """Encode an OTLP JSON payload as an ExportTraceServiceRequest protobuf."""
+    """Encode an OTLP JSON payload as an ExportTraceServiceRequest protobuf.
+
+    Walks the resourceSpans → scopeSpans → spans hierarchy, encoding
+    Resource and InstrumentationScope messages inline. Raises ValueError on
+    spans with missing/malformed ids or timestamps (see _pb_hex_field and
+    _pb_time_field); everything else encodes fail-soft.
+    """
     out = b""
     for rs in span_dict.get("resourceSpans", []):
         resource = rs.get("resource", {})
