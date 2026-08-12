@@ -64,3 +64,24 @@ jobs:
           # Category keeps this analysis's alerts distinct per language and
           # matches the categories default setup used, preserving alert history.
           category: "/language:${{ matrix.language }}"
+
+  requirement:
+    name: CodeQL requirement
+    needs: analyze
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require successful CodeQL analysis
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          ANALYSIS_RESULT: ${{ needs.analyze.result }}
+        run: |
+          if [ "$ANALYSIS_RESULT" != "success" ]; then
+            echo "CodeQL analysis did not succeed: $ANALYSIS_RESULT"
+            exit 1
+          fi
+
+      - name: Exempt fork pull requests
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: echo "CodeQL analysis is not required for pull requests from forks."

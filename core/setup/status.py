@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -25,6 +24,7 @@ from core.setup import CONFIG_FILE, INSTALL_DIR, VENV_DIR
 # candidate is checked — a harness may register through any one of them. Kept
 # declarative so a new harness is one line rather than a bespoke check.
 _REGISTRATION = {
+    "antigravity": ("tracing.antigravity.constants", ("SETTINGS_FILE",)),
     "claude-code": ("tracing.claude_code.constants", ("SETTINGS_FILE",)),
     # A callable, not a constant: Codex honours CODEX_HOME, so its location is
     # resolved per call. It yields the home directory, which _references_install
@@ -87,12 +87,27 @@ def _references_install(path: Path) -> bool:
     on prefix: ``~/.arize/harness-old`` is not ``~/.arize/harness``, and
     reporting a stale install as wired up would be a false positive in the one
     command whose job is to tell you the truth about that.
+
+    Several spellings of the same marker are accepted, because the file decides
+    how to serialise a path and we only get to read it. On Windows the hook path
+    goes into JSON, which escapes every separator — the file says
+    ``D:\\\\...\\\\harness\\\\`` where the marker says ``D:\\...\\harness\\`` — so
+    matching only the raw form reported every JSON-registered harness as not
+    registered on Windows, while the install had in fact worked. Some tools also
+    write Windows paths with forward slashes.
     """
-    marker = str(INSTALL_DIR).rstrip(os.sep) + os.sep
+    base = str(INSTALL_DIR).rstrip("/\\")
+    markers = {
+        base + "/",  # POSIX
+        base + "\\",  # Windows, written raw
+        base.replace("\\", "\\\\") + "\\\\",  # Windows inside JSON
+        base.replace("\\", "/") + "/",  # Windows with forward slashes
+    }
 
     if path.is_symlink():
         try:
-            if str(path.resolve()).startswith(marker):
+            resolved = str(path.resolve())
+            if any(resolved.startswith(m) for m in markers):
                 return True
         except OSError:
             return False
@@ -104,9 +119,10 @@ def _references_install(path: Path) -> bool:
         return False
 
     try:
-        return marker in path.read_text(errors="ignore")
+        text = path.read_text(errors="ignore")
     except OSError:
         return False
+    return any(m in text for m in markers)
 
 
 def _registration_state(harness: str) -> tuple:

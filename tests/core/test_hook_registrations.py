@@ -11,13 +11,36 @@ Validates that:
 import json
 import os
 import re
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def _find_base_python312():
+    """Locate a real python3.12 that is not the active virtualenv's interpreter.
+
+    Under ``uv run`` (and any venv) the active environment's bin dir is first on
+    PATH, so ``shutil.which("python3.12")`` returns the venv's python — often a
+    relocatable standalone interpreter that fails with "No module named
+    'encodings'" when re-symlinked into a fresh venv, as this bootstrap test
+    does. Skip the active venv's bin dir so we pick a usable base interpreter;
+    return ``None`` (→ skip) when none exists outside the venv.
+    """
+    venv_bin = None
+    if sys.prefix != sys.base_prefix:
+        venv_bin = os.path.realpath(os.path.join(sys.prefix, "bin"))
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory or (venv_bin and os.path.realpath(directory) == venv_bin):
+            continue
+        candidate = os.path.join(directory, "python3.12")
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
 
 # --- Fixtures ---
 
@@ -234,9 +257,9 @@ class TestRunHookScript:
         assert "source launchers" in text.lower()
 
     def test_run_hook_bootstraps_on_python312_without_setuptools(self, tmp_path):
-        python312 = shutil.which("python3.12")
+        python312 = _find_base_python312()
         if python312 is None:
-            pytest.skip("Python 3.12 is not installed")
+            pytest.skip("No base Python 3.12 available outside the active venv")
         fake_bin = tmp_path / "bin"
         fake_bin.mkdir()
         (fake_bin / "python3").symlink_to(python312)

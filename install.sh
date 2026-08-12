@@ -234,6 +234,7 @@ harness_dir() {
         cursor)  echo "tracing/cursor" ;;
         gemini)  echo "tracing/gemini" ;;
         kiro)    echo "tracing/kiro" ;;
+        antigravity) echo "tracing/antigravity" ;;
         opencode) echo "tracing/opencode" ;;
         omp)     echo "tracing/omp" ;;
         devin)   echo "tracing/devin" ;;
@@ -274,6 +275,7 @@ Commands:
   cursor      Install and configure tracing for Cursor IDE
   gemini      Install and configure tracing for Gemini CLI
   kiro        Install and configure tracing for Kiro CLI
+  antigravity Install and configure tracing for Google Antigravity CLI/IDE
   opencode    Install and configure tracing for opencode
   omp         Install and configure tracing for Oh My Pi (omp)
   devin       Install and configure tracing for Devin CLI
@@ -351,7 +353,7 @@ main() {
     done
 
     case "$cmd" in
-        claude|codex|copilot|cursor|gemini|kiro|opencode|omp|devin)
+        claude|codex|copilot|cursor|gemini|kiro|antigravity|opencode|omp|devin)
             install_harness "$cmd" "$with_skills"
             ;;
         uninstall)
