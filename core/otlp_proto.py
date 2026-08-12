@@ -4,7 +4,8 @@ Phoenix's OTLP HTTP endpoint (/v1/traces) only accepts binary protobuf, and
 hooks must run on the stdlib alone (no protobuf/OTel SDK dependency), so the
 OTLP JSON dicts built by build_span() are encoded to the protobuf wire format
 by hand. Field numbers follow the stable OTLP v1 trace schema
-(opentelemetry/proto/trace/v1/trace.proto).
+(opentelemetry/proto/trace/v1/trace.proto):
+https://github.com/open-telemetry/opentelemetry-proto/blob/main/opentelemetry/proto/trace/v1/trace.proto
 
 The module is layered bottom-up:
 
