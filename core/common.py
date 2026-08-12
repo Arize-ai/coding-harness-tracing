@@ -8,6 +8,7 @@ build_span/build_multi_span from common.sh lines 277-317 / codex common.sh lines
 """
 
 import atexit
+import copy
 import functools
 import json
 import os
@@ -18,6 +19,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import IO, Optional
+
+from core.otlp_proto import otlp_json_to_protobuf
 
 # ---------------------------------------------------------------------------
 # Environment helper — reads tracing-related env vars with defaults
@@ -559,203 +562,31 @@ def resolve_backend(span_dict: dict) -> dict:
     return {"target": "none", "project_name": project_name}
 
 
-def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
-    """Return a copy of span_dict with arize.project.name on every span's attributes.
+def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span: bool = False) -> dict:
+    """Return a copy of span_dict with a project attribute on every resource.
 
-    Arize requires this attribute on each span (not just the resource).
-    Modifies a shallow copy — does not mutate the original.
+    With per_span=True the attribute is also appended to each span's
+    attributes. Modifies a deep copy — does not mutate the original.
     """
-    import copy
-
     payload = copy.deepcopy(span_dict)
-    project_attr = {"key": "arize.project.name", "value": {"stringValue": project_name}}
+    project_attr = {"key": key, "value": _to_otlp_attr_value(project_name)}
     for rs in payload.get("resourceSpans", []):
-        # Also add to resource attributes
         rs.setdefault("resource", {}).setdefault("attributes", []).append(project_attr)
-        for ss in rs.get("scopeSpans", []):
-            for span in ss.get("spans", []):
-                span.setdefault("attributes", []).append(project_attr)
+        if per_span:
+            for ss in rs.get("scopeSpans", []):
+                for span in ss.get("spans", []):
+                    span.setdefault("attributes", []).append(project_attr)
     return payload
+
+
+def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
+    """Arize requires arize.project.name on each span, not just the resource."""
+    return _inject_project_attr(span_dict, "arize.project.name", project_name, per_span=True)
 
 
 def _inject_openinference_project_resource_attr(span_dict: dict, project_name: str) -> dict:
-    """Return a copy of span_dict with the openinference.project.name resource attribute.
-
-    Phoenix routes OTLP-ingested spans to a project via this OpenInference
-    resource attribute. Modifies a deep copy — does not mutate the original.
-    """
-    import copy
-
-    payload = copy.deepcopy(span_dict)
-    project_attr = {"key": "openinference.project.name", "value": {"stringValue": project_name}}
-    for rs in payload.get("resourceSpans", []):
-        rs.setdefault("resource", {}).setdefault("attributes", []).append(project_attr)
-    return payload
-
-
-# --- OTLP protobuf wire-format encoding ------------------------------------
-# Phoenix's OTLP HTTP endpoint (/v1/traces) only accepts binary protobuf, and
-# hooks must run on the stdlib alone (no protobuf/OTel SDK dependency), so the
-# OTLP JSON dicts built by build_span() are encoded to the protobuf wire format
-# by hand. Field numbers follow the stable OTLP v1 trace schema
-# (opentelemetry/proto/trace/v1/trace.proto).
-
-
-def _pb_varint(n: int) -> bytes:
-    """Encode an unsigned varint."""
-    out = bytearray()
-    while True:
-        bits = n & 0x7F
-        n >>= 7
-        if n:
-            out.append(bits | 0x80)
-        else:
-            out.append(bits)
-            return bytes(out)
-
-
-def _pb_varint_field(field: int, n: int) -> bytes:
-    return _pb_varint(field << 3) + _pb_varint(n & 0xFFFFFFFFFFFFFFFF)
-
-
-def _pb_fixed64_field(field: int, n: int) -> bytes:
-    import struct
-
-    return _pb_varint(field << 3 | 1) + struct.pack("<Q", n & 0xFFFFFFFFFFFFFFFF)
-
-
-def _pb_double_field(field: int, value: float) -> bytes:
-    import struct
-
-    return _pb_varint(field << 3 | 1) + struct.pack("<d", float(value))
-
-
-def _pb_len_field(field: int, payload: bytes) -> bytes:
-    return _pb_varint(field << 3 | 2) + _pb_varint(len(payload)) + payload
-
-
-def _pb_string_field(field: int, value: str) -> bytes:
-    return _pb_len_field(field, str(value).encode("utf-8"))
-
-
-def _pb_any_value(value: dict) -> bytes:
-    """Encode an OTLP JSON AnyValue object as an AnyValue message."""
-    if not isinstance(value, dict):
-        return _pb_string_field(1, str(value))
-    if "stringValue" in value:
-        return _pb_string_field(1, value["stringValue"])
-    if "boolValue" in value:
-        return _pb_varint_field(2, 1 if value["boolValue"] else 0)
-    if "intValue" in value:
-        try:
-            return _pb_varint_field(3, int(value["intValue"]))
-        except (TypeError, ValueError):
-            return _pb_string_field(1, str(value["intValue"]))
-    if "doubleValue" in value:
-        return _pb_double_field(4, value["doubleValue"])
-    if "arrayValue" in value:
-        values = value.get("arrayValue", {}).get("values", [])
-        body = b"".join(_pb_len_field(1, _pb_any_value(v)) for v in values)
-        return _pb_len_field(5, body)
-    if "kvlistValue" in value:
-        values = value.get("kvlistValue", {}).get("values", [])
-        body = b"".join(_pb_len_field(1, _pb_key_value(kv)) for kv in values)
-        return _pb_len_field(6, body)
-    if "bytesValue" in value:
-        import base64
-
-        try:
-            raw = base64.b64decode(value["bytesValue"])
-        except Exception:
-            raw = str(value["bytesValue"]).encode("utf-8")
-        return _pb_len_field(7, raw)
-    return b""
-
-
-def _pb_key_value(attr: dict) -> bytes:
-    """Encode an OTLP JSON attribute {key, value} as a KeyValue message."""
-    out = _pb_string_field(1, attr.get("key", ""))
-    out += _pb_len_field(2, _pb_any_value(attr.get("value", {})))
-    return out
-
-
-def _pb_hex_field(field: int, hex_str: str) -> bytes:
-    """Encode a hex-encoded id (traceId/spanId) as a bytes field; empty if invalid."""
-    try:
-        raw = bytes.fromhex(hex_str or "")
-    except ValueError:
-        raw = b""
-    if not raw:
-        return b""
-    return _pb_len_field(field, raw)
-
-
-def _pb_span(span: dict) -> bytes:
-    """Encode an OTLP JSON span as a Span message."""
-    out = _pb_hex_field(1, span.get("traceId", ""))
-    out += _pb_hex_field(2, span.get("spanId", ""))
-    out += _pb_hex_field(4, span.get("parentSpanId", ""))
-    out += _pb_string_field(5, span.get("name", "unknown"))
-    try:
-        kind = int(span.get("kind", 0))
-    except (TypeError, ValueError):
-        kind = 0
-    if kind:
-        out += _pb_varint_field(6, kind)
-    for field, key in ((7, "startTimeUnixNano"), (8, "endTimeUnixNano")):
-        try:
-            out += _pb_fixed64_field(field, int(span.get(key, "")))
-        except (TypeError, ValueError):
-            raise ValueError(f"Invalid Unix nanosecond timestamp for {key}: {span.get(key)!r}")
-    for attr in span.get("attributes", []) or []:
-        out += _pb_len_field(9, _pb_key_value(attr))
-    for event in span.get("events", []) or []:
-        ev = b""
-        try:
-            ev += _pb_fixed64_field(1, int(event.get("timeUnixNano")))
-        except (TypeError, ValueError):
-            pass
-        ev += _pb_string_field(2, event.get("name", "event"))
-        for attr in event.get("attributes", []) or []:
-            ev += _pb_len_field(3, _pb_key_value(attr))
-        out += _pb_len_field(11, ev)
-    status = span.get("status") or {}
-    if isinstance(status, dict) and status:
-        st = b""
-        if status.get("message"):
-            st += _pb_string_field(2, status["message"])
-        try:
-            code = int(status.get("code", 0) or 0)
-        except (TypeError, ValueError):
-            code = 0
-        if code:
-            st += _pb_varint_field(3, code)
-        out += _pb_len_field(15, st)
-    return out
-
-
-def _otlp_json_to_protobuf(span_dict: dict) -> bytes:
-    """Encode an OTLP JSON payload as an ExportTraceServiceRequest protobuf."""
-    out = b""
-    for rs in span_dict.get("resourceSpans", []):
-        rs_body = b""
-        resource = b"".join(
-            _pb_len_field(1, _pb_key_value(attr)) for attr in rs.get("resource", {}).get("attributes", []) or []
-        )
-        rs_body += _pb_len_field(1, resource)
-        for ss in rs.get("scopeSpans", []):
-            ss_body = b""
-            scope = ss.get("scope") or {}
-            scope_msg = _pb_string_field(1, scope.get("name", "")) if scope.get("name") else b""
-            if scope.get("version"):
-                scope_msg += _pb_string_field(2, scope["version"])
-            if scope_msg:
-                ss_body += _pb_len_field(1, scope_msg)
-            for span in ss.get("spans", []):
-                ss_body += _pb_len_field(2, _pb_span(span))
-            rs_body += _pb_len_field(2, ss_body)
-        out += _pb_len_field(1, rs_body)
-    return out
+    """Phoenix routes OTLP-ingested spans to a project via this resource attribute."""
+    return _inject_project_attr(span_dict, "openinference.project.name", project_name)
 
 
 def _post_otlp(url: str, body: bytes, headers: dict, label: str) -> bool:
@@ -813,7 +644,7 @@ def send_span(span_dict: dict) -> bool:
             url = f"{endpoint.rstrip('/')}/v1/traces"
             # Phoenix's OTLP HTTP endpoint only accepts binary protobuf.
             payload = _inject_openinference_project_resource_attr(span_dict, project)
-            body = _otlp_json_to_protobuf(payload)
+            body = otlp_json_to_protobuf(payload)
             headers = {"Content-Type": "application/x-protobuf"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
