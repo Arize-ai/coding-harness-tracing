@@ -9,6 +9,7 @@ import urllib.error
 from unittest import mock
 
 import pytest
+from test_otlp_proto import _pb_attrs, _pb_decode
 
 from core.common import (
     FileLock,
@@ -29,7 +30,6 @@ from core.common import (
     restore_stderr_from_log_file,
     send_span,
 )
-from test_otlp_proto import _pb_attrs, _pb_decode
 
 # ── Logging tests ──────────────────────────────────────────────────────────
 
