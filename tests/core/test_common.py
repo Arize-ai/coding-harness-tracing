@@ -894,7 +894,7 @@ class TestPhoenixProjectNameInjection:
             ]
         }
 
-        result = _inject_openinference_project_resource_attr(payload, "my-project")
+        result = _inject_openinference_project_resource_attr(payload, project_name="my-project")
 
         resource_attrs = result["resourceSpans"][0]["resource"]["attributes"]
         assert {"key": "openinference.project.name", "value": {"stringValue": "my-project"}} in resource_attrs
@@ -904,7 +904,7 @@ class TestPhoenixProjectNameInjection:
     def test_creates_resource_when_missing(self):
         payload = {"resourceSpans": [{"scopeSpans": [{"spans": [{"name": "s"}]}]}]}
 
-        result = _inject_openinference_project_resource_attr(payload, "proj")
+        result = _inject_openinference_project_resource_attr(payload, project_name="proj")
 
         assert result["resourceSpans"][0]["resource"]["attributes"] == [
             {"key": "openinference.project.name", "value": {"stringValue": "proj"}}

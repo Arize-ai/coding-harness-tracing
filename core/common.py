@@ -562,12 +562,15 @@ def resolve_backend(span_dict: dict) -> dict:
 
 
 def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span: bool = False) -> dict:
-    """Return a copy of span_dict with a project attribute on every resource.
+    """Return a copy of span_dict with {key: project_name} added as a resource
+    attribute on every resource in resourceSpans.
 
-    With per_span=True the attribute is also appended to each span's
-    attributes. Copies only the mutated path (payloads carry full prompt and
-    tool output text, so a deep copy would be O(payload) per send); untouched
-    span data is shared with the original, which is never mutated.
+    With per_span=True the attribute is also appended to each individual
+    span's attributes (required by Arize AX, which reads the project off each
+    span rather than the resource). Copies only the mutated path (payloads
+    carry full prompt and tool output text, so a deep copy would be
+    O(payload) per send); untouched span data is shared with the original,
+    which is never mutated.
     """
     project_attr = {"key": key, "value": _to_otlp_attr_value(project_name)}
 
@@ -587,12 +590,21 @@ def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span:
 
 def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
     """Arize AX (not Phoenix) requires arize.project.name on each span, not just the resource."""
-    return _inject_project_attr(span_dict, "arize.project.name", project_name, per_span=True)
+    return _inject_project_attr(
+        span_dict,
+        key="arize.project.name",
+        project_name=project_name,
+        per_span=True,
+    )
 
 
 def _inject_openinference_project_resource_attr(span_dict: dict, project_name: str) -> dict:
     """Phoenix routes OTLP-ingested spans to a project via this resource attribute."""
-    return _inject_project_attr(span_dict, "openinference.project.name", project_name)
+    return _inject_project_attr(
+        span_dict,
+        key="openinference.project.name",
+        project_name=project_name,
+    )
 
 
 def _post_otlp(url: str, body: bytes, headers: dict, label: str) -> bool:
@@ -654,7 +666,7 @@ def send_span(span_dict: dict) -> bool:
                 endpoint = endpoint[: -len("/v1/traces")]
             url = f"{endpoint}/v1/traces"
             # Phoenix's OTLP HTTP endpoint only accepts binary protobuf.
-            payload = _inject_openinference_project_resource_attr(span_dict, project)
+            payload = _inject_openinference_project_resource_attr(span_dict, project_name=project)
             body = otlp_json_to_protobuf(payload)
             headers = {"Content-Type": "application/x-protobuf"}
             if api_key:
@@ -667,7 +679,7 @@ def send_span(span_dict: dict) -> bool:
             space_id = backend.get("space_id", "")
 
             # Inject arize.project.name into span attributes (required by Arize)
-            payload = _inject_arize_project_name(span_dict, project)
+            payload = _inject_arize_project_name(span_dict, project_name=project)
 
             # Normalize endpoint to HTTPS URL for HTTP/JSON transport
             if endpoint.startswith("http://") or endpoint.startswith("https://"):
