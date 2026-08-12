@@ -2,7 +2,11 @@
 name = "coding-harness-tracing"
 version = "0.1.0"
 requires-python = ">=3.9"
+# Runtime dependencies are confined to setup/install paths and are not
+# imported by traced hooks: python-dotenv parses non-interactive credentials,
+# while tomli provides strict Codex config parsing on Python 3.9 and 3.10.
 dependencies = [
+    "python-dotenv>=1.0",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
 

@@ -21,15 +21,20 @@ REM --- Parse arguments ---
 set "COMMAND="
 set "UNINSTALL_HARNESS="
 set "WITH_SKILLS="
+set "STATUS_ARGS="
 :parse_args
 if "%~1"=="" goto :done_args
 if /i "%~1"=="-h"        goto :usage
 if /i "%~1"=="--help"    goto :usage
 if /i "%~1"=="help"      goto :usage
 if /i "%~1"=="--with-skills" ( set "WITH_SKILLS=--with-skills" & shift & goto :parse_args )
+if /i "%~1"=="--non-interactive" ( set "ARIZE_NONINTERACTIVE=1" & shift & goto :parse_args )
+if /i "%~1"=="-y" ( set "ARIZE_NONINTERACTIVE=1" & shift & goto :parse_args )
+if /i "%~1"=="--json" ( set "STATUS_ARGS=--json" & shift & goto :parse_args )
 if /i "%~1"=="--branch" ( set "INSTALL_BRANCH=%~2" & set "TARBALL_URL=https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/%~2.tar.gz" & shift & shift & goto :parse_args )
 for %%C in (claude codex copilot cursor gemini kiro opencode omp devin) do if /i "%~1"=="%%C" ( set "COMMAND=%%C" & shift & goto :parse_args )
 if /i "%~1"=="update" ( set "COMMAND=update" & shift & goto :parse_args )
+if /i "%~1"=="status" ( set "COMMAND=status" & shift & goto :parse_args )
 if /i "%~1"=="uninstall" (
     set "COMMAND=uninstall" & shift
     for %%C in (claude codex copilot cursor gemini kiro opencode omp devin) do if /i "%~1"=="%%C" ( set "UNINSTALL_HARNESS=%%C" & shift )
@@ -44,6 +49,7 @@ REM --- Harness name -> directory mapping ---
 REM claude->tracing\claude_code  codex->tracing\codex  copilot->tracing\copilot  cursor->tracing\cursor  gemini->tracing\gemini  kiro->tracing\kiro  opencode->tracing\opencode  omp->tracing\omp  devin->tracing\devin
 
 REM --- Dispatch ---
+if "%COMMAND%"=="status"    goto :cmd_status
 if "%COMMAND%"=="update"    goto :cmd_update
 if "%COMMAND%"=="uninstall" goto :cmd_uninstall
 
@@ -64,11 +70,22 @@ echo [arize] Running %COMMAND% install...
 "%VENV_PYTHON%" "%_PY%" install %WITH_SKILLS%
 exit /b %ERRORLEVEL%
 
+REM --- cmd_status ---
+:cmd_status
+if not exist "%VENV_PYTHON%" ( echo [arize] Venv not found - nothing installed >&2 & exit /b 1 )
+"%VENV_PYTHON%" -m core.setup.status %STATUS_ARGS%
+exit /b %ERRORLEVEL%
+
 REM --- cmd_update ---
 :cmd_update
 if not exist "%INSTALL_DIR%" ( echo [arize] Not installed at %INSTALL_DIR% >&2 & exit /b 1 )
 call :find_python
 if "%FOUND_PYTHON%"=="" ( echo [arize] Error: Python 3.9+ is required >&2 & exit /b 1 )
+REM Re-registering runs each harness's installer, which prompts for the project
+REM name. With no console to answer on that dies with an EOFError, so fall back
+REM to stored values there — and only there, so an interactive update keeps
+REM every prompt it has today. cmd has no -t test; ask Python instead.
+%FOUND_PYTHON% -c "import sys; sys.exit(0 if sys.stdin.isatty() else 1)" >nul 2>&1 || set "ARIZE_NONINTERACTIVE=1"
 set "_UPDATE_NEED_VENV=0"
 if exist "%INSTALL_DIR%\.git" (
     echo [arize] Pulling latest changes...
@@ -233,12 +250,24 @@ echo     kiro                Install tracing for Kiro CLI
 echo     opencode            Install tracing for opencode
 echo     omp                 Install tracing for Oh My Pi (omp)
 echo     devin               Install tracing for Devin CLI
+echo     status              Report configured harnesses and hook wiring
 echo     update              Update to latest and reinstall all harnesses
 echo     uninstall [harness] Remove one harness or full wipe
 echo.
 echo   Flags:
 echo     --with-skills   Symlink harness skills into .agents\skills\
 echo     --branch NAME   Install from a specific git branch (default: main)
+echo     --json          With status: emit machine-readable JSON
+echo     --non-interactive, -y  Ask nothing; read values from the environment
+echo                     or the file named by ARIZE_ENV_FILE. Missing required
+echo                     values are an error.
+echo.
+echo   Non-interactive install reads the environment, plus a dotenv file named
+echo   with ARIZE_ENV_FILE (no automatic .env search): ARIZE_API_KEY and ARIZE_SPACE_ID for Arize AX,
+echo   PHOENIX_ENDPOINT and PHOENIX_API_KEY for Phoenix, plus optional
+echo   ARIZE_BACKEND, ARIZE_PROJECT_NAME, ARIZE_USER_ID, ARIZE_OTLP_ENDPOINT,
+echo   ARIZE_LOG_PROMPTS, ARIZE_LOG_TOOL_DETAILS, ARIZE_LOG_TOOL_CONTENT (all
+echo   off unless set to true).
 echo.
 echo   Examples:
 echo     install.bat claude
