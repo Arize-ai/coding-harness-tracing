@@ -14,7 +14,8 @@ from core.common import (
     FileLock,
     StateManager,
     _attrs_to_otlp,
-    _otlp_to_phoenix_payload,
+    _inject_phoenix_project_name,
+    _otlp_json_to_protobuf,
     _resolve_kind,
     _to_otlp_attr_value,
     build_multi_span,
@@ -879,11 +880,53 @@ class TestBuildMultiSpan:
         assert scope["name"] == "override-scope"
 
 
-# ── Phoenix REST payload translation tests ────────────────────────────────
+# ── Minimal protobuf wire-format decoder (test helper) ────────────────────
 
 
-class TestPhoenixPayloadTranslation:
-    def test_translates_otlp_payload_to_phoenix_create_spans_body(self):
+def _pb_read_varint(data, i):
+    result = shift = 0
+    while True:
+        byte = data[i]
+        result |= (byte & 0x7F) << shift
+        i += 1
+        if not byte & 0x80:
+            return result, i
+        shift += 7
+
+
+def _pb_decode(data):
+    """Decode a protobuf message into {field: [values]} (varint ints, raw bytes otherwise)."""
+    fields = {}
+    i = 0
+    while i < len(data):
+        tag, i = _pb_read_varint(data, i)
+        field, wire_type = tag >> 3, tag & 7
+        if wire_type == 0:
+            value, i = _pb_read_varint(data, i)
+        elif wire_type == 1:
+            value = data[i : i + 8]
+            i += 8
+        elif wire_type == 2:
+            length, i = _pb_read_varint(data, i)
+            value = data[i : i + length]
+            i += length
+        else:
+            raise ValueError(f"unsupported wire type {wire_type}")
+        fields.setdefault(field, []).append(value)
+    return fields
+
+
+def _pb_fixed64_int(raw):
+    import struct
+
+    return struct.unpack("<Q", raw)[0]
+
+
+# ── OTLP protobuf encoding tests ──────────────────────────────────────────
+
+
+class TestOtlpProtobufEncoding:
+    def test_encodes_span_fields(self):
         payload = {
             "resourceSpans": [
                 {
@@ -893,9 +936,9 @@ class TestPhoenixPayloadTranslation:
                             "scope": {"name": "scope"},
                             "spans": [
                                 {
-                                    "traceId": "t" * 32,
-                                    "spanId": "s" * 16,
-                                    "parentSpanId": "p" * 16,
+                                    "traceId": "0123456789abcdef0123456789abcdef",
+                                    "spanId": "abcdef1234567890",
+                                    "parentSpanId": "1122334455667788",
                                     "name": "tool-call",
                                     "kind": 1,
                                     "startTimeUnixNano": "1000000000",
@@ -903,6 +946,8 @@ class TestPhoenixPayloadTranslation:
                                     "attributes": [
                                         {"key": "openinference.span.kind", "value": {"stringValue": "TOOL"}},
                                         {"key": "count", "value": {"intValue": "3"}},
+                                        {"key": "ok", "value": {"boolValue": True}},
+                                        {"key": "score", "value": {"doubleValue": 0.5}},
                                     ],
                                     "events": [
                                         {
@@ -920,36 +965,49 @@ class TestPhoenixPayloadTranslation:
             ]
         }
 
-        result = _otlp_to_phoenix_payload(payload)
+        encoded = _otlp_json_to_protobuf(payload)
 
-        assert result == {
-            "data": [
-                {
-                    "name": "tool-call",
-                    "context": {"trace_id": "t" * 32, "span_id": "s" * 16},
-                    "span_kind": "TOOL",
-                    "start_time": "1970-01-01T00:00:01.000000Z",
-                    "end_time": "1970-01-01T00:00:01.500000Z",
-                    "status_code": "ERROR",
-                    "status_message": "failed",
-                    "attributes": {
-                        "service.name": "svc",
-                        "openinference.span.kind": "TOOL",
-                        "count": 3,
-                    },
-                    "parent_id": "p" * 16,
-                    "events": [
-                        {
-                            "name": "exception",
-                            "timestamp": "1970-01-01T00:00:01.250000Z",
-                            "attributes": {"message": "boom"},
-                        }
-                    ],
-                }
-            ]
-        }
+        # ExportTraceServiceRequest.resource_spans[0]
+        rs = _pb_decode(_pb_decode(encoded)[1][0])
+        # Resource.attributes[0] is service.name
+        resource_attr = _pb_decode(_pb_decode(rs[1][0])[1][0])
+        assert resource_attr[1][0] == b"service.name"
+        assert _pb_decode(resource_attr[2][0])[1][0] == b"svc"
 
-    def test_rejects_missing_phoenix_span_timestamp(self):
+        ss = _pb_decode(rs[2][0])
+        assert _pb_decode(ss[1][0])[1][0] == b"scope"
+
+        span = _pb_decode(ss[2][0])
+        assert span[1][0] == bytes.fromhex("0123456789abcdef0123456789abcdef")
+        assert span[2][0] == bytes.fromhex("abcdef1234567890")
+        assert span[4][0] == bytes.fromhex("1122334455667788")
+        assert span[5][0] == b"tool-call"
+        assert span[6][0] == 1
+        assert _pb_fixed64_int(span[7][0]) == 1_000_000_000
+        assert _pb_fixed64_int(span[8][0]) == 1_500_000_000
+
+        attrs = {}
+        for raw in span[9]:
+            kv = _pb_decode(raw)
+            attrs[kv[1][0]] = _pb_decode(kv[2][0])
+        assert attrs[b"openinference.span.kind"][1][0] == b"TOOL"
+        assert attrs[b"count"][3][0] == 3
+        assert attrs[b"ok"][2][0] == 1
+        import struct
+
+        assert struct.unpack("<d", attrs[b"score"][4][0])[0] == 0.5
+
+        event = _pb_decode(span[11][0])
+        assert _pb_fixed64_int(event[1][0]) == 1_250_000_000
+        assert event[2][0] == b"exception"
+        event_attr = _pb_decode(event[3][0])
+        assert event_attr[1][0] == b"message"
+
+        status = _pb_decode(span[15][0])
+        assert status[2][0] == b"failed"
+        assert status[3][0] == 2
+
+    def test_rejects_missing_span_timestamp(self):
         payload = {
             "resourceSpans": [
                 {
@@ -970,7 +1028,38 @@ class TestPhoenixPayloadTranslation:
         }
 
         with pytest.raises(ValueError, match="Invalid Unix nanosecond timestamp"):
-            _otlp_to_phoenix_payload(payload)
+            _otlp_json_to_protobuf(payload)
+
+
+# ── Phoenix project-name injection tests ──────────────────────────────────
+
+
+class TestPhoenixProjectNameInjection:
+    def test_injects_project_name_into_resource_attributes(self):
+        payload = {
+            "resourceSpans": [
+                {
+                    "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "svc"}}]},
+                    "scopeSpans": [{"spans": [{"traceId": "t" * 32, "spanId": "s" * 16, "name": "tool-call"}]}],
+                }
+            ]
+        }
+
+        result = _inject_phoenix_project_name(payload, "my-project")
+
+        resource_attrs = result["resourceSpans"][0]["resource"]["attributes"]
+        assert {"key": "openinference.project.name", "value": {"stringValue": "my-project"}} in resource_attrs
+        # Original payload is not mutated
+        assert len(payload["resourceSpans"][0]["resource"]["attributes"]) == 1
+
+    def test_creates_resource_when_missing(self):
+        payload = {"resourceSpans": [{"scopeSpans": [{"spans": [{"name": "s"}]}]}]}
+
+        result = _inject_phoenix_project_name(payload, "proj")
+
+        assert result["resourceSpans"][0]["resource"]["attributes"] == [
+            {"key": "openinference.project.name", "value": {"stringValue": "proj"}}
+        ]
 
 
 # ── EnvConfig property tests ──────────────────────────────────────────────
@@ -1134,7 +1223,7 @@ class TestSendSpan:
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
     def test_phoenix_direct_send(self, mock_urlopen, mock_resolve, monkeypatch):
-        """send_span sends directly to Phoenix REST endpoint."""
+        """send_span sends OTLP protobuf to Phoenix's OTLP HTTP endpoint."""
         monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
         monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
 
@@ -1153,32 +1242,22 @@ class TestSendSpan:
         assert send_span(self._SAMPLE_SPAN) is True
 
         req = mock_urlopen.call_args[0][0]
-        assert req.full_url == "http://phoenix:6006/v1/projects/my-project/spans"
-        assert req.get_header("Content-type") == "application/json"
+        assert req.full_url == "http://phoenix:6006/v1/traces"
+        assert req.get_header("Content-type") == "application/x-protobuf"
         assert req.get_header("Authorization") == "Bearer test-key"
         assert req.method == "POST"
-        body = json.loads(req.data)
-        assert body == {
-            "data": [
-                {
-                    "name": "test-span",
-                    "context": {
-                        "trace_id": "0123456789abcdef0123456789abcdef",
-                        "span_id": "abcdef1234567890",
-                    },
-                    "span_kind": "LLM",
-                    "start_time": "1970-01-01T00:00:01.000000Z",
-                    "end_time": "1970-01-01T00:00:02.000000Z",
-                    "status_code": "OK",
-                    "status_message": "",
-                    "attributes": {
-                        "service.name": "test-service",
-                        "openinference.span.kind": "LLM",
-                        "input.value": "hello",
-                    },
-                }
-            ]
-        }
+        # Body is the OTLP payload with openinference.project.name appended to
+        # the resource attributes for project routing, encoded as protobuf.
+        expected_payload = _inject_phoenix_project_name(self._SAMPLE_SPAN, "my-project")
+        assert req.data == _otlp_json_to_protobuf(expected_payload)
+        # Sanity-check the encoded resource attributes include the project name.
+        rs = _pb_decode(_pb_decode(req.data)[1][0])
+        resource_attrs = {}
+        for raw in _pb_decode(rs[1][0])[1]:
+            kv = _pb_decode(raw)
+            resource_attrs[kv[1][0]] = _pb_decode(kv[2][0])[1][0]
+        assert resource_attrs[b"openinference.project.name"] == b"my-project"
+        assert resource_attrs[b"service.name"] == b"test-service"
 
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
@@ -1234,7 +1313,7 @@ class TestSendSpan:
             "project_name": "default",
         }
         mock_urlopen.side_effect = urllib.error.HTTPError(
-            "http://phoenix:6006/v1/projects/default/spans",
+            "http://phoenix:6006/v1/traces",
             400,
             "Bad Request",
             {},

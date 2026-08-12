@@ -15,9 +15,7 @@ import shutil
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Optional
 
@@ -580,118 +578,202 @@ def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
     return payload
 
 
-def _otlp_attr_value_to_python(value: dict):
-    """Convert an OTLP AnyValue JSON object to a plain JSON value."""
+def _inject_phoenix_project_name(span_dict: dict, project_name: str) -> dict:
+    """Return a copy of span_dict with openinference.project.name on every resource.
+
+    Phoenix routes OTLP-ingested spans to a project via this resource attribute.
+    Modifies a deep copy — does not mutate the original.
+    """
+    import copy
+
+    payload = copy.deepcopy(span_dict)
+    project_attr = {"key": "openinference.project.name", "value": {"stringValue": project_name}}
+    for rs in payload.get("resourceSpans", []):
+        rs.setdefault("resource", {}).setdefault("attributes", []).append(project_attr)
+    return payload
+
+
+# --- OTLP protobuf wire-format encoding ------------------------------------
+# Phoenix's OTLP HTTP endpoint (/v1/traces) only accepts binary protobuf, and
+# hooks must run on the stdlib alone (no protobuf/OTel SDK dependency), so the
+# OTLP JSON dicts built by build_span() are encoded to the protobuf wire format
+# by hand. Field numbers follow the stable OTLP v1 trace schema
+# (opentelemetry/proto/trace/v1/trace.proto).
+
+
+def _pb_varint(n: int) -> bytes:
+    """Encode an unsigned varint."""
+    out = bytearray()
+    while True:
+        bits = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(bits | 0x80)
+        else:
+            out.append(bits)
+            return bytes(out)
+
+
+def _pb_varint_field(field: int, n: int) -> bytes:
+    return _pb_varint(field << 3) + _pb_varint(n & 0xFFFFFFFFFFFFFFFF)
+
+
+def _pb_fixed64_field(field: int, n: int) -> bytes:
+    import struct
+
+    return _pb_varint(field << 3 | 1) + struct.pack("<Q", n & 0xFFFFFFFFFFFFFFFF)
+
+
+def _pb_double_field(field: int, value: float) -> bytes:
+    import struct
+
+    return _pb_varint(field << 3 | 1) + struct.pack("<d", float(value))
+
+
+def _pb_len_field(field: int, payload: bytes) -> bytes:
+    return _pb_varint(field << 3 | 2) + _pb_varint(len(payload)) + payload
+
+
+def _pb_string_field(field: int, value: str) -> bytes:
+    return _pb_len_field(field, str(value).encode("utf-8"))
+
+
+def _pb_any_value(value: dict) -> bytes:
+    """Encode an OTLP JSON AnyValue object as an AnyValue message."""
     if not isinstance(value, dict):
-        return value
+        return _pb_string_field(1, str(value))
     if "stringValue" in value:
-        return value["stringValue"]
+        return _pb_string_field(1, value["stringValue"])
     if "boolValue" in value:
-        return value["boolValue"]
+        return _pb_varint_field(2, 1 if value["boolValue"] else 0)
     if "intValue" in value:
         try:
-            return int(value["intValue"])
+            return _pb_varint_field(3, int(value["intValue"]))
         except (TypeError, ValueError):
-            return value["intValue"]
+            return _pb_string_field(1, str(value["intValue"]))
     if "doubleValue" in value:
-        return value["doubleValue"]
-    if "bytesValue" in value:
-        return value["bytesValue"]
+        return _pb_double_field(4, value["doubleValue"])
     if "arrayValue" in value:
         values = value.get("arrayValue", {}).get("values", [])
-        return [_otlp_attr_value_to_python(item) for item in values]
+        body = b"".join(_pb_len_field(1, _pb_any_value(v)) for v in values)
+        return _pb_len_field(5, body)
     if "kvlistValue" in value:
         values = value.get("kvlistValue", {}).get("values", [])
-        return {item.get("key", ""): _otlp_attr_value_to_python(item.get("value", {})) for item in values}
-    return value
+        body = b"".join(_pb_len_field(1, _pb_key_value(kv)) for kv in values)
+        return _pb_len_field(6, body)
+    if "bytesValue" in value:
+        import base64
+
+        try:
+            raw = base64.b64decode(value["bytesValue"])
+        except Exception:
+            raw = str(value["bytesValue"]).encode("utf-8")
+        return _pb_len_field(7, raw)
+    return b""
 
 
-def _otlp_attrs_to_dict(attrs: list) -> dict:
-    """Convert OTLP attribute arrays to the object shape Phoenix REST expects."""
-    result = {}
-    for attr in attrs or []:
-        key = attr.get("key")
-        if not key:
-            continue
-        result[key] = _otlp_attr_value_to_python(attr.get("value", {}))
-    return result
+def _pb_key_value(attr: dict) -> bytes:
+    """Encode an OTLP JSON attribute {key, value} as a KeyValue message."""
+    out = _pb_string_field(1, attr.get("key", ""))
+    out += _pb_len_field(2, _pb_any_value(attr.get("value", {})))
+    return out
 
 
-def _unix_nano_to_iso(value) -> str:
-    """Convert OTLP Unix nanoseconds to an ISO-8601 UTC timestamp."""
+def _pb_hex_field(field: int, hex_str: str) -> bytes:
+    """Encode a hex-encoded id (traceId/spanId) as a bytes field; empty if invalid."""
     try:
-        ns = int(value)
-    except (TypeError, ValueError):
-        raise ValueError(f"Invalid Unix nanosecond timestamp: {value!r}")
-    seconds, nanos = divmod(ns, 1_000_000_000)
-    dt = datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=nanos // 1000)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        raw = bytes.fromhex(hex_str or "")
+    except ValueError:
+        raw = b""
+    if not raw:
+        return b""
+    return _pb_len_field(field, raw)
 
 
-def _phoenix_status_code(status: dict) -> str:
-    """Convert OTLP status code enum values to Phoenix status strings."""
-    if not isinstance(status, dict):
-        return "UNSET"
-    raw_code = status.get("code", 0)
-    if raw_code is None:
-        raw_code = 0
+def _pb_span(span: dict) -> bytes:
+    """Encode an OTLP JSON span as a Span message."""
+    out = _pb_hex_field(1, span.get("traceId", ""))
+    out += _pb_hex_field(2, span.get("spanId", ""))
+    out += _pb_hex_field(4, span.get("parentSpanId", ""))
+    out += _pb_string_field(5, span.get("name", "unknown"))
     try:
-        code = int(raw_code)
+        kind = int(span.get("kind", 0))
     except (TypeError, ValueError):
-        code = 0
-    return {1: "OK", 2: "ERROR"}.get(code, "UNSET")
+        kind = 0
+    if kind:
+        out += _pb_varint_field(6, kind)
+    for field, key in ((7, "startTimeUnixNano"), (8, "endTimeUnixNano")):
+        try:
+            out += _pb_fixed64_field(field, int(span.get(key, "")))
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid Unix nanosecond timestamp for {key}: {span.get(key)!r}")
+    for attr in span.get("attributes", []) or []:
+        out += _pb_len_field(9, _pb_key_value(attr))
+    for event in span.get("events", []) or []:
+        ev = b""
+        try:
+            ev += _pb_fixed64_field(1, int(event.get("timeUnixNano")))
+        except (TypeError, ValueError):
+            pass
+        ev += _pb_string_field(2, event.get("name", "event"))
+        for attr in event.get("attributes", []) or []:
+            ev += _pb_len_field(3, _pb_key_value(attr))
+        out += _pb_len_field(11, ev)
+    status = span.get("status") or {}
+    if isinstance(status, dict) and status:
+        st = b""
+        if status.get("message"):
+            st += _pb_string_field(2, status["message"])
+        try:
+            code = int(status.get("code", 0) or 0)
+        except (TypeError, ValueError):
+            code = 0
+        if code:
+            st += _pb_varint_field(3, code)
+        out += _pb_len_field(15, st)
+    return out
 
 
-def _phoenix_span_kind(span: dict, attrs: dict) -> str:
-    """Prefer OpenInference span kind attributes, falling back to OTLP kind."""
-    oi_kind = attrs.get("openinference.span.kind")
-    if oi_kind:
-        return str(oi_kind).upper()
-    try:
-        otlp_kind = int(span.get("kind", 0))
-    except (TypeError, ValueError):
-        otlp_kind = 0
-    return {2: "SERVER", 3: "CLIENT", 4: "PRODUCER", 5: "CONSUMER"}.get(otlp_kind, "UNKNOWN")
-
-
-def _otlp_to_phoenix_payload(span_dict: dict) -> dict:
-    """Translate OTLP JSON into Phoenix's native REST create-spans schema."""
-    phoenix_spans = []
+def _otlp_json_to_protobuf(span_dict: dict) -> bytes:
+    """Encode an OTLP JSON payload as an ExportTraceServiceRequest protobuf."""
+    out = b""
     for rs in span_dict.get("resourceSpans", []):
-        resource_attrs = _otlp_attrs_to_dict(rs.get("resource", {}).get("attributes", []))
+        rs_body = b""
+        resource = b"".join(
+            _pb_len_field(1, _pb_key_value(attr)) for attr in rs.get("resource", {}).get("attributes", []) or []
+        )
+        rs_body += _pb_len_field(1, resource)
         for ss in rs.get("scopeSpans", []):
+            ss_body = b""
+            scope = ss.get("scope") or {}
+            scope_msg = _pb_string_field(1, scope.get("name", "")) if scope.get("name") else b""
+            if scope.get("version"):
+                scope_msg += _pb_string_field(2, scope["version"])
+            if scope_msg:
+                ss_body += _pb_len_field(1, scope_msg)
             for span in ss.get("spans", []):
-                attrs = {**resource_attrs, **_otlp_attrs_to_dict(span.get("attributes", []))}
-                item = {
-                    "name": span.get("name", "unknown"),
-                    "context": {
-                        "trace_id": span.get("traceId", ""),
-                        "span_id": span.get("spanId", ""),
-                    },
-                    "span_kind": _phoenix_span_kind(span, attrs),
-                    "start_time": _unix_nano_to_iso(span.get("startTimeUnixNano")),
-                    "end_time": _unix_nano_to_iso(span.get("endTimeUnixNano")),
-                    "status_code": _phoenix_status_code(span.get("status", {})),
-                    "status_message": (span.get("status", {}) or {}).get("message", ""),
-                    "attributes": attrs,
-                }
-                parent_id = span.get("parentSpanId")
-                if parent_id:
-                    item["parent_id"] = parent_id
+                ss_body += _pb_len_field(2, _pb_span(span))
+            rs_body += _pb_len_field(2, ss_body)
+        out += _pb_len_field(1, rs_body)
+    return out
 
-                events = []
-                for event in span.get("events", []) or []:
-                    events.append(
-                        {
-                            "name": event.get("name", "event"),
-                            "timestamp": _unix_nano_to_iso(event.get("timeUnixNano")),
-                            "attributes": _otlp_attrs_to_dict(event.get("attributes", [])),
-                        }
-                    )
-                if events:
-                    item["events"] = events
-                phoenix_spans.append(item)
-    return {"data": phoenix_spans}
+
+def _post_otlp(url: str, body: bytes, headers: dict, label: str) -> bool:
+    """POST an encoded OTLP payload, logging failures. Returns True on 2xx."""
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = ""
+        error(f"{label} send failed: HTTP {e.code}: {detail or e.reason}")
+        return False
+    except Exception as e:
+        error(f"{label} send failed: {e}")
+        return False
 
 
 def _extract_span_name(span_dict: dict) -> str:
@@ -728,26 +810,14 @@ def send_span(span_dict: dict) -> bool:
             project = backend["project_name"]
             endpoint = backend["endpoint"]
             api_key = backend.get("api_key", "")
-            project_identifier = urllib.parse.quote(project, safe="")
-            url = f"{endpoint.rstrip('/')}/v1/projects/{project_identifier}/spans"
-            body = json.dumps(_otlp_to_phoenix_payload(span_dict)).encode("utf-8")
-            headers = {"Content-Type": "application/json"}
+            url = f"{endpoint.rstrip('/')}/v1/traces"
+            # Phoenix's OTLP HTTP endpoint only accepts binary protobuf.
+            payload = _inject_phoenix_project_name(span_dict, project)
+            body = _otlp_json_to_protobuf(payload)
+            headers = {"Content-Type": "application/x-protobuf"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
-            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-            try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    return 200 <= resp.status < 300
-            except urllib.error.HTTPError as e:
-                try:
-                    detail = e.read().decode("utf-8", errors="replace")
-                except Exception:
-                    detail = ""
-                error(f"Phoenix send failed: HTTP {e.code}: {detail or e.reason}")
-                return False
-            except Exception as e:
-                error(f"Phoenix send failed: {e}")
-                return False
+            return _post_otlp(url, body, headers, "Phoenix")
         elif target == "arize":
             project = backend["project_name"]
             endpoint = backend.get("endpoint", "otlp.arize.com:443")
@@ -763,26 +833,12 @@ def send_span(span_dict: dict) -> bool:
             else:
                 url = f"https://{endpoint}/v1/traces"
 
-            body = json.dumps(payload).encode("utf-8")
             headers = {
                 "Content-Type": "application/json",
                 "authorization": f"Bearer {api_key}",
                 "space_id": space_id,
             }
-            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-            try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    return 200 <= resp.status < 300
-            except urllib.error.HTTPError as e:
-                try:
-                    detail = e.read().decode("utf-8", errors="replace")
-                except Exception:
-                    detail = ""
-                error(f"Arize send failed: HTTP {e.code}: {detail or e.reason}")
-                return False
-            except Exception as e:
-                error(f"Arize send failed: {e}")
-                return False
+            return _post_otlp(url, json.dumps(payload).encode("utf-8"), headers, "Arize")
         else:
             error("No backend configured (set PHOENIX_ENDPOINT or ARIZE_API_KEY+ARIZE_SPACE_ID)")
             return False
