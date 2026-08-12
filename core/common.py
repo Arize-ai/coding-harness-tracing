@@ -586,7 +586,7 @@ def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span:
 
 
 def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
-    """Arize requires arize.project.name on each span, not just the resource."""
+    """Arize AX (not Phoenix) requires arize.project.name on each span, not just the resource."""
     return _inject_project_attr(span_dict, "arize.project.name", project_name, per_span=True)
 
 
