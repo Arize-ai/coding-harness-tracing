@@ -153,7 +153,7 @@ class _Env:
         # ARIZE_OTLP_ENDPOINT (which is only consulted by the interactive setup
         # wizard when writing harness_cfg['endpoint'] to config.json). Lets a
         # team redirect spans to a non-Arize-branded OTLP collector (e.g. one
-        # that strips PII, or an internal Jaeger instance) without editing
+        # that strips PII, or an internal collector) without editing
         # config.json. See issue #120.
         return os.environ.get("CUSTOM_OTLP_ENDPOINT", "")
 

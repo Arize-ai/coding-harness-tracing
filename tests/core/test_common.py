@@ -1334,7 +1334,7 @@ class TestSendSpan:
             "api_key": "stale-static-key",
             "space_id": "my-space",
             "endpoint": "otlp.arize.com:443",
-            "token_command": "usso -print",
+            "token_command": "fetch-token",
             "project_name": "proj",
         }
         mock_token_cmd.return_value = "fresh-rotated-token"
@@ -1346,7 +1346,7 @@ class TestSendSpan:
 
         assert send_span(self._SAMPLE_SPAN) is True
 
-        mock_token_cmd.assert_called_once_with("usso -print")
+        mock_token_cmd.assert_called_once_with("fetch-token")
         req = mock_urlopen.call_args[0][0]
         assert req.get_header("Authorization") == "Bearer fresh-rotated-token"
 
@@ -1365,7 +1365,7 @@ class TestSendSpan:
             "api_key": "fallback-key",
             "space_id": "my-space",
             "endpoint": "otlp.arize.com:443",
-            "token_command": "usso -print",
+            "token_command": "fetch-token",
             "project_name": "proj",
         }
         mock_token_cmd.return_value = ""
@@ -1391,7 +1391,7 @@ class TestSendSpan:
             "api_key": "",
             "space_id": "my-space",
             "endpoint": "otlp.arize.com:443",
-            "token_command": "usso -print",
+            "token_command": "fetch-token",
             "project_name": "proj",
         }
         mock_token_cmd.return_value = ""
@@ -1409,7 +1409,7 @@ class TestSendSpan:
             "target": "arize",
             "api_key": "my-key",
             "space_id": "my-space",
-            "endpoint": "jaeger-otlp-staging.uberinternal.com:443",
+            "endpoint": "otlp-collector.internal.example.com:443",
             "project_name": "proj",
         }
         mock_resp = mock.MagicMock()
@@ -1420,7 +1420,7 @@ class TestSendSpan:
 
         assert send_span(self._SAMPLE_SPAN) is True
         req = mock_urlopen.call_args[0][0]
-        assert req.full_url == "https://jaeger-otlp-staging.uberinternal.com:443/v1/traces"
+        assert req.full_url == "https://otlp-collector.internal.example.com:443/v1/traces"
 
     @mock.patch("core.common.resolve_backend")
     def test_no_backend_returns_false(self, mock_resolve, monkeypatch):
@@ -1882,7 +1882,7 @@ class TestResolveBackend:
 
     def test_custom_otlp_endpoint_overrides_config_endpoint(self, monkeypatch):
         """CUSTOM_OTLP_ENDPOINT env wins over harness_cfg['endpoint']."""
-        monkeypatch.setenv("CUSTOM_OTLP_ENDPOINT", "jaeger-otlp-staging.uberinternal.com:443")
+        monkeypatch.setenv("CUSTOM_OTLP_ENDPOINT", "otlp-collector.internal.example.com:443")
         cfg = {
             "harnesses": {
                 "claude-code": {
@@ -1896,7 +1896,7 @@ class TestResolveBackend:
         monkeypatch.setattr("core.config.load_config", lambda: cfg)
 
         result = resolve_backend(self._make_span("claude-code"))
-        assert result["endpoint"] == "jaeger-otlp-staging.uberinternal.com:443"
+        assert result["endpoint"] == "otlp-collector.internal.example.com:443"
 
     def test_custom_otlp_endpoint_overrides_default(self, monkeypatch):
         """CUSTOM_OTLP_ENDPOINT wins even with no config entry (default otlp.arize.com)."""
@@ -1935,7 +1935,7 @@ class TestResolveBackend:
                     "target": "arize",
                     "endpoint": "otlp.arize.com:443",
                     "space_id": "sp",
-                    "token_command": "usso -ussh jaeger-otlp-staging.uberinternal.com -print",
+                    "token_command": "generate-token --for otlp-collector",
                 },
             },
         }
@@ -1943,7 +1943,7 @@ class TestResolveBackend:
 
         result = resolve_backend(self._make_span("claude-code"))
         assert result["target"] == "arize"
-        assert result["token_command"] == "usso -ussh jaeger-otlp-staging.uberinternal.com -print"
+        assert result["token_command"] == "generate-token --for otlp-collector"
         assert result["api_key"] == ""
 
     def test_custom_auth_command_env_overrides_config_token_command(self, monkeypatch):
@@ -1970,7 +1970,7 @@ class TestResolveBackend:
                 "claude-code": {
                     "target": "arize",
                     "space_id": "sp",
-                    "token_command": "usso -print",
+                    "token_command": "fetch-token",
                 },
             },
         }
