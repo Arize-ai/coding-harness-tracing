@@ -12,6 +12,7 @@ import functools
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -145,6 +146,25 @@ class _Env:
     @property
     def space_id(self) -> str:
         return os.environ.get("ARIZE_SPACE_ID", "")
+
+    @property
+    def custom_otlp_endpoint(self) -> str:
+        # Live runtime override for the arize-target endpoint, distinct from
+        # ARIZE_OTLP_ENDPOINT (which is only consulted by the interactive setup
+        # wizard when writing harness_cfg['endpoint'] to config.json). Lets a
+        # team redirect spans to a non-Arize-branded OTLP collector (e.g. one
+        # that strips PII, or an internal Jaeger instance) without editing
+        # config.json. See issue #120.
+        return os.environ.get("CUSTOM_OTLP_ENDPOINT", "")
+
+    @property
+    def custom_auth_command(self) -> str:
+        # Shell command run immediately before each span POST to produce a
+        # fresh bearer token, for backends whose credentials expire faster
+        # than a Claude Code session (e.g. an internal SSO-derived token).
+        # Overrides a static api_key when set. Falls back to the per-harness
+        # 'token_command' config.json field when unset.
+        return os.environ.get("CUSTOM_AUTH_COMMAND", "")
 
     @functools.cached_property
     def _top_level_config(self) -> dict:
@@ -465,13 +485,18 @@ def resolve_backend(span_dict: dict) -> dict:
       - ARIZE_PROJECT_NAME    → project_name override (Arize backend only)
       - PHOENIX_PROJECT /
         PHOENIX_PROJECT_NAME  → project_name override (Phoenix backend only)
+      - CUSTOM_OTLP_ENDPOINT  → endpoint override (Arize backend only; wins
+        over harness_cfg['endpoint'] and the otlp.arize.com default). Lets a
+        team redirect spans to a non-Arize-branded OTLP collector. See #120.
+      - CUSTOM_AUTH_COMMAND   → shell command override (Arize backend only)
+        for harness_cfg['token_command']; see send_span() for how it's used.
 
     service_name is pulled from the span's resource attributes
     (resource.attributes[service.name]).
 
     Returns:
       {"target": "phoenix", "endpoint", "api_key", "project_name"} or
-      {"target": "arize",   "endpoint", "api_key", "space_id", "project_name"}
+      {"target": "arize",   "endpoint", "api_key", "space_id", "token_command", "project_name"}
 
     On any missing required field, logs a clear error via error() and
     returns {"target": "none", "project_name": project_name_or_""}.
@@ -534,13 +559,14 @@ def resolve_backend(span_dict: dict) -> dict:
         }
 
     if target == "arize":
-        endpoint = harness_cfg.get("endpoint", "") or "otlp.arize.com:443"
+        endpoint = env.custom_otlp_endpoint or harness_cfg.get("endpoint", "") or "otlp.arize.com:443"
         api_key = env.api_key or harness_cfg.get("api_key", "")
         space_id = env.space_id or harness_cfg.get("space_id", "")
+        token_command = env.custom_auth_command or harness_cfg.get("token_command", "")
 
         missing = []
-        if not api_key:
-            missing.append("api_key (set ARIZE_API_KEY)")
+        if not api_key and not token_command:
+            missing.append("api_key (set ARIZE_API_KEY) or token_command")
         if not space_id:
             missing.append("space_id (set ARIZE_SPACE_ID)")
         if missing:
@@ -554,6 +580,7 @@ def resolve_backend(span_dict: dict) -> dict:
             "endpoint": endpoint,
             "api_key": api_key,
             "space_id": space_id,
+            "token_command": token_command,
             "project_name": project_name,
         }
 
@@ -694,6 +721,34 @@ def _otlp_to_phoenix_payload(span_dict: dict) -> dict:
     return {"data": phoenix_spans}
 
 
+def _resolve_token_via_command(command: str) -> str:
+    """Run a shell command to obtain a fresh bearer token, returning "" on failure.
+
+    Supports rotating/short-TTL credentials (e.g. an SSO-derived token that
+    expires within a session) without requiring a wrapper around the hook
+    binaries. Never raises; logs via error() and returns "" on any failure so
+    callers can fall back to a static api_key.
+    """
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            error(f"token_command failed (exit {result.returncode}): {result.stderr.strip()}")
+            return ""
+        token = result.stdout.strip()
+        if not token:
+            error("token_command succeeded but produced no output")
+        return token
+    except Exception as e:
+        error(f"token_command failed: {e}")
+        return ""
+
+
 def _extract_span_name(span_dict: dict) -> str:
     """Extract the first span name from an OTLP payload."""
     try:
@@ -710,6 +765,13 @@ def send_span(span_dict: dict) -> bool:
     ARIZE_PROJECT_NAME) before falling back to
     ``~/.arize/harness/config.json``. If neither path yields a complete
     backend, the span is dropped and an error is logged.
+
+    On the arize target, if a ``token_command`` was resolved (via
+    CUSTOM_AUTH_COMMAND or harness_cfg['token_command']), it is run
+    immediately before the request to obtain a fresh bearer token —
+    supporting credentials that expire faster than a session (e.g. an
+    SSO-derived token). Falls back to the static api_key if the command
+    fails or produces no output; drops the span if neither is usable.
 
     Never raises. Returns True on success, False on failure.
     """
@@ -751,8 +813,17 @@ def send_span(span_dict: dict) -> bool:
         elif target == "arize":
             project = backend["project_name"]
             endpoint = backend.get("endpoint", "otlp.arize.com:443")
-            api_key = backend["api_key"]
+            api_key = backend.get("api_key", "")
             space_id = backend.get("space_id", "")
+
+            token_command = backend.get("token_command", "")
+            if token_command:
+                fresh_token = _resolve_token_via_command(token_command)
+                if fresh_token:
+                    api_key = fresh_token
+                elif not api_key:
+                    error("token_command produced no token and no static api_key is set; dropping span")
+                    return False
 
             # Inject arize.project.name into span attributes (required by Arize)
             payload = _inject_arize_project_name(span_dict, project)
