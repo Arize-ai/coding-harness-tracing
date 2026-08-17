@@ -16,7 +16,6 @@ from core.common import (
     _attrs_to_otlp,
     _otlp_to_phoenix_payload,
     _resolve_kind,
-    _resolve_token_via_command,
     _to_otlp_attr_value,
     build_multi_span,
     build_span,
