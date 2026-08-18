@@ -71,11 +71,15 @@ class _Env:
     def _resolve_target(self, harness_cfg: dict) -> str:
         """Resolve the backend target: env-derived wins over the config target.
 
-        ``PHOENIX_ENDPOINT`` → phoenix; ``ARIZE_API_KEY``+``ARIZE_SPACE_ID`` →
-        arize; otherwise ``harness_cfg['target']`` (``""`` if unset). Mirrors the
-        precedence in :func:`resolve_backend` so project-name resolution stays in
-        sync with the backend actually chosen.
+        ``CUSTOM_OTLP_ENDPOINT`` → custom (highest priority — the most explicit
+        thing a caller can say is "send spans here"); ``PHOENIX_ENDPOINT`` →
+        phoenix; ``ARIZE_API_KEY``+``ARIZE_SPACE_ID`` → arize; otherwise
+        ``harness_cfg['target']`` (``""`` if unset). Mirrors the precedence in
+        :func:`resolve_backend` so project-name resolution stays in sync with
+        the backend actually chosen.
         """
+        if self.custom_otlp_endpoint:
+            return "custom"
         if self.phoenix_endpoint:
             return "phoenix"
         if self.api_key and self.space_id:
@@ -149,21 +153,21 @@ class _Env:
 
     @property
     def custom_otlp_endpoint(self) -> str:
-        # Live runtime override for the arize-target endpoint, distinct from
-        # ARIZE_OTLP_ENDPOINT (which is only consulted by the interactive setup
-        # wizard when writing harness_cfg['endpoint'] to config.json). Lets a
-        # team redirect spans to a non-Arize-branded OTLP collector (e.g. one
-        # that strips PII, or an internal collector) without editing
-        # config.json. See issue #120.
+        # Selects and configures the "custom" target: any generic OTLP/HTTP
+        # collector (e.g. an internal Jaeger instance) that isn't Arize or
+        # Phoenix. Distinct from ARIZE_OTLP_ENDPOINT (which is only consulted
+        # by the interactive setup wizard when writing harness_cfg['endpoint']
+        # for the arize target). See issue #120.
         return os.environ.get("CUSTOM_OTLP_ENDPOINT", "")
 
     @property
     def custom_auth_command(self) -> str:
         # Shell command run immediately before each span POST to produce a
-        # fresh bearer token, for backends whose credentials expire faster
-        # than a Claude Code session (e.g. an internal SSO-derived token).
-        # Overrides a static api_key when set. Falls back to the per-harness
-        # 'token_command' config.json field when unset.
+        # fresh bearer token for the "custom" target, for backends whose
+        # credentials expire faster than a Claude Code session (e.g. an
+        # internal SSO-derived token). Overrides a static api_key when set.
+        # Falls back to the per-harness 'token_command' config.json field
+        # when unset.
         return os.environ.get("CUSTOM_AUTH_COMMAND", "")
 
     @functools.cached_property
@@ -451,8 +455,9 @@ def resolve_project_name(target: str, harness_cfg: dict, fallback: str = "") -> 
     The env override is framework-scoped so a value configured for one backend
     never leaks into another: the Phoenix backend honors ``PHOENIX_PROJECT``
     then ``PHOENIX_PROJECT_NAME``; the Arize backend honors
-    ``ARIZE_PROJECT_NAME``. When the target is unknown, either generic var is
-    accepted for backward compatibility.
+    ``ARIZE_PROJECT_NAME``. The ``custom`` target has no dedicated env var of
+    its own — like an unrecognized target, it falls back to accepting either
+    generic var, for backward compatibility.
 
     This is why, on the Phoenix backend, the ``ARIZE_PROJECT_NAME`` the Claude
     Code installer historically baked into ``settings.json`` is ignored — see
@@ -479,24 +484,27 @@ def resolve_backend(span_dict: dict) -> dict:
     purely via the runtime env block in ~/.claude/settings.json.
 
     Env vars consulted:
+      - CUSTOM_OTLP_ENDPOINT  → target=custom (highest priority; overrides
+        both config target and the other env-derived targets). Points at any
+        generic OTLP/HTTP collector — e.g. an internal Jaeger instance — that
+        isn't Arize or Phoenix. See #120.
+      - CUSTOM_AUTH_COMMAND   → shell command for the custom target, run
+        before each request to produce a fresh bearer token; overrides
+        harness_cfg['token_command']. See send_span() for how it's used.
       - PHOENIX_ENDPOINT      → target=phoenix (overrides config target)
       - ARIZE_API_KEY         → target=arize when paired with ARIZE_SPACE_ID
       - ARIZE_SPACE_ID        → required for arize when env-only
       - ARIZE_PROJECT_NAME    → project_name override (Arize backend only)
       - PHOENIX_PROJECT /
         PHOENIX_PROJECT_NAME  → project_name override (Phoenix backend only)
-      - CUSTOM_OTLP_ENDPOINT  → endpoint override (Arize backend only; wins
-        over harness_cfg['endpoint'] and the otlp.arize.com default). Lets a
-        team redirect spans to a non-Arize-branded OTLP collector. See #120.
-      - CUSTOM_AUTH_COMMAND   → shell command override (Arize backend only)
-        for harness_cfg['token_command']; see send_span() for how it's used.
 
     service_name is pulled from the span's resource attributes
     (resource.attributes[service.name]).
 
     Returns:
       {"target": "phoenix", "endpoint", "api_key", "project_name"} or
-      {"target": "arize",   "endpoint", "api_key", "space_id", "token_command", "project_name"}
+      {"target": "arize",   "endpoint", "api_key", "space_id", "project_name"} or
+      {"target": "custom",  "endpoint", "api_key", "token_command", "project_name"}
 
     On any missing required field, logs a clear error via error() and
     returns {"target": "none", "project_name": project_name_or_""}.
@@ -559,14 +567,13 @@ def resolve_backend(span_dict: dict) -> dict:
         }
 
     if target == "arize":
-        endpoint = env.custom_otlp_endpoint or harness_cfg.get("endpoint", "") or "otlp.arize.com:443"
+        endpoint = harness_cfg.get("endpoint", "") or "otlp.arize.com:443"
         api_key = env.api_key or harness_cfg.get("api_key", "")
         space_id = env.space_id or harness_cfg.get("space_id", "")
-        token_command = env.custom_auth_command or harness_cfg.get("token_command", "")
 
         missing = []
-        if not api_key and not token_command:
-            missing.append("api_key (set ARIZE_API_KEY) or token_command")
+        if not api_key:
+            missing.append("api_key (set ARIZE_API_KEY)")
         if not space_id:
             missing.append("space_id (set ARIZE_SPACE_ID)")
         if missing:
@@ -580,11 +587,31 @@ def resolve_backend(span_dict: dict) -> dict:
             "endpoint": endpoint,
             "api_key": api_key,
             "space_id": space_id,
+            "project_name": project_name,
+        }
+
+    if target == "custom":
+        endpoint = env.custom_otlp_endpoint or harness_cfg.get("endpoint", "")
+        api_key = env.api_key or harness_cfg.get("api_key", "")
+        token_command = env.custom_auth_command or harness_cfg.get("token_command", "")
+
+        missing = []
+        if not endpoint:
+            missing.append("endpoint (set CUSTOM_OTLP_ENDPOINT or add 'endpoint' to config.json)")
+        if not api_key and not token_command:
+            missing.append("api_key or token_command")
+        if missing:
+            error(f"Incomplete custom config for harness '{service_name}': missing {', '.join(missing)}.")
+            return {"target": "none", "project_name": project_name}
+        return {
+            "target": "custom",
+            "endpoint": endpoint,
+            "api_key": api_key,
             "token_command": token_command,
             "project_name": project_name,
         }
 
-    error(f"Unknown target '{target}' for harness '{service_name}'. " f"Expected 'arize' or 'phoenix'.")
+    error(f"Unknown target '{target}' for harness '{service_name}'. " f"Expected 'arize', 'phoenix', or 'custom'.")
     return {"target": "none", "project_name": project_name}
 
 
@@ -766,7 +793,7 @@ def send_span(span_dict: dict) -> bool:
     ``~/.arize/harness/config.json``. If neither path yields a complete
     backend, the span is dropped and an error is logged.
 
-    On the arize target, if a ``token_command`` was resolved (via
+    On the custom target, if a ``token_command`` was resolved (via
     CUSTOM_AUTH_COMMAND or harness_cfg['token_command']), it is run
     immediately before the request to obtain a fresh bearer token —
     supporting credentials that expire faster than a session (e.g. an
@@ -813,17 +840,8 @@ def send_span(span_dict: dict) -> bool:
         elif target == "arize":
             project = backend["project_name"]
             endpoint = backend.get("endpoint", "otlp.arize.com:443")
-            api_key = backend.get("api_key", "")
+            api_key = backend["api_key"]
             space_id = backend.get("space_id", "")
-
-            token_command = backend.get("token_command", "")
-            if token_command:
-                fresh_token = _resolve_token_via_command(token_command)
-                if fresh_token:
-                    api_key = fresh_token
-                elif not api_key:
-                    error("token_command produced no token and no static api_key is set; dropping span")
-                    return False
 
             # Inject arize.project.name into span attributes (required by Arize)
             payload = _inject_arize_project_name(span_dict, project)
@@ -853,6 +871,44 @@ def send_span(span_dict: dict) -> bool:
                 return False
             except Exception as e:
                 error(f"Arize send failed: {e}")
+                return False
+        elif target == "custom":
+            endpoint = backend.get("endpoint", "")
+            api_key = backend.get("api_key", "")
+            token_command = backend.get("token_command", "")
+
+            if token_command:
+                fresh_token = _resolve_token_via_command(token_command)
+                if fresh_token:
+                    api_key = fresh_token
+                elif not api_key:
+                    error("token_command produced no token and no static api_key is set; dropping span")
+                    return False
+
+            # Normalize endpoint to HTTPS URL for HTTP/JSON transport
+            if endpoint.startswith("http://") or endpoint.startswith("https://"):
+                url = f"{endpoint.rstrip('/')}/v1/traces"
+            else:
+                url = f"https://{endpoint}/v1/traces"
+
+            # Raw OTLP payload — no Arize-specific attribute injection or space_id header.
+            body = json.dumps(span_dict).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return 200 <= resp.status < 300
+            except urllib.error.HTTPError as e:
+                try:
+                    detail = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    detail = ""
+                error(f"Custom send failed: HTTP {e.code}: {detail or e.reason}")
+                return False
+            except Exception as e:
+                error(f"Custom send failed: {e}")
                 return False
         else:
             error("No backend configured (set PHOENIX_ENDPOINT or ARIZE_API_KEY+ARIZE_SPACE_ID)")
