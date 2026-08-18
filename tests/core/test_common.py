@@ -1320,6 +1320,130 @@ class TestSendSpan:
         assert send_span(self._SAMPLE_SPAN) is False
         assert "unable to validate authorization from span" in capsys.readouterr().err
 
+    @mock.patch("core.common._resolve_token_via_command")
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_custom_token_command_used_as_bearer_token(self, mock_urlopen, mock_resolve, mock_token_cmd, monkeypatch):
+        """When token_command is set, its output is used as the Authorization bearer token."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "custom",
+            "api_key": "stale-static-key",
+            "endpoint": "otlp-collector.internal.example.com:443",
+            "token_command": "fetch-token",
+            "project_name": "proj",
+        }
+        mock_token_cmd.return_value = "fresh-rotated-token"
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+
+        mock_token_cmd.assert_called_once_with("fetch-token")
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("Authorization") == "Bearer fresh-rotated-token"
+
+    @mock.patch("core.common._resolve_token_via_command")
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_custom_token_command_falls_back_to_static_api_key(
+        self, mock_urlopen, mock_resolve, mock_token_cmd, monkeypatch
+    ):
+        """If token_command fails (empty result), the static api_key is used instead."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "custom",
+            "api_key": "fallback-key",
+            "endpoint": "otlp-collector.internal.example.com:443",
+            "token_command": "fetch-token",
+            "project_name": "proj",
+        }
+        mock_token_cmd.return_value = ""
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("Authorization") == "Bearer fallback-key"
+
+    @mock.patch("core.common._resolve_token_via_command")
+    @mock.patch("core.common.resolve_backend")
+    def test_custom_token_command_no_fallback_drops_span(self, mock_resolve, mock_token_cmd, monkeypatch):
+        """If token_command fails and there's no static api_key, the span is dropped."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "custom",
+            "api_key": "",
+            "endpoint": "otlp-collector.internal.example.com:443",
+            "token_command": "fetch-token",
+            "project_name": "proj",
+        }
+        mock_token_cmd.return_value = ""
+
+        assert send_span(self._SAMPLE_SPAN) is False
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_custom_otlp_endpoint_used_verbatim(self, mock_urlopen, mock_resolve, monkeypatch):
+        """resolve_backend's endpoint (as overridden by CUSTOM_OTLP_ENDPOINT) is used as-is."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "custom",
+            "api_key": "my-key",
+            "endpoint": "otlp-collector.internal.example.com:443",
+            "token_command": "",
+            "project_name": "proj",
+        }
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://otlp-collector.internal.example.com:443/v1/traces"
+        assert req.get_header("Authorization") == "Bearer my-key"
+        assert req.get_header("Space_id") is None
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_custom_no_api_key_omits_authorization_header(self, mock_urlopen, mock_resolve, monkeypatch):
+        """A custom target with no api_key/token_command sends no Authorization header."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "custom",
+            "api_key": "",
+            "endpoint": "otlp-collector.internal.example.com:443",
+            "token_command": "",
+            "project_name": "proj",
+        }
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("Authorization") is None
+
     @mock.patch("core.common.resolve_backend")
     def test_no_backend_returns_false(self, mock_resolve, monkeypatch):
         """send_span returns False when no backend is configured."""
@@ -1411,6 +1535,8 @@ class TestResolveBackend:
             "ARIZE_PROJECT_NAME",
             "PHOENIX_PROJECT",
             "PHOENIX_PROJECT_NAME",
+            "CUSTOM_OTLP_ENDPOINT",
+            "CUSTOM_AUTH_COMMAND",
         ):
             monkeypatch.delenv(key, raising=False)
 
@@ -1773,6 +1899,154 @@ class TestResolveBackend:
         assert result["target"] == "none"
         stderr = capsys.readouterr().err
         assert "No service.name attribute found" in stderr
+
+    # ── custom target: CUSTOM_OTLP_ENDPOINT / token_command (issue #120) ────
+
+    def test_custom_otlp_endpoint_selects_custom_target(self, monkeypatch):
+        """CUSTOM_OTLP_ENDPOINT alone resolves target=custom, no space_id required."""
+        monkeypatch.setenv("CUSTOM_OTLP_ENDPOINT", "otlp-collector.internal.example.com:443")
+        monkeypatch.setenv("CUSTOM_AUTH_COMMAND", "fetch-token")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "custom"
+        assert result["endpoint"] == "otlp-collector.internal.example.com:443"
+        assert "space_id" not in result
+
+    def test_custom_otlp_endpoint_overrides_config_endpoint(self, monkeypatch):
+        """CUSTOM_OTLP_ENDPOINT env wins over harness_cfg['endpoint']."""
+        monkeypatch.setenv("CUSTOM_OTLP_ENDPOINT", "otlp-collector.internal.example.com:443")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "custom",
+                    "endpoint": "other-collector.example.com:443",
+                    "api_key": "ak",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["endpoint"] == "otlp-collector.internal.example.com:443"
+
+    def test_custom_endpoint_from_config_without_env(self, monkeypatch):
+        """A config-only 'custom' target (no CUSTOM_OTLP_ENDPOINT env) resolves from config.json."""
+        monkeypatch.delenv("CUSTOM_OTLP_ENDPOINT", raising=False)
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "custom",
+                    "endpoint": "otlp-collector.internal.example.com:443",
+                    "api_key": "ak",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "custom"
+        assert result["endpoint"] == "otlp-collector.internal.example.com:443"
+
+    def test_custom_missing_endpoint_errors(self, capsys, monkeypatch):
+        """A 'custom' target with no endpoint anywhere → none, with an actionable error."""
+        monkeypatch.delenv("CUSTOM_OTLP_ENDPOINT", raising=False)
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "custom",
+                    "api_key": "ak",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "none"
+        stderr = capsys.readouterr().err
+        assert "endpoint" in stderr
+
+    def test_token_command_from_config(self, monkeypatch):
+        """harness_cfg['token_command'] is surfaced on the resolved backend dict."""
+        monkeypatch.delenv("CUSTOM_AUTH_COMMAND", raising=False)
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "custom",
+                    "endpoint": "otlp-collector.internal.example.com:443",
+                    "token_command": "generate-token --for otlp-collector",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "custom"
+        assert result["token_command"] == "generate-token --for otlp-collector"
+        assert result["api_key"] == ""
+
+    def test_custom_auth_command_env_overrides_config_token_command(self, monkeypatch):
+        """CUSTOM_AUTH_COMMAND env wins over harness_cfg['token_command']."""
+        monkeypatch.setenv("CUSTOM_AUTH_COMMAND", "env-token-cmd")
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "custom",
+                    "endpoint": "otlp-collector.internal.example.com:443",
+                    "token_command": "config-token-cmd",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["token_command"] == "env-token-cmd"
+
+    def test_token_command_satisfies_missing_api_key(self, capsys, monkeypatch):
+        """A token_command (with no static api_key) is sufficient — no 'missing api_key' error."""
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "custom",
+                    "endpoint": "otlp-collector.internal.example.com:443",
+                    "token_command": "fetch-token",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "custom"
+        assert capsys.readouterr().err == ""
+
+    def test_missing_api_key_and_token_command_errors(self, capsys, monkeypatch):
+        """Neither api_key nor token_command present → none, with an actionable error."""
+        cfg = {
+            "harnesses": {
+                "claude-code": {
+                    "target": "custom",
+                    "endpoint": "otlp-collector.internal.example.com:443",
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "none"
+        stderr = capsys.readouterr().err
+        assert "api_key or token_command" in stderr
+
+    def test_custom_otlp_endpoint_takes_priority_over_arize_and_phoenix(self, monkeypatch):
+        """CUSTOM_OTLP_ENDPOINT wins even when ARIZE_*/PHOENIX_ENDPOINT are also set."""
+        monkeypatch.setenv("CUSTOM_OTLP_ENDPOINT", "otlp-collector.internal.example.com:443")
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-env")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-env")
+        monkeypatch.setenv("PHOENIX_ENDPOINT", "http://env:6006")
+        monkeypatch.setattr("core.config.load_config", lambda: {})
+
+        result = resolve_backend(self._make_span("claude-code"))
+        assert result["target"] == "custom"
+        assert result["endpoint"] == "otlp-collector.internal.example.com:443"
 
 
 # ── send_span integration edge cases ─────────────────────────────────────
