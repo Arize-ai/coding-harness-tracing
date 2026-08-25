@@ -209,9 +209,9 @@ def _tool_subagent_type(event: ToolEvent) -> str:
     if agent_type:
         return agent_type
     if isinstance(event.input, dict):
-        agent_type = event.input.get("subagent_type")
-        if isinstance(agent_type, str) and agent_type:
-            return agent_type
+        input_type = event.input.get("subagent_type")
+        if isinstance(input_type, str) and input_type:
+            return input_type
     return "unknown"
 
 
