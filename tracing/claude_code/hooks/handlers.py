@@ -43,11 +43,12 @@ from .transcript import parse_claude_transcript
 
 
 def _read_stdin() -> dict:
-    """Read JSON from stdin. Returns {} on empty/invalid input."""
+    """Read UTF-8 JSON from stdin. Returns {} on empty/invalid input."""
     try:
-        raw = sys.stdin.read()
+        buffer = getattr(sys.stdin, "buffer", None)
+        raw = buffer.read().decode("utf-8") if buffer is not None else sys.stdin.read()
         return json.loads(raw) if raw else {}
-    except (json.JSONDecodeError, OSError):
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError):
         return {}
 
 

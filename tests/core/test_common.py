@@ -9,12 +9,13 @@ import urllib.error
 from unittest import mock
 
 import pytest
+from test_otlp_proto import _pb_attrs, _pb_decode
 
 from core.common import (
     FileLock,
     StateManager,
     _attrs_to_otlp,
-    _otlp_to_phoenix_payload,
+    _inject_openinference_project_resource_attr,
     _resolve_kind,
     _to_otlp_attr_value,
     build_multi_span,
@@ -879,98 +880,35 @@ class TestBuildMultiSpan:
         assert scope["name"] == "override-scope"
 
 
-# ── Phoenix REST payload translation tests ────────────────────────────────
+# ── Phoenix project-name injection tests ──────────────────────────────────
 
 
-class TestPhoenixPayloadTranslation:
-    def test_translates_otlp_payload_to_phoenix_create_spans_body(self):
+class TestPhoenixProjectNameInjection:
+    def test_injects_project_name_into_resource_attributes(self):
         payload = {
             "resourceSpans": [
                 {
                     "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "svc"}}]},
-                    "scopeSpans": [
-                        {
-                            "scope": {"name": "scope"},
-                            "spans": [
-                                {
-                                    "traceId": "t" * 32,
-                                    "spanId": "s" * 16,
-                                    "parentSpanId": "p" * 16,
-                                    "name": "tool-call",
-                                    "kind": 1,
-                                    "startTimeUnixNano": "1000000000",
-                                    "endTimeUnixNano": "1500000000",
-                                    "attributes": [
-                                        {"key": "openinference.span.kind", "value": {"stringValue": "TOOL"}},
-                                        {"key": "count", "value": {"intValue": "3"}},
-                                    ],
-                                    "events": [
-                                        {
-                                            "name": "exception",
-                                            "timeUnixNano": "1250000000",
-                                            "attributes": [{"key": "message", "value": {"stringValue": "boom"}}],
-                                        }
-                                    ],
-                                    "status": {"code": 2, "message": "failed"},
-                                }
-                            ],
-                        }
-                    ],
+                    "scopeSpans": [{"spans": [{"traceId": "t" * 32, "spanId": "s" * 16, "name": "tool-call"}]}],
                 }
             ]
         }
 
-        result = _otlp_to_phoenix_payload(payload)
+        result = _inject_openinference_project_resource_attr(payload, project_name="my-project")
 
-        assert result == {
-            "data": [
-                {
-                    "name": "tool-call",
-                    "context": {"trace_id": "t" * 32, "span_id": "s" * 16},
-                    "span_kind": "TOOL",
-                    "start_time": "1970-01-01T00:00:01.000000Z",
-                    "end_time": "1970-01-01T00:00:01.500000Z",
-                    "status_code": "ERROR",
-                    "status_message": "failed",
-                    "attributes": {
-                        "service.name": "svc",
-                        "openinference.span.kind": "TOOL",
-                        "count": 3,
-                    },
-                    "parent_id": "p" * 16,
-                    "events": [
-                        {
-                            "name": "exception",
-                            "timestamp": "1970-01-01T00:00:01.250000Z",
-                            "attributes": {"message": "boom"},
-                        }
-                    ],
-                }
-            ]
-        }
+        resource_attrs = result["resourceSpans"][0]["resource"]["attributes"]
+        assert {"key": "openinference.project.name", "value": {"stringValue": "my-project"}} in resource_attrs
+        # Original payload is not mutated
+        assert len(payload["resourceSpans"][0]["resource"]["attributes"]) == 1
 
-    def test_rejects_missing_phoenix_span_timestamp(self):
-        payload = {
-            "resourceSpans": [
-                {
-                    "scopeSpans": [
-                        {
-                            "spans": [
-                                {
-                                    "traceId": "t" * 32,
-                                    "spanId": "s" * 16,
-                                    "name": "missing-time",
-                                    "endTimeUnixNano": "2000000000",
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }
+    def test_creates_resource_when_missing(self):
+        payload = {"resourceSpans": [{"scopeSpans": [{"spans": [{"name": "s"}]}]}]}
 
-        with pytest.raises(ValueError, match="Invalid Unix nanosecond timestamp"):
-            _otlp_to_phoenix_payload(payload)
+        result = _inject_openinference_project_resource_attr(payload, project_name="proj")
+
+        assert result["resourceSpans"][0]["resource"]["attributes"] == [
+            {"key": "openinference.project.name", "value": {"stringValue": "proj"}}
+        ]
 
 
 # ── EnvConfig property tests ──────────────────────────────────────────────
@@ -1134,7 +1072,7 @@ class TestSendSpan:
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
     def test_phoenix_direct_send(self, mock_urlopen, mock_resolve, monkeypatch):
-        """send_span sends directly to Phoenix REST endpoint."""
+        """send_span sends OTLP protobuf to Phoenix's OTLP HTTP endpoint."""
         monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
         monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
 
@@ -1153,32 +1091,40 @@ class TestSendSpan:
         assert send_span(self._SAMPLE_SPAN) is True
 
         req = mock_urlopen.call_args[0][0]
-        assert req.full_url == "http://phoenix:6006/v1/projects/my-project/spans"
-        assert req.get_header("Content-type") == "application/json"
+        assert req.full_url == "http://phoenix:6006/v1/traces"
+        assert req.get_header("Content-type") == "application/x-protobuf"
         assert req.get_header("Authorization") == "Bearer test-key"
         assert req.method == "POST"
-        body = json.loads(req.data)
-        assert body == {
-            "data": [
-                {
-                    "name": "test-span",
-                    "context": {
-                        "trace_id": "0123456789abcdef0123456789abcdef",
-                        "span_id": "abcdef1234567890",
-                    },
-                    "span_kind": "LLM",
-                    "start_time": "1970-01-01T00:00:01.000000Z",
-                    "end_time": "1970-01-01T00:00:02.000000Z",
-                    "status_code": "OK",
-                    "status_message": "",
-                    "attributes": {
-                        "service.name": "test-service",
-                        "openinference.span.kind": "LLM",
-                        "input.value": "hello",
-                    },
-                }
-            ]
+        # Decode the protobuf body independently to verify project routing and
+        # payload passthrough (full encoding coverage lives in test_otlp_proto.py).
+        rs = _pb_decode(_pb_decode(req.data)[1][0])
+        resource_attrs = _pb_attrs(_pb_decode(rs[1][0])[1])
+        assert resource_attrs[b"openinference.project.name"][1][0] == b"my-project"
+        assert resource_attrs[b"service.name"][1][0] == b"test-service"
+        span = _pb_decode(_pb_decode(rs[2][0])[2][0])
+        assert span[5][0] == b"test-span"
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_phoenix_endpoint_with_otlp_path_not_doubled(self, mock_urlopen, mock_resolve, monkeypatch):
+        """An endpoint already ending in /v1/traces does not get the path appended again."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "phoenix",
+            "endpoint": "http://phoenix:6006/v1/traces",
+            "api_key": "",
+            "project_name": "default",
         }
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+        assert mock_urlopen.call_args[0][0].full_url == "http://phoenix:6006/v1/traces"
 
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
@@ -1234,7 +1180,7 @@ class TestSendSpan:
             "project_name": "default",
         }
         mock_urlopen.side_effect = urllib.error.HTTPError(
-            "http://phoenix:6006/v1/projects/default/spans",
+            "http://phoenix:6006/v1/traces",
             400,
             "Bad Request",
             {},

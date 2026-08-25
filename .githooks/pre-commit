@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Git pre-commit hook — runs configured linters via pre-commit.
+# Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+
+if [[ -x .venv/bin/pre-commit ]]; then
+    exec .venv/bin/pre-commit run --hook-stage commit "$@"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+    exec uv run pre-commit run --hook-stage commit "$@"
+fi
+
+if command -v pre-commit >/dev/null 2>&1; then
+    exec pre-commit run --hook-stage commit "$@"
+fi
+
+echo "pre-commit not found; run: uv sync --all-extras --dev && git config core.hooksPath .githooks" >&2
+exit 1

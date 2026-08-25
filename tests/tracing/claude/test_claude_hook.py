@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for tracing.claude_code.hooks.handlers — the 10 Claude Code hook handlers."""
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -102,6 +103,19 @@ class TestReadStdin:
         """Valid JSON is parsed."""
         with mock.patch.object(sys, "stdin", new=__import__("io").StringIO('{"a": 1}')):
             assert _read_stdin() == {"a": 1}
+
+    def test_utf8_payload_ignores_text_wrapper_encoding(self):
+        """Hook JSON is decoded as UTF-8, independently of the host locale."""
+        payload = json.dumps({"prompt": "Привет 한글 العربية"}, ensure_ascii=False).encode("utf-8")
+        stdin = io.TextIOWrapper(io.BytesIO(payload), encoding="ascii")
+        with mock.patch.object(sys, "stdin", new=stdin):
+            assert _read_stdin() == {"prompt": "Привет 한글 العربية"}
+
+    def test_invalid_utf8_returns_empty_dict(self):
+        """Malformed UTF-8 is rejected rather than silently replaced."""
+        stdin = io.TextIOWrapper(io.BytesIO(b'{"prompt": "\xff"}'), encoding="ascii")
+        with mock.patch.object(sys, "stdin", new=stdin):
+            assert _read_stdin() == {}
 
 
 # ---------------------------------------------------------------------------

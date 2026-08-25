@@ -23,6 +23,7 @@ JSON as a CLI argument). No stdout response expected.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
+from tracing.codex.constants import get_codex_home
 from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 
 # Root of Codex's per-session rollout transcripts.
@@ -71,7 +73,12 @@ def _find_rollout_file(session_id: str, sessions_root: "Path | None" = None) -> 
     File names embed the session_id, so a filename-pattern match is fast even
     on a deep directory tree.
     """
-    root = sessions_root or _CODEX_SESSIONS_ROOT
+    if sessions_root is not None:
+        root = sessions_root
+    elif os.environ.get("CODEX_HOME", ""):
+        root = get_codex_home() / "sessions"
+    else:
+        root = _CODEX_SESSIONS_ROOT
     if not root.is_dir() or not session_id:
         return None
     try:
@@ -142,6 +149,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 
     tool_calls: list = []
     pending_func: dict = {}  # call_id -> entry being filled
+    pending_custom: dict = {}  # call_id -> Code Mode entry being filled
     pending_search_end: "dict | None" = None  # most recent unmatched web_search_end
 
     try:
@@ -250,6 +258,33 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                 if outer == "response_item" and ptype == "function_call_output":
                     call_id = payload.get("call_id") or ""
                     pending = pending_func.get(call_id) if call_id else None
+                    if pending is not None:
+                        pending["output"] = payload.get("output") or ""
+                        pending["end_ts"] = ts_ms or pending["end_ts"]
+                    continue
+
+                # Code Mode exposes its outer exec invocation as a custom tool
+                # call rather than a function_call. Pair it with the durable
+                # output record by call_id so it is rendered like other tools.
+                if outer == "response_item" and ptype == "custom_tool_call":
+                    call_id = payload.get("call_id") or ""
+                    entry = {
+                        "tool": payload.get("name") or "custom_tool_call",
+                        "args": payload.get("input") or "",
+                        "output": "",
+                        "call_id": call_id,
+                        "start_ts": ts_ms,
+                        "end_ts": ts_ms,
+                        "decision": None,
+                    }
+                    tool_calls.append(entry)
+                    if call_id:
+                        pending_custom[call_id] = entry
+                    continue
+
+                if outer == "response_item" and ptype == "custom_tool_call_output":
+                    call_id = payload.get("call_id") or ""
+                    pending = pending_custom.get(call_id) if call_id else None
                     if pending is not None:
                         pending["output"] = payload.get("output") or ""
                         pending["end_ts"] = ts_ms or pending["end_ts"]
@@ -469,6 +504,9 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
     user_prompt = ""
     if isinstance(user_msgs, list):
         for m in reversed(user_msgs):
+            if isinstance(m, str) and m:
+                user_prompt = m
+                break
             if isinstance(m, dict) and m.get("role") == "user":
                 c = m.get("content")
                 if isinstance(c, str) and c:
@@ -571,7 +609,7 @@ def notify() -> None:
     expects no stdout response.
     """
     try:
-        load_env_file(Path.home() / ".codex" / "arize-env.sh")
+        load_env_file(get_codex_home() / "arize-env.sh")
         if not check_requirements():
             return
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"

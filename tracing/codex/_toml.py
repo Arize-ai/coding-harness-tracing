@@ -3,10 +3,6 @@
 Extracted from ``install.py`` so that ``install_legacy.py`` (and any other
 module) can depend on these utilities without creating an import cycle back
 into ``install.py``.
-
-The parser is intentionally lenient — falling back to a line-based parse if
-the file is malformed — so install/uninstall keep working when another tool
-has written ``~/.codex/config.toml`` in a slightly off-spec way.
 """
 
 from __future__ import annotations
@@ -14,7 +10,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# Try tomllib (3.11+), then tomli, then fall back to the line parser only.
 _tomllib = None
 try:
     import tomllib as _tomllib  # type: ignore[no-redef]
@@ -25,128 +20,21 @@ except ImportError:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Load / parse
-# ---------------------------------------------------------------------------
+def _toml_load_strict(path: Path) -> dict:
+    """Load TOML without falling back to a lossy parser.
 
-
-def _toml_load(path: Path) -> dict:
-    """Load a TOML file into a dict. Falls back to line-based parsing.
-
-    If the file is malformed (e.g. another tool wrote unquoted keys with
-    `@` or `/`), fall back to the lenient line parser rather than crashing
-    so install/uninstall can still proceed.
+    Write paths use this guard before serializing a config back to disk.  A
+    lenient parse can omit or misinterpret user-owned data, so malformed TOML
+    must be left untouched instead of being rewritten from a partial dict.
     """
     if not path.is_file():
         return {}
-    text = path.read_text()
-    if _tomllib is not None:
-        try:
-            return _tomllib.loads(text)
-        except Exception:
-            pass
-    return _toml_line_parse(text)
-
-
-def _toml_extract_section(line: str) -> str | None:
-    """Extract the inner path from a ``[section]`` header, quote-aware.
-
-    Returns ``None`` when *line* is not a valid section header.
-    """
-    if not line.startswith("[") or line.startswith("[["):
-        return None
-    in_quotes = False
-    escape = False
-    for i, ch in enumerate(line):
-        if i == 0:
-            continue  # skip opening '['
-        if escape:
-            escape = False
-            continue
-        if in_quotes:
-            if ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_quotes = False
-        else:
-            if ch == '"':
-                in_quotes = True
-            elif ch == "]":
-                if line[i + 1 :].strip() == "":
-                    return line[1:i]
-                return None
-    return None
-
-
-def _toml_split_kv(line: str) -> tuple[str, str] | None:
-    """Split ``key = value`` respecting quoted keys (e.g. ``"a=b" = 'x'``).
-
-    Returns ``(raw_key, raw_value)`` or ``None`` if the line isn't a kv pair.
-    """
-    in_quotes = False
-    escape = False
-    for i, ch in enumerate(line):
-        if escape:
-            escape = False
-            continue
-        if in_quotes:
-            if ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_quotes = False
-        else:
-            if ch == '"':
-                in_quotes = True
-            elif ch == "=":
-                key = line[:i].strip()
-                val = line[i + 1 :].strip()
-                if key:
-                    return (key, val)
-                return None
-    return None
-
-
-def _toml_line_parse(text: str) -> dict:
-    """Minimal TOML parser — handles flat keys and sections for our use case."""
-    result: dict = {}
-    current_section: dict = result
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # Section header (quote-aware — handles ] inside quoted keys)
-        section_inner = _toml_extract_section(line)
-        if section_inner is not None:
-            keys = _toml_split_key_path(section_inner)
-            current_section = result
-            for k in keys:
-                if k not in current_section:
-                    current_section[k] = {}
-                current_section = current_section[k]
-            continue
-        # Key = value (quote-aware — handles = inside quoted keys)
-        kv = _toml_split_kv(line)
-        if kv:
-            key = _toml_unkey(kv[0])
-            val_raw = kv[1]
-            # Handle array values like ["cmd"] or ['cmd']
-            if val_raw.startswith("["):
-                items = []
-                for item in re.findall(r'"([^"]*)"|\'([^\']*)\'', val_raw):
-                    items.append(item[0] or item[1])
-                current_section[key] = items
-            elif (val_raw.startswith('"') and val_raw.endswith('"')) or (
-                val_raw.startswith("'") and val_raw.endswith("'")
-            ):
-                current_section[key] = val_raw[1:-1]
-            elif val_raw.lower() in ("true", "false"):
-                current_section[key] = val_raw.lower() == "true"
-            else:
-                try:
-                    current_section[key] = int(val_raw)
-                except ValueError:
-                    current_section[key] = val_raw
-    return result
+    if _tomllib is None:
+        raise ValueError(f"Cannot validate TOML without a TOML parser: {path}")
+    try:
+        return _tomllib.loads(path.read_text())
+    except Exception as exc:
+        raise ValueError(f"Malformed TOML in {path}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

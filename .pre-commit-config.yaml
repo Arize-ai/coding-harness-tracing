@@ -32,6 +32,9 @@ repos:
         name: mypy (core)
         files: ^core/
       - id: mypy
+        name: mypy (tracing/antigravity)
+        files: ^tracing/antigravity/
+      - id: mypy
         name: mypy (tracing/claude_code)
         files: ^tracing/claude_code/
       - id: mypy
@@ -44,8 +47,8 @@ repos:
         name: mypy (tracing/cursor)
         files: ^tracing/cursor/
       - id: mypy
-        name: mypy (tracing/gemini)
-        files: ^tracing/gemini/
+        name: mypy (tracing/devin)
+        files: ^tracing/devin/
       - id: mypy
         name: mypy (tracing/kiro)
         files: ^tracing/kiro/
