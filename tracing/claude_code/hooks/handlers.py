@@ -33,7 +33,7 @@ from .adapter import (
     resolve_session,
     resolve_transcript_path,
 )
-from .span_renderer import render_event_graph
+from .span_renderer import render_event_graph, tool_use_result_str
 from .tool_buffer import ToolBuffer, ToolObservation
 from .transcript import parse_claude_transcript
 
@@ -652,13 +652,7 @@ def _buffer_subagent(state, input_json: dict, ended_at_ms: int) -> bool:
 
 
 def _agent_id_from_tool(event: ToolEvent) -> str:
-    if not isinstance(event.output, dict):
-        return ""
-    result = event.output.get("toolUseResult")
-    if not isinstance(result, dict):
-        return ""
-    agent_id = result.get("agentId")
-    return agent_id if isinstance(agent_id, str) else ""
+    return tool_use_result_str(event, "agentId")
 
 
 def _merge_pending_subagents(graph, descriptors: dict[str, dict]) -> dict[str, dict]:

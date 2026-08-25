@@ -137,11 +137,14 @@ def _span_fields(event: BaseEvent, model_call_number: int) -> tuple[str, str, di
             attrs.update(
                 {
                     "openinference.span.kind": "AGENT",
-                    "subagent.id": _tool_subagent_id(event),
                     "subagent.type": _tool_subagent_type(event),
+                    "tool.name": event.tool_name,
                     "tool.call.id": event.tool_call_id or "",
                 }
             )
+            subagent_id = tool_use_result_str(event, "agentId")
+            if subagent_id:
+                attrs["subagent.id"] = subagent_id
             _put_content(attrs, "input.value", event.input, env.log_prompts)
             _put_content(attrs, "output.value", event.output, env.log_tool_content)
             _put_content(attrs, "error.message", event.error, env.log_tool_content)
@@ -189,25 +192,22 @@ def _put_tool_details(attrs: dict[str, Any], event: ToolEvent) -> None:
             attrs[key] = redact_content(env.log_tool_details, _content_string(value))
 
 
-def _tool_subagent_id(event: ToolEvent) -> str:
-    """Extract subagent ID from an Agent tool event output, falling back to event.agent_id."""
+def tool_use_result_str(event: ToolEvent, key: str) -> str:
+    """Return a non-empty string field from the event output's toolUseResult, or ''."""
     if isinstance(event.output, dict):
         tool_result = event.output.get("toolUseResult")
         if isinstance(tool_result, dict):
-            agent_id = tool_result.get("agentId")
-            if isinstance(agent_id, str) and agent_id:
-                return agent_id
-    return event.agent_id or ""
+            value = tool_result.get(key)
+            if isinstance(value, str):
+                return value
+    return ""
 
 
 def _tool_subagent_type(event: ToolEvent) -> str:
     """Extract subagent type from an Agent tool event, checking output then input, defaulting to 'unknown'."""
-    if isinstance(event.output, dict):
-        tool_result = event.output.get("toolUseResult")
-        if isinstance(tool_result, dict):
-            agent_type = tool_result.get("agentType")
-            if isinstance(agent_type, str) and agent_type:
-                return agent_type
+    agent_type = tool_use_result_str(event, "agentType")
+    if agent_type:
+        return agent_type
     if isinstance(event.input, dict):
         agent_type = event.input.get("subagent_type")
         if isinstance(agent_type, str) and agent_type:
@@ -300,4 +300,4 @@ def _safe_parent_event_ids(events: list[BaseEvent]) -> list[str | None]:
     ]
 
 
-__all__ = ["render_event_graph"]
+__all__ = ["render_event_graph", "tool_use_result_str"]
