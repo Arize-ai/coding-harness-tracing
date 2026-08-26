@@ -1,16 +1,19 @@
 #!/bin/sh
-# Arize tracing hook dispatcher.
-# Called by every Claude Code hook. Bootstraps the venv on first run,
-# then dispatches to the named entry point.
+# Arize tracing hook dispatcher for the Claude Code plugin.
+#
+# Thin wrapper over the shared bootstrap-venv script (reached via the plugin's
+# core symlink). Claude Code sets CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA for
+# plugin hooks; the entry-point name is passed as $1.
 #
 # Usage: run-hook <entry-point-name>
 #   e.g. run-hook arize-hook-session-start
 #
-# Requires CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA env vars
-# (set automatically by Claude Code for plugin hooks).
+# Claude passes the hook payload on stdin (inherited through exec); stdout is
+# reserved for Claude's hook protocol. Any failure exits 0 so tracing never
+# blocks Claude Code.
 set -e
 
-HOOK_NAME="${1:?usage: run-hook <entry-point-name>}"
+ENTRY_POINT="${1:?usage: run-hook <entry-point-name>}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT not set}"
 DATA_DIR="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 VENV_DIR="$DATA_DIR/venv"
@@ -120,10 +123,9 @@ bootstrap() {
 # Bootstrap if needed (only does work on first run or after update)
 bootstrap || exit 0
 
-# Find and exec the entry point
-EP=$(find_entry_point) || {
-    echo "[arize] Entry point '$HOOK_NAME' not found in venv" >&2
+if [ ! -x "$BOOTSTRAP" ]; then
+    echo "[arize] shared bootstrap script not found at $BOOTSTRAP" >&2
     exit 0
-}
+fi
 
-exec "$EP"
+exec "$BOOTSTRAP" "$PLUGIN_ROOT" "$VENV_DIR" "$ENTRY_POINT"
