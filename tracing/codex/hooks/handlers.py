@@ -115,7 +115,8 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
     """Walk the rollout JSONL and extract everything for one turn.
 
     Returns a dict with: ``trace_count``, ``turn_start_ms``, ``turn_end_ms``,
-    ``duration_ms``, ``user_prompt``, ``assistant_output``, ``model``, ``cwd``,
+    ``duration_ms``, ``user_prompt``, ``assistant_output``, ``model``,
+    ``model_provider`` (from ``session_meta``, may be ``None``), ``cwd``,
     ``permission_mode``, ``sandbox_mode``, ``token_usage`` (or None), and
     ``tool_calls`` (a list of ``{tool, args, output, call_id, start_ts, end_ts}``).
 
@@ -129,11 +130,11 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
         "output_tokens",
         "total_tokens",
         "cached_input_tokens",
-        "non_cached_input_tokens",
+        "cache_write_input_tokens",
         "reasoning_output_tokens",
     )
     token_sums: dict = {k: 0 for k in fields}
-    saw_tokens = False
+    observed_fields: set = set()
 
     in_turn = False
     trace_count = 0
@@ -143,6 +144,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
     user_prompt = ""
     assistant_output = ""
     model = ""
+    model_provider: "str | None" = None
     cwd = ""
     permission_mode = ""
     sandbox_mode = ""
@@ -167,6 +169,14 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                 payload = obj.get("payload") or {}
                 ptype = payload.get("type") if isinstance(payload, dict) else None
                 ts_ms = _iso_to_ms(obj.get("timestamp", ""))
+
+                # session_meta is the rollout's first record and carries the
+                # authoritative provider id for the whole session. It arrives
+                # before any task_started, so it must be read outside the
+                # in_turn gate below.
+                if outer == "session_meta" and isinstance(payload, dict):
+                    model_provider = payload.get("model_provider")
+                    continue
 
                 # turn_context records carry per-turn settings (model, cwd, sandbox).
                 # They live at the outer level (no payload.type).
@@ -235,7 +245,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                         v = last.get(k)
                         if isinstance(v, int):
                             token_sums[k] += v
-                            saw_tokens = True
+                            observed_fields.add(k)
                     continue
 
                 # Shell / apply_patch tool call
@@ -337,16 +347,29 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
         turn_end_ms = max(candidates) if candidates else turn_start_ms
 
     token_usage: "dict | None" = None
-    if saw_tokens:
-        token_usage = {
-            "prompt_tokens": token_sums["input_tokens"] or None,
-            "completion_tokens": token_sums["output_tokens"] or None,
-            "total_tokens": token_sums["total_tokens"] or None,
-            "cached_input_tokens": token_sums["cached_input_tokens"],
-            "non_cached_input_tokens": token_sums["non_cached_input_tokens"],
-            "reasoning_output_tokens": token_sums["reasoning_output_tokens"],
-            "model": model or "",
+    if observed_fields:
+        token_usage = {"model": model or ""}
+        # An OBSERVED zero is preserved as 0; a field never observed in any
+        # token_count event is omitted entirely (rather than coerced via
+        # `or None`), so downstream code can tell "zero" from "unknown".
+        field_to_key = {
+            "input_tokens": "prompt_tokens",
+            "output_tokens": "completion_tokens",
+            "total_tokens": "total_tokens",
+            "cached_input_tokens": "cached_input_tokens",
+            "cache_write_input_tokens": "cache_write_input_tokens",
+            "reasoning_output_tokens": "reasoning_output_tokens",
         }
+        for field, key in field_to_key.items():
+            if field in observed_fields:
+                token_usage[key] = token_sums[field]
+        # Codex derives non_cached_input_tokens rather than serializing it
+        # (see protocol.rs); we do the same, only when input was observed,
+        # to keep the codex.token_usage JSON backward compatible.
+        if "input_tokens" in observed_fields:
+            token_usage["non_cached_input_tokens"] = max(
+                token_sums["input_tokens"] - token_sums["cached_input_tokens"], 0
+            )
 
     return {
         "trace_count": trace_count,
@@ -356,6 +379,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
         "user_prompt": user_prompt,
         "assistant_output": assistant_output,
         "model": model,
+        "model_provider": model_provider,
         "cwd": cwd,
         "permission_mode": permission_mode,
         "sandbox_mode": sandbox_mode,
@@ -367,6 +391,47 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 # ---------------------------------------------------------------------------
 # Span assembly
 # ---------------------------------------------------------------------------
+
+
+def _llm_identity(model: str, provider: "str | None") -> "tuple[str, str]":
+    """Derive OpenInference ``llm.system``/``llm.provider`` for a Codex turn.
+
+    ``llm.system`` names the AI product/model family (e.g. ``openai``,
+    ``anthropic``); ``llm.provider`` names the hosting provider (e.g.
+    ``openai``, ``azure``, ``ollama``). They can differ (an OpenAI model
+    hosted on Azure), so we derive them separately instead of assuming every
+    Codex session talks to OpenAI-hosted models.
+
+    ``provider`` is the ``model_provider`` field from the rollout's
+    ``session_meta`` payload. It is Codex's own built-in default provider id
+    when absent, so we fall back to ``"openai"`` in that case. ``llm.system``
+    must always be emitted on LLM spans -- OpenInference requires it -- so we
+    fall back to the provider id itself when the model name doesn't give us
+    a better answer.
+    """
+    llm_provider = (provider or "openai").lower()
+    model_lower = (model or "").lower()
+    if (
+        llm_provider in ("openai", "azure")
+        or model_lower.startswith(("gpt-", "o1", "o3", "o4"))
+        or "codex" in model_lower
+    ):
+        llm_system = "openai"
+    else:
+        llm_system = llm_provider
+    return llm_system, llm_provider
+
+
+def _put_indexed_message(attrs: dict, prefix: str, role: str, content: str) -> None:
+    """Write one OpenInference indexed message attribute pair at index 0.
+
+    ``prefix`` is ``llm.input_messages`` or ``llm.output_messages``. The role
+    is always set; the content attribute is only added when non-empty so we
+    never emit an empty ``message.content``.
+    """
+    attrs[f"{prefix}.0.message.role"] = role
+    if content:
+        attrs[f"{prefix}.0.message.content"] = content
 
 
 def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
@@ -408,14 +473,27 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
         attrs["codex.sandbox_mode"] = turn["sandbox_mode"]
     if turn.get("duration_ms") is not None:
         attrs["codex.turn.duration_ms"] = turn["duration_ms"]
-    if assistant_output:
-        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
+
+    llm_system, llm_provider = _llm_identity(turn.get("model") or "", turn.get("model_provider"))
+    attrs["llm.system"] = llm_system
+    attrs["llm.provider"] = llm_provider
+
+    _put_indexed_message(attrs, "llm.input_messages", "user", user_prompt)
+    _put_indexed_message(attrs, "llm.output_messages", "assistant", assistant_output)
 
     usage = turn.get("token_usage") or {}
     for src, dst in (
         ("prompt_tokens", "llm.token_count.prompt"),
         ("completion_tokens", "llm.token_count.completion"),
         ("total_tokens", "llm.token_count.total"),
+    ):
+        v = usage.get(src)
+        if isinstance(v, int):
+            attrs[dst] = v
+    for src, dst in (
+        ("cached_input_tokens", "llm.token_count.prompt_details.cache_read"),
+        ("cache_write_input_tokens", "llm.token_count.prompt_details.cache_write"),
+        ("reasoning_output_tokens", "llm.token_count.completion_details.reasoning"),
     ):
         v = usage.get(src)
         if isinstance(v, int):
@@ -440,6 +518,7 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
         if workspace:
             tool_attrs["codex.workspace"] = workspace
         if entry.get("call_id"):
+            tool_attrs["tool.id"] = entry["call_id"]
             tool_attrs["codex.tool.call_id"] = entry["call_id"]
         child_start = entry.get("start_ts") or turn["turn_start_ms"]
         child_end = entry.get("end_ts") or child_start
@@ -539,12 +618,17 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
         "codex.thread_id": thread_id,
         "codex.turn_id": turn_id,
         "codex.notify_fallback": "true",
+        # Codex is OpenAI's own CLI and this fallback path has no rollout to
+        # say otherwise, so llm.system is trustworthy even here. llm.provider
+        # is left out -- we have no session_meta to confirm the hosting
+        # provider on this path.
+        "llm.system": "openai",
     }
     user_id = env.get_user_id(SERVICE_NAME)
     if user_id:
         attrs["user.id"] = user_id
-    if assistant_output:
-        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
+    _put_indexed_message(attrs, "llm.input_messages", "user", user_prompt)
+    _put_indexed_message(attrs, "llm.output_messages", "assistant", assistant_output)
 
     parent_span = build_span(
         "Turn",

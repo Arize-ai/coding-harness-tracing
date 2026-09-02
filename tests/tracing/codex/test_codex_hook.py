@@ -16,6 +16,7 @@ from tracing.codex.hooks.handlers import (
     _find_rollout_file,
     _handle_notify,
     _iso_to_ms,
+    _llm_identity,
     _send_legacy_single_span,
     notify,
 )
@@ -210,6 +211,7 @@ class TestExtractTurnFromRollout:
                             "output_tokens": 20,
                             "total_tokens": 120,
                             "cached_input_tokens": 80,
+                            "cache_write_input_tokens": 4,
                             "reasoning_output_tokens": 5,
                         }
                     },
@@ -223,6 +225,7 @@ class TestExtractTurnFromRollout:
                             "input_tokens": 50,
                             "output_tokens": 10,
                             "total_tokens": 60,
+                            "cache_write_input_tokens": 3,
                         }
                     },
                 }
@@ -235,7 +238,85 @@ class TestExtractTurnFromRollout:
         assert usage["completion_tokens"] == 30
         assert usage["total_tokens"] == 180
         assert usage["cached_input_tokens"] == 80
+        assert usage["cache_write_input_tokens"] == 7
         assert usage["reasoning_output_tokens"] == 5
+        # Codex doesn't serialize non_cached_input_tokens; we derive it the
+        # same way Codex itself does: max(input - cached, 0).
+        assert usage["non_cached_input_tokens"] == 70
+
+    def test_cache_write_input_tokens_summed_across_events(self, tmp_path):
+        """cache_write_input_tokens is read (it was previously never read at all)."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {"last_token_usage": {"cache_write_input_tokens": 5}},
+                }
+            ),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {"last_token_usage": {"cache_write_input_tokens": 2}},
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["token_usage"]["cache_write_input_tokens"] == 7
+
+    def test_observed_zero_preserved_unobserved_field_absent(self, tmp_path):
+        """An observed 0 stays in the dict; a field never seen anywhere is absent."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 0,
+                            "total_tokens": 10,
+                        }
+                    },
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        usage = turn["token_usage"]
+        assert usage["completion_tokens"] == 0
+        assert "reasoning_output_tokens" not in usage
+        assert "cache_write_input_tokens" not in usage
+
+    def test_session_meta_model_provider_captured(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            {
+                "timestamp": "2026-05-20T00:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": "s1", "model_provider": "ollama"},
+            },
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["model_provider"] == "ollama"
+
+    def test_missing_session_meta_gives_none_provider(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["model_provider"] is None
 
     def test_function_call_pairs_with_output_by_call_id(self, tmp_path):
         path = _write_rollout(
@@ -426,6 +507,7 @@ class TestBuildAndSendSpans:
             "user_prompt": "hi",
             "assistant_output": "hello",
             "model": "gpt-5.5",
+            "model_provider": "openai",
             "cwd": "/x/workspace",
             "permission_mode": "on-request",
             "sandbox_mode": "workspace-write",
@@ -433,6 +515,9 @@ class TestBuildAndSendSpans:
                 "prompt_tokens": 10,
                 "completion_tokens": 5,
                 "total_tokens": 15,
+                "cached_input_tokens": 8,
+                "cache_write_input_tokens": 2,
+                "reasoning_output_tokens": 1,
                 "model": "gpt-5.5",
             },
             "tool_calls": [
@@ -460,14 +545,24 @@ class TestBuildAndSendSpans:
         assert parent_attrs["input.value"]["stringValue"] == "hi"
         assert parent_attrs["output.value"]["stringValue"] == "hello"
         assert parent_attrs["llm.model_name"]["stringValue"] == "gpt-5.5"
+        assert parent_attrs["llm.system"]["stringValue"] == "openai"
+        assert parent_attrs["llm.provider"]["stringValue"] == "openai"
         assert parent_attrs["codex.approval_mode"]["stringValue"] == "on-request"
         assert parent_attrs["codex.sandbox_mode"]["stringValue"] == "workspace-write"
         assert parent_attrs["codex.cwd"]["stringValue"] == "/x/workspace"
         assert parent_attrs["codex.workspace"]["stringValue"] == "workspace"
         assert parent_attrs["llm.token_count.total"]["intValue"] == 15
+        assert parent_attrs["llm.token_count.prompt_details.cache_read"]["intValue"] == 8
+        assert parent_attrs["llm.token_count.prompt_details.cache_write"]["intValue"] == 2
+        assert parent_attrs["llm.token_count.completion_details.reasoning"]["intValue"] == 1
+        assert parent_attrs["llm.input_messages.0.message.role"]["stringValue"] == "user"
+        assert parent_attrs["llm.input_messages.0.message.content"]["stringValue"] == "hi"
+        assert parent_attrs["llm.output_messages.0.message.role"]["stringValue"] == "assistant"
+        assert parent_attrs["llm.output_messages.0.message.content"]["stringValue"] == "hello"
 
         child_attrs = _attrs_of_span(spans[1])
         assert child_attrs["tool.name"]["stringValue"] == "exec_command"
+        assert child_attrs["tool.id"]["stringValue"] == "c1"
         assert child_attrs["codex.tool.call_id"]["stringValue"] == "c1"
         assert child_attrs["codex.cwd"]["stringValue"] == "/x/workspace"
         assert child_attrs["codex.workspace"]["stringValue"] == "workspace"
@@ -515,6 +610,170 @@ class TestBuildAndSendSpans:
             _build_and_send_spans("sess-1", "turn-1", turn)
         parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
         assert parent_attrs["output.value"]["stringValue"] == "(No response)"
+
+    def test_zero_token_counts_kept_unobserved_fields_absent(self):
+        """Observed zero prompt/completion/total survive as intValue 0; a
+        field that was never in the token_usage dict emits no attribute."""
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 1500,
+            "duration_ms": 0,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+            "model": "gpt-5-codex",
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "model": "gpt-5-codex",
+            },
+            "tool_calls": [],
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["llm.token_count.prompt"]["intValue"] == 0
+        assert parent_attrs["llm.token_count.completion"]["intValue"] == 0
+        assert parent_attrs["llm.token_count.total"]["intValue"] == 0
+        assert "llm.token_count.prompt_details.cache_read" not in parent_attrs
+        assert "llm.token_count.prompt_details.cache_write" not in parent_attrs
+        assert "llm.token_count.completion_details.reasoning" not in parent_attrs
+
+    def test_llm_system_and_provider_from_model_provider(self):
+        """model_provider 'ollama' with model 'llama3' -> both llm.system and
+        llm.provider are 'ollama' (no OpenAI-family signal in the model name)."""
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 1500,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+            "model": "llama3",
+            "model_provider": "ollama",
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": None,
+            "tool_calls": [],
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["llm.system"]["stringValue"] == "ollama"
+        assert parent_attrs["llm.provider"]["stringValue"] == "ollama"
+
+    def test_llm_system_and_provider_default_openai_without_session_meta(self):
+        """No model_provider (old session, or session_meta missing the field)
+        and a gpt-5-codex model -> both default to openai."""
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 1500,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+            "model": "gpt-5-codex",
+            "model_provider": None,
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": None,
+            "tool_calls": [],
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["llm.system"]["stringValue"] == "openai"
+        assert parent_attrs["llm.provider"]["stringValue"] == "openai"
+
+    def test_input_message_content_omitted_when_prompt_empty(self):
+        """Role is always set on the indexed message; content is only added
+        when the redacted text is non-empty."""
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 1500,
+            "user_prompt": "",
+            "assistant_output": "",
+            "model": "",
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": None,
+            "tool_calls": [],
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["llm.input_messages.0.message.role"]["stringValue"] == "user"
+        assert "llm.input_messages.0.message.content" not in parent_attrs
+        assert parent_attrs["llm.output_messages.0.message.role"]["stringValue"] == "assistant"
+        assert "llm.output_messages.0.message.content" not in parent_attrs
+
+    def test_indexed_messages_respect_redaction(self, monkeypatch):
+        """With ARIZE_LOG_PROMPTS=false, the indexed message contents are
+        redacted the same way input.value/output.value are."""
+        monkeypatch.setenv("ARIZE_LOG_PROMPTS", "false")
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 1500,
+            "user_prompt": "secret prompt",
+            "assistant_output": "secret answer",
+            "model": "",
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": None,
+            "tool_calls": [],
+        }
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        in_content = parent_attrs["llm.input_messages.0.message.content"]["stringValue"]
+        out_content = parent_attrs["llm.output_messages.0.message.content"]["stringValue"]
+        assert in_content.startswith("<redacted (")
+        assert out_content.startswith("<redacted (")
+        assert in_content == parent_attrs["input.value"]["stringValue"]
+        assert out_content == parent_attrs["output.value"]["stringValue"]
+
+
+# ---------------------------------------------------------------------------
+# _llm_identity
+# ---------------------------------------------------------------------------
+
+
+class TestLlmIdentity:
+
+    def test_openai_provider_gives_openai_system(self):
+        assert _llm_identity("gpt-5.5", "openai") == ("openai", "openai")
+
+    def test_azure_provider_gives_openai_system(self):
+        assert _llm_identity("gpt-4o", "azure") == ("openai", "azure")
+
+    def test_ollama_provider_with_non_openai_model_gives_ollama_system(self):
+        assert _llm_identity("llama3", "ollama") == ("ollama", "ollama")
+
+    def test_missing_provider_defaults_to_openai(self):
+        assert _llm_identity("gpt-5-codex", None) == ("openai", "openai")
+
+    def test_codex_in_model_name_gives_openai_system_regardless_of_provider(self):
+        # The model name is a stronger signal than an unrecognized provider id.
+        system, provider = _llm_identity("codex-mini", "custom-proxy")
+        assert system == "openai"
+        assert provider == "custom-proxy"
+
+    def test_o_series_model_prefix_gives_openai_system(self):
+        for model in ("o1-preview", "o3-mini", "o4-mini"):
+            assert _llm_identity(model, "some-provider")[0] == "openai"
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +904,15 @@ class TestSendLegacySingleSpan:
         assert attrs["codex.notify_fallback"]["stringValue"] == "true"
         assert attrs["input.value"]["stringValue"] == "yo"
         assert attrs["output.value"]["stringValue"] == "hi"
+        # The fallback path has no rollout/session_meta to confirm hosting
+        # provider, but llm.system is still required and trustworthy: Codex
+        # is OpenAI's own CLI.
+        assert attrs["llm.system"]["stringValue"] == "openai"
+        assert "llm.provider" not in attrs
+        assert attrs["llm.input_messages.0.message.role"]["stringValue"] == "user"
+        assert attrs["llm.input_messages.0.message.content"]["stringValue"] == "yo"
+        assert attrs["llm.output_messages.0.message.role"]["stringValue"] == "assistant"
+        assert attrs["llm.output_messages.0.message.content"]["stringValue"] == "hi"
 
     def test_extracts_string_array_prompt(self):
         sent = []
