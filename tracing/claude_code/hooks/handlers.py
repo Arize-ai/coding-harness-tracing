@@ -394,7 +394,7 @@ def _handle_user_prompt_submit(input_json: dict) -> None:
     # Track transcript position
     transcript = input_json.get("transcript_path", "")
     if transcript and Path(transcript).is_file():
-        with open(transcript) as f:
+        with open(transcript, encoding="utf-8") as f:
             line_count = sum(1 for _ in f)
         state.set("trace_start_line", str(line_count))
     else:
@@ -464,7 +464,7 @@ def _scan_transcript_for_usage(
     # authoritative. Records with no identity at all are counted individually.
     last_usage: "dict[object, dict]" = {}
 
-    with open(transcript) as f:
+    with open(transcript, encoding="utf-8") as f:
         for i, line in enumerate(f):
             if i < start_line:
                 continue
