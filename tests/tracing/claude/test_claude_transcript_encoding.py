@@ -58,7 +58,7 @@ def _write_transcript(path: Path) -> None:
             },
         },
     ]
-    path.write_bytes(("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n").encode("utf-8"))
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
 
 
 @pytest.fixture
@@ -73,8 +73,6 @@ def state(tmp_path: Path) -> StateManager:
     sm = StateManager(state_dir=tmp_path, state_file=tmp_path / "state.json", lock_path=tmp_path / ".lock")
     sm.init_state()
     sm.set("session_id", "test-session")
-    sm.set("project_name", "test-project")
-    sm.set("trace_count", "0")
     return sm
 
 
@@ -125,7 +123,7 @@ def test_parse_claude_transcript_under_non_utf8_locale(transcript: Path):
     with _non_utf8_locale():
         graph = parse_claude_transcript(transcript, root)
 
-    assert [d.code for d in graph.diagnostics if d.code == "transcript_read_error"] == []
+    assert not graph.diagnostics
     models = [e for e in graph.events if isinstance(e, ModelCallEvent)]
     assert len(models) == 1
     assert models[0].output == NON_ASCII_TEXT
