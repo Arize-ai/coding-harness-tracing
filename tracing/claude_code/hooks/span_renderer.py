@@ -88,10 +88,10 @@ def _span_fields(event: BaseEvent, model_call_number: int) -> tuple[str, str, di
     }
 
     if isinstance(event, TurnEvent):
-        attrs["openinference.span.kind"] = "CHAIN"
+        attrs["openinference.span.kind"] = "AGENT"
         _put_content(attrs, "input.value", event.input, env.log_prompts)
         _put_content(attrs, "output.value", event.output, env.log_prompts)
-        return f"Turn {event.turn_id}", "CHAIN", attrs
+        return f"Turn {event.turn_id}", "AGENT", attrs
 
     if isinstance(event, AgentEvent):
         attrs.update(
@@ -133,6 +133,22 @@ def _span_fields(event: BaseEvent, model_call_number: int) -> tuple[str, str, di
         return f"LLM call {model_call_number}{suffix}", "LLM", attrs
 
     if isinstance(event, ToolEvent):
+        if event.tool_name == "Agent":
+            attrs.update(
+                {
+                    "openinference.span.kind": "AGENT",
+                    "subagent.type": _tool_subagent_type(event),
+                    "tool.name": event.tool_name,
+                    "tool.call.id": event.tool_call_id or "",
+                }
+            )
+            subagent_id = tool_use_result_str(event, "agentId")
+            if subagent_id:
+                attrs["subagent.id"] = subagent_id
+            _put_content(attrs, "input.value", event.input, env.log_prompts)
+            _put_content(attrs, "output.value", event.output, env.log_tool_content)
+            _put_content(attrs, "error.message", event.error, env.log_tool_content)
+            return "Agent", "AGENT", attrs
         attrs.update(
             {
                 "openinference.span.kind": "TOOL",
@@ -174,6 +190,29 @@ def _put_tool_details(attrs: dict[str, Any], event: ToolEvent) -> None:
     for key, value in details.items():
         if value is not None:
             attrs[key] = redact_content(env.log_tool_details, _content_string(value))
+
+
+def tool_use_result_str(event: ToolEvent, key: str) -> str:
+    """Return a non-empty string field from the event output's toolUseResult, or ''."""
+    if isinstance(event.output, dict):
+        tool_result = event.output.get("toolUseResult")
+        if isinstance(tool_result, dict):
+            value = tool_result.get(key)
+            if isinstance(value, str):
+                return value
+    return ""
+
+
+def _tool_subagent_type(event: ToolEvent) -> str:
+    """Extract subagent type from an Agent tool event, checking output then input, defaulting to 'unknown'."""
+    agent_type = tool_use_result_str(event, "agentType")
+    if agent_type:
+        return agent_type
+    if isinstance(event.input, dict):
+        input_type = event.input.get("subagent_type")
+        if isinstance(input_type, str) and input_type:
+            return input_type
+    return "unknown"
 
 
 def _put_content(attrs: dict[str, Any], key: str, value: Any, allowed: bool) -> None:
@@ -261,4 +300,4 @@ def _safe_parent_event_ids(events: list[BaseEvent]) -> list[str | None]:
     ]
 
 
-__all__ = ["render_event_graph"]
+__all__ = ["render_event_graph", "tool_use_result_str"]
