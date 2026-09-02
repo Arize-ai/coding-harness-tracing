@@ -1,7 +1,6 @@
 """Tests for reading claude transcripts as UTF-8"""
 
 import builtins
-import io
 import json
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,7 +26,18 @@ def _non_utf8_locale():
             encoding = "ascii"
         return real_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
 
-    with mock.patch.object(builtins, "open", locale_open), mock.patch.object(io, "open", locale_open):
+    real_read_text = Path.read_text
+
+    def locale_read_text(self, encoding=None, *args, **kwargs):
+        return real_read_text(self, encoding or "ascii", *args, **kwargs)
+
+    # ``open()`` in handlers.py resolves to builtins.open. pathlib reaches
+    # io.open through version-specific bindings (3.10 snapshots it at import),
+    # so patch ``Path.read_text`` itself rather than io.open.
+    with (
+        mock.patch.object(builtins, "open", locale_open),
+        mock.patch.object(Path, "read_text", locale_read_text),
+    ):
         yield
 
 
