@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -364,9 +365,10 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
             if field in observed_fields:
                 token_usage[key] = token_sums[field]
         # Codex derives non_cached_input_tokens rather than serializing it
-        # (see protocol.rs); we do the same, only when input was observed,
-        # to keep the codex.token_usage JSON backward compatible.
-        if "input_tokens" in observed_fields:
+        # (see protocol.rs); we do the same, only when BOTH input and cached
+        # were observed -- deriving from an unobserved (default-0) cached
+        # value would fabricate a number from unknown cache data.
+        if "input_tokens" in observed_fields and "cached_input_tokens" in observed_fields:
             token_usage["non_cached_input_tokens"] = max(
                 token_sums["input_tokens"] - token_sums["cached_input_tokens"], 0
             )
@@ -393,45 +395,96 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 # ---------------------------------------------------------------------------
 
 
-def _llm_identity(model: str, provider: "str | None") -> "tuple[str, str]":
+# OpenInference's llm.system well-known values (spec/semantic_conventions.md):
+# anthropic, openai, vertexai, cohere, mistralai, xai, deepseek, amazon,
+# meta, ai21. Model-family substrings below map to those exact values --
+# "the respective value MUST be used" when one applies. Order matters: more
+# specific/likely substrings are checked first.
+_MODEL_FAMILY_SYSTEMS: "tuple[tuple[str, str], ...]" = (
+    ("codex", "openai"),
+    ("gpt-", "openai"),
+    ("claude", "anthropic"),
+    ("llama", "meta"),
+    ("deepseek", "deepseek"),
+    ("mixtral", "mistralai"),
+    ("mistral", "mistralai"),
+    ("gemini", "vertexai"),
+    ("grok", "xai"),
+    ("command-", "cohere"),
+)
+
+# o1/o3/o4 only as a whole model-name token (o1, o1-preview, ...), not as a
+# substring of an unrelated word.
+_O_SERIES_MODEL_RE = re.compile(r"^o[134](\b|-|$)")
+
+
+def _llm_identity(model: "object", provider: "object") -> "tuple[str, str | None]":
     """Derive OpenInference ``llm.system``/``llm.provider`` for a Codex turn.
 
     ``llm.system`` names the AI product/model family (e.g. ``openai``,
-    ``anthropic``); ``llm.provider`` names the hosting provider (e.g.
-    ``openai``, ``azure``, ``ollama``). They can differ (an OpenAI model
-    hosted on Azure), so we derive them separately instead of assuming every
-    Codex session talks to OpenAI-hosted models.
+    ``anthropic``, ``meta``); ``llm.provider`` names the hosting provider
+    (e.g. ``openai``, ``azure``, ``ollama``). They can differ (a Llama model
+    hosted on Ollama, a DeepSeek model hosted on Azure), so we derive them
+    separately instead of assuming every Codex session talks to
+    OpenAI-hosted models.
 
-    ``provider`` is the ``model_provider`` field from the rollout's
-    ``session_meta`` payload. It is Codex's own built-in default provider id
-    when absent, so we fall back to ``"openai"`` in that case. ``llm.system``
-    must always be emitted on LLM spans -- OpenInference requires it -- so we
-    fall back to the provider id itself when the model name doesn't give us
-    a better answer.
+    Precedence for ``llm.system`` (OpenInference says a well-known value
+    MUST be used when one applies):
+      1. A model-family match on the model name (openai, anthropic, meta,
+         deepseek, mistralai, vertexai, xai, cohere, ...).
+      2. Else the provider, when it is ``openai`` or ``azure`` (both mean
+         an OpenAI-family model).
+      3. Else, when the provider itself is absent, ``"openai"`` -- Codex's
+         own built-in default provider id when ``session_meta`` omits the
+         field, and ``llm.system`` is required so we must emit something.
+      4. Else the provider id itself, as a spec-permitted custom value.
+
+    ``llm.provider`` is optional in the spec, so it is returned as ``None``
+    (meaning "do not emit the attribute") when ``model_provider`` was never
+    observed or was JSON ``null`` -- we never fabricate a hosting provider.
+
+    ``model``/``provider`` are accepted as ``object`` and type-guarded: any
+    non-string value (e.g. a corrupt rollout field) is treated as absent
+    rather than raising, so one bad field can't drop the whole turn's span.
     """
-    llm_provider = (provider or "openai").lower()
-    model_lower = (model or "").lower()
-    if (
-        llm_provider in ("openai", "azure")
-        or model_lower.startswith(("gpt-", "o1", "o3", "o4"))
-        or "codex" in model_lower
-    ):
+    model_str = model if isinstance(model, str) else ""
+    provider_str = provider if isinstance(provider, str) else None
+
+    model_lower = model_str.lower()
+    provider_lower = provider_str.lower() if provider_str else None
+
+    llm_system: "str | None" = None
+    if _O_SERIES_MODEL_RE.match(model_lower):
         llm_system = "openai"
     else:
-        llm_system = llm_provider
-    return llm_system, llm_provider
+        for substr, system in _MODEL_FAMILY_SYSTEMS:
+            if substr in model_lower:
+                llm_system = system
+                break
+
+    if llm_system is None:
+        if provider_lower in ("openai", "azure"):
+            llm_system = "openai"
+        elif provider_lower is None:
+            llm_system = "openai"
+        else:
+            llm_system = provider_lower
+
+    return llm_system, provider_lower
 
 
 def _put_indexed_message(attrs: dict, prefix: str, role: str, content: str) -> None:
     """Write one OpenInference indexed message attribute pair at index 0.
 
-    ``prefix`` is ``llm.input_messages`` or ``llm.output_messages``. The role
-    is always set; the content attribute is only added when non-empty so we
-    never emit an empty ``message.content``.
+    ``prefix`` is ``llm.input_messages`` or ``llm.output_messages``. Writes
+    nothing at all -- neither role nor content -- when ``content`` is empty,
+    so a turn with no user/assistant message doesn't claim a message that
+    was never observed.
     """
+    if not content:
+        return
     attrs[f"{prefix}.0.message.role"] = role
-    if content:
-        attrs[f"{prefix}.0.message.content"] = content
+    attrs[f"{prefix}.0.message.content"] = content
 
 
 def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
@@ -474,9 +527,10 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
     if turn.get("duration_ms") is not None:
         attrs["codex.turn.duration_ms"] = turn["duration_ms"]
 
-    llm_system, llm_provider = _llm_identity(turn.get("model") or "", turn.get("model_provider"))
+    llm_system, llm_provider = _llm_identity(turn.get("model"), turn.get("model_provider"))
     attrs["llm.system"] = llm_system
-    attrs["llm.provider"] = llm_provider
+    if llm_provider:
+        attrs["llm.provider"] = llm_provider
 
     _put_indexed_message(attrs, "llm.input_messages", "user", user_prompt)
     _put_indexed_message(attrs, "llm.output_messages", "assistant", assistant_output)

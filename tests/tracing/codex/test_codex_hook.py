@@ -292,6 +292,32 @@ class TestExtractTurnFromRollout:
         assert usage["completion_tokens"] == 0
         assert "reasoning_output_tokens" not in usage
         assert "cache_write_input_tokens" not in usage
+        # input_tokens was observed but cached_input_tokens never was --
+        # deriving non_cached_input_tokens from an unobserved cached value
+        # would fabricate a number, so it must be absent too.
+        assert "non_cached_input_tokens" not in usage
+
+    def test_non_cached_derived_only_when_both_input_and_cached_observed(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 100,
+                            "cached_input_tokens": 30,
+                        }
+                    },
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        usage = turn["token_usage"]
+        assert usage["non_cached_input_tokens"] == 70
 
     def test_session_meta_model_provider_captured(self, tmp_path):
         path = _write_rollout(
@@ -645,8 +671,8 @@ class TestBuildAndSendSpans:
         assert "llm.token_count.completion_details.reasoning" not in parent_attrs
 
     def test_llm_system_and_provider_from_model_provider(self):
-        """model_provider 'ollama' with model 'llama3' -> both llm.system and
-        llm.provider are 'ollama' (no OpenAI-family signal in the model name)."""
+        """model_provider 'ollama' with model 'llama3' -> llm.system is the
+        well-known family value 'meta' (Llama), llm.provider stays 'ollama'."""
         turn = {
             "trace_count": 1,
             "turn_start_ms": 1000,
@@ -665,12 +691,13 @@ class TestBuildAndSendSpans:
         with patcher:
             _build_and_send_spans("sess-1", "turn-1", turn)
         parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
-        assert parent_attrs["llm.system"]["stringValue"] == "ollama"
+        assert parent_attrs["llm.system"]["stringValue"] == "meta"
         assert parent_attrs["llm.provider"]["stringValue"] == "ollama"
 
-    def test_llm_system_and_provider_default_openai_without_session_meta(self):
+    def test_llm_system_defaults_openai_and_provider_absent_without_session_meta(self):
         """No model_provider (old session, or session_meta missing the field)
-        and a gpt-5-codex model -> both default to openai."""
+        and a gpt-5-codex model -> llm.system defaults to openai, and
+        llm.provider is NOT emitted (never fabricated)."""
         turn = {
             "trace_count": 1,
             "turn_start_ms": 1000,
@@ -690,11 +717,41 @@ class TestBuildAndSendSpans:
             _build_and_send_spans("sess-1", "turn-1", turn)
         parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
         assert parent_attrs["llm.system"]["stringValue"] == "openai"
-        assert parent_attrs["llm.provider"]["stringValue"] == "openai"
+        assert "llm.provider" not in parent_attrs
 
-    def test_input_message_content_omitted_when_prompt_empty(self):
-        """Role is always set on the indexed message; content is only added
-        when the redacted text is non-empty."""
+    def test_null_session_meta_provider_omits_llm_provider_but_keeps_system(self, tmp_path):
+        """A rollout whose session_meta has model_provider: null must not
+        emit llm.provider, but llm.system is still always present."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            {
+                "timestamp": "2026-05-20T00:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": "s1", "model_provider": None},
+            },
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            {
+                "timestamp": "2026-05-20T00:00:00Z",
+                "type": "turn_context",
+                "payload": {"turn_id": "t1", "model": "gpt-5.5"},
+            },
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["model_provider"] is None
+
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "t1", turn)
+        parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert parent_attrs["llm.system"]["stringValue"] == "openai"
+        assert "llm.provider" not in parent_attrs
+
+    def test_input_message_omitted_entirely_when_prompt_empty(self):
+        """No indexed message (neither role nor content) is written when the
+        content is empty -- a turn with no user/assistant message must not
+        claim a message that was never observed."""
         turn = {
             "trace_count": 1,
             "turn_start_ms": 1000,
@@ -712,9 +769,9 @@ class TestBuildAndSendSpans:
         with patcher:
             _build_and_send_spans("sess-1", "turn-1", turn)
         parent_attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
-        assert parent_attrs["llm.input_messages.0.message.role"]["stringValue"] == "user"
+        assert "llm.input_messages.0.message.role" not in parent_attrs
         assert "llm.input_messages.0.message.content" not in parent_attrs
-        assert parent_attrs["llm.output_messages.0.message.role"]["stringValue"] == "assistant"
+        assert "llm.output_messages.0.message.role" not in parent_attrs
         assert "llm.output_messages.0.message.content" not in parent_attrs
 
     def test_indexed_messages_respect_redaction(self, monkeypatch):
@@ -759,11 +816,15 @@ class TestLlmIdentity:
     def test_azure_provider_gives_openai_system(self):
         assert _llm_identity("gpt-4o", "azure") == ("openai", "azure")
 
-    def test_ollama_provider_with_non_openai_model_gives_ollama_system(self):
-        assert _llm_identity("llama3", "ollama") == ("ollama", "ollama")
+    def test_llama_model_gives_meta_system_regardless_of_provider(self):
+        """Model-family match wins over provider: llama on ollama is still
+        llm.system=meta (Meta's well-known value), llm.provider=ollama."""
+        assert _llm_identity("llama3", "ollama") == ("meta", "ollama")
 
     def test_missing_provider_defaults_to_openai(self):
-        assert _llm_identity("gpt-5-codex", None) == ("openai", "openai")
+        # No model_provider observed -> llm.provider is omitted (None), not
+        # fabricated as "openai".
+        assert _llm_identity("gpt-5-codex", None) == ("openai", None)
 
     def test_codex_in_model_name_gives_openai_system_regardless_of_provider(self):
         # The model name is a stronger signal than an unrecognized provider id.
@@ -774,6 +835,29 @@ class TestLlmIdentity:
     def test_o_series_model_prefix_gives_openai_system(self):
         for model in ("o1-preview", "o3-mini", "o4-mini"):
             assert _llm_identity(model, "some-provider")[0] == "openai"
+
+    def test_deepseek_model_on_azure_gives_deepseek_system(self):
+        assert _llm_identity("DeepSeek-R1", "azure") == ("deepseek", "azure")
+
+    def test_unknown_model_and_provider_uses_provider_as_custom_system(self):
+        # Neither model nor provider is a recognized family -> the provider
+        # id itself is used as the (spec-permitted) custom system value.
+        assert _llm_identity("some-custom-model", "my-proxy") == ("my-proxy", "my-proxy")
+
+    def test_claude_model_on_third_party_provider_gives_anthropic_system(self):
+        assert _llm_identity("claude-sonnet-4.5", "openrouter") == ("anthropic", "openrouter")
+
+    def test_null_provider_never_fabricated(self):
+        """model_provider observed as JSON null -> llm.provider is None."""
+        assert _llm_identity("gpt-5.5", None)[1] is None
+
+    def test_non_string_provider_treated_as_absent(self):
+        # A corrupt/unexpected field type must not raise and must not be
+        # treated as a real provider id.
+        assert _llm_identity("gpt-5", 123) == ("openai", None)
+
+    def test_non_string_model_treated_as_absent(self):
+        assert _llm_identity(None, "azure") == ("openai", "azure")
 
 
 # ---------------------------------------------------------------------------
