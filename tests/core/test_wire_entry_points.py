@@ -78,7 +78,6 @@ EXPECTED_HARNESS_ENTRY_POINTS = {
 
 # Setup wizards stay on core.setup.*
 EXPECTED_SETUP_ENTRY_POINTS = {
-    "arize-setup-claude": "core.setup.claude:main",
     "arize-setup-copilot": "core.setup.copilot:main",
     "arize-setup-cursor": "core.setup.cursor:main",
     "arize-setup-gemini": "core.setup.gemini:main",
