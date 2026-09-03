@@ -8,16 +8,6 @@ the full turn's data: user prompt, assistant message, token usage, and every
 tool call (shell, apply_patch, web_search, open_page) with structured args,
 output, and timing. We then ship one OTLP payload with the parent LLM span
 plus all TOOL child spans.
-
-This replaces an earlier design that relied on Codex's lifecycle hooks
-(SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop). Those hooks
-only cover SOME tool types (shell/apply_patch but not web_search), use a
-brittle hook-payload schema, and require explicit ``/hooks`` trust approval.
-The rollout JSONL covers every tool, has a stable JSON schema, and is the
-single source of truth for the session.
-
-Input contract: JSON as ``sys.argv[1]`` (NOT stdin -- Codex passes notify
-JSON as a CLI argument). No stdout response expected.
 """
 
 from __future__ import annotations
@@ -42,6 +32,7 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
+from core.constants import MODEL_FAMILY_SYSTEMS
 from tracing.codex.constants import get_codex_home
 from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 
@@ -113,20 +104,12 @@ def _iso_to_ms(ts: str) -> int:
 
 
 def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None":
-    """Walk the rollout JSONL and extract everything for one turn.
-
-    Returns a dict with: ``trace_count``, ``turn_start_ms``, ``turn_end_ms``,
-    ``duration_ms``, ``user_prompt``, ``assistant_output``, ``model``,
-    ``model_provider`` (from ``session_meta``, may be ``None``), ``cwd``,
-    ``permission_mode``, ``sandbox_mode``, ``token_usage`` (or None), and
-    ``tool_calls`` (a list of ``{tool, args, output, call_id, start_ts, end_ts}``).
-
-    Returns None if the turn isn't found.
-    """
+    """Walk the rollout JSONL and extract everything for one turn. Returns None if the
+    turn isn't found."""
     if not turn_id or not rollout_path.is_file():
         return None
 
-    fields = (
+    codex_token_count_fields = (
         "input_tokens",
         "output_tokens",
         "total_tokens",
@@ -134,7 +117,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
         "cache_write_input_tokens",
         "reasoning_output_tokens",
     )
-    token_sums: dict = {k: 0 for k in fields}
+    token_sums: dict = {k: 0 for k in codex_token_count_fields}
     observed_fields: set = set()
 
     in_turn = False
@@ -180,7 +163,6 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                     continue
 
                 # turn_context records carry per-turn settings (model, cwd, sandbox).
-                # They live at the outer level (no payload.type).
                 if outer == "turn_context" and isinstance(payload, dict):
                     if payload.get("turn_id") == turn_id:
                         model = payload.get("model") or model
@@ -242,7 +224,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                 # Token counts -- sum per-call deltas
                 if outer == "event_msg" and ptype == "token_count":
                     last = (payload.get("info") or {}).get("last_token_usage") or {}
-                    for k in fields:
+                    for k in codex_token_count_fields:
                         v = last.get(k)
                         if isinstance(v, int):
                             token_sums[k] += v
@@ -350,10 +332,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
     token_usage: "dict | None" = None
     if observed_fields:
         token_usage = {"model": model or ""}
-        # An OBSERVED zero is preserved as 0; a field never observed in any
-        # token_count event is omitted entirely (rather than coerced via
-        # `or None`), so downstream code can tell "zero" from "unknown".
-        field_to_key = {
+        codex_token_count_to_token_usage = {
             "input_tokens": "prompt_tokens",
             "output_tokens": "completion_tokens",
             "total_tokens": "total_tokens",
@@ -361,13 +340,12 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
             "cache_write_input_tokens": "cache_write_input_tokens",
             "reasoning_output_tokens": "reasoning_output_tokens",
         }
-        for field, key in field_to_key.items():
+        for field, key in codex_token_count_to_token_usage.items():
             if field in observed_fields:
                 token_usage[key] = token_sums[field]
         # Codex derives non_cached_input_tokens rather than serializing it
-        # (see protocol.rs); we do the same, only when BOTH input and cached
-        # were observed -- deriving from an unobserved (default-0) cached
-        # value would fabricate a number from unknown cache data.
+        # we do the same, but only when BOTH input and cached are observed
+        # otherwise, we'd be fabricating a number from unknown cache data
         if "input_tokens" in observed_fields and "cached_input_tokens" in observed_fields:
             token_usage["non_cached_input_tokens"] = max(
                 token_sums["input_tokens"] - token_sums["cached_input_tokens"], 0
@@ -394,25 +372,6 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 # Span assembly
 # ---------------------------------------------------------------------------
 
-
-# OpenInference's llm.system well-known values (spec/semantic_conventions.md):
-# anthropic, openai, vertexai, cohere, mistralai, xai, deepseek, amazon,
-# meta, ai21. Model-family substrings below map to those exact values --
-# "the respective value MUST be used" when one applies. Order matters: more
-# specific/likely substrings are checked first.
-_MODEL_FAMILY_SYSTEMS: "tuple[tuple[str, str], ...]" = (
-    ("codex", "openai"),
-    ("gpt-", "openai"),
-    ("claude", "anthropic"),
-    ("llama", "meta"),
-    ("deepseek", "deepseek"),
-    ("mixtral", "mistralai"),
-    ("mistral", "mistralai"),
-    ("gemini", "vertexai"),
-    ("grok", "xai"),
-    ("command-", "cohere"),
-)
-
 # o1/o3/o4 only as a whole model-name token (o1, o1-preview, ...), not as a
 # substring of an unrelated word.
 _O_SERIES_MODEL_RE = re.compile(r"^o[134](\b|-|$)")
@@ -421,31 +380,17 @@ _O_SERIES_MODEL_RE = re.compile(r"^o[134](\b|-|$)")
 def _llm_identity(model: "object", provider: "object") -> "tuple[str, str | None]":
     """Derive OpenInference ``llm.system``/``llm.provider`` for a Codex turn.
 
-    ``llm.system`` names the AI product/model family (e.g. ``openai``,
-    ``anthropic``, ``meta``); ``llm.provider`` names the hosting provider
-    (e.g. ``openai``, ``azure``, ``ollama``). They can differ (a Llama model
-    hosted on Ollama, a DeepSeek model hosted on Azure), so we derive them
-    separately instead of assuming every Codex session talks to
-    OpenAI-hosted models.
+    ``llm.system`` = the AI product/model family
+    ``llm.provider`` = the hosting provider.
+    Different bc DeepSeek models can be hosted on Azure, and other such cases.
 
-    Precedence for ``llm.system`` (OpenInference says a well-known value
-    MUST be used when one applies):
-      1. A model-family match on the model name (openai, anthropic, meta,
-         deepseek, mistralai, vertexai, xai, cohere, ...).
-      2. Else the provider, when it is ``openai`` or ``azure`` (both mean
-         an OpenAI-family model).
-      3. Else, when the provider itself is absent, ``"openai"`` -- Codex's
-         own built-in default provider id when ``session_meta`` omits the
-         field, and ``llm.system`` is required so we must emit something.
-      4. Else the provider id itself, as a spec-permitted custom value.
-
-    ``llm.provider`` is optional in the spec, so it is returned as ``None``
-    (meaning "do not emit the attribute") when ``model_provider`` was never
-    observed or was JSON ``null`` -- we never fabricate a hosting provider.
-
-    ``model``/``provider`` are accepted as ``object`` and type-guarded: any
-    non-string value (e.g. a corrupt rollout field) is treated as absent
-    rather than raising, so one bad field can't drop the whole turn's span.
+    For llm.system, per OpenInference, a well-known value MUST be used when one
+    applies:
+        1. A model-family match on the model name
+        2. Else, the provider, when it is ``openai`` or ``azure``
+        3. Else, when the provider is absent, ``"openai"``, which is the default
+           provider id when ``session_meta`` omits the field.
+        4. Else, the provider id itself as a spec permitted custom value
     """
     model_str = model if isinstance(model, str) else ""
     provider_str = provider if isinstance(provider, str) else None
@@ -457,7 +402,7 @@ def _llm_identity(model: "object", provider: "object") -> "tuple[str, str | None
     if _O_SERIES_MODEL_RE.match(model_lower):
         llm_system = "openai"
     else:
-        for substr, system in _MODEL_FAMILY_SYSTEMS:
+        for substr, system in MODEL_FAMILY_SYSTEMS:
             if substr in model_lower:
                 llm_system = system
                 break
@@ -474,13 +419,7 @@ def _llm_identity(model: "object", provider: "object") -> "tuple[str, str | None
 
 
 def _put_indexed_message(attrs: dict, prefix: str, role: str, content: str) -> None:
-    """Write one OpenInference indexed message attribute pair at index 0.
-
-    ``prefix`` is ``llm.input_messages`` or ``llm.output_messages``. Writes
-    nothing at all -- neither role nor content -- when ``content`` is empty,
-    so a turn with no user/assistant message doesn't claim a message that
-    was never observed.
-    """
+    """Write one OpenInference indexed message attribute pair at index 0."""
     if not content:
         return
     attrs[f"{prefix}.0.message.role"] = role
@@ -544,6 +483,7 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
         v = usage.get(src)
         if isinstance(v, int):
             attrs[dst] = v
+    # map the token_usage keys to the OpenInference attribute names
     for src, dst in (
         ("cached_input_tokens", "llm.token_count.prompt_details.cache_read"),
         ("cache_write_input_tokens", "llm.token_count.prompt_details.cache_write"),
@@ -618,7 +558,7 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
 
 
 def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> None:
-    """Fallback when no rollout file is found -- emit a single LLM span from
+    """Fallback when no rollout file or turn is found - emit a single LLM span from
     the notify payload alone."""
     assistant_msg = (
         input_json.get("last-assistant-message")
@@ -673,9 +613,8 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
         "codex.turn_id": turn_id,
         "codex.notify_fallback": "true",
         # Codex is OpenAI's own CLI and this fallback path has no rollout to
-        # say otherwise, so llm.system is trustworthy even here. llm.provider
-        # is left out -- we have no session_meta to confirm the hosting
-        # provider on this path.
+        # say otherwise, so llm.system is hardcoded to openai.
+        # llm.provider is left out bc we have no session_meta to confirm hosting
         "llm.system": "openai",
     }
     user_id = env.get_user_id(SERVICE_NAME)

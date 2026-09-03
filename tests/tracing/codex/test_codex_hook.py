@@ -72,7 +72,6 @@ def _attrs_of_span(span):
 
 
 class TestIsoToMs:
-
     def test_valid_iso_with_Z(self):
         assert _iso_to_ms("2026-05-20T23:42:45.649Z") > 0
 
@@ -92,7 +91,6 @@ class TestIsoToMs:
 
 
 class TestFindRolloutFile:
-
     def test_returns_none_when_root_missing(self, tmp_path):
         nonexistent = tmp_path / "no" / "sessions"
         assert _find_rollout_file("s1", sessions_root=nonexistent) is None
@@ -123,7 +121,6 @@ class TestFindRolloutFile:
 
 
 class TestExtractTurnFromRollout:
-
     def test_returns_none_for_missing_file(self, tmp_path):
         from pathlib import Path
 
@@ -240,8 +237,6 @@ class TestExtractTurnFromRollout:
         assert usage["cached_input_tokens"] == 80
         assert usage["cache_write_input_tokens"] == 7
         assert usage["reasoning_output_tokens"] == 5
-        # Codex doesn't serialize non_cached_input_tokens; we derive it the
-        # same way Codex itself does: max(input - cached, 0).
         assert usage["non_cached_input_tokens"] == 70
 
     def test_cache_write_input_tokens_summed_across_events(self, tmp_path):
@@ -292,9 +287,6 @@ class TestExtractTurnFromRollout:
         assert usage["completion_tokens"] == 0
         assert "reasoning_output_tokens" not in usage
         assert "cache_write_input_tokens" not in usage
-        # input_tokens was observed but cached_input_tokens never was --
-        # deriving non_cached_input_tokens from an unobserved cached value
-        # would fabricate a number, so it must be absent too.
         assert "non_cached_input_tokens" not in usage
 
     def test_non_cached_derived_only_when_both_input_and_cached_observed(self, tmp_path):
@@ -367,6 +359,33 @@ class TestExtractTurnFromRollout:
         assert tc["args"] == '{"cmd":"ls"}'
         assert tc["output"] == "file1\nfile2"
         assert tc["end_ts"] > tc["start_ts"]
+
+    def test_spawn_agent_function_call_keeps_argument_string(self, tmp_path):
+        """spawn_agent is a regular function_call: args stay the raw JSON
+        string (including the nested model field), not parsed or rewritten."""
+        spawn_args = '{"model": "gpt-5.4", "prompt": "investigate the bug"}'
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _resp(
+                {
+                    "type": "function_call",
+                    "name": "spawn_agent",
+                    "arguments": spawn_args,
+                    "call_id": "call_spawn_1",
+                },
+                ts="2026-05-20T00:00:01.000Z",
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert len(turn["tool_calls"]) == 1
+        tc = turn["tool_calls"][0]
+        assert tc["tool"] == "spawn_agent"
+        assert tc["call_id"] == "call_spawn_1"
+        assert tc["args"] == spawn_args
+        assert isinstance(tc["args"], str)
 
     def test_custom_tool_call_pairs_with_output_by_call_id(self, tmp_path):
         path = _write_rollout(
@@ -492,7 +511,6 @@ class TestExtractTurnFromRollout:
 
 
 class TestBuildAndSendSpans:
-
     def _send_capture(self):
         sent = []
         return sent, mock.patch(
@@ -594,6 +612,51 @@ class TestBuildAndSendSpans:
         assert child_attrs["codex.workspace"]["stringValue"] == "workspace"
         assert child_attrs["input.value"]["stringValue"] == '{"cmd":"ls"}'
         assert child_attrs["output.value"]["stringValue"] == "ok"
+
+    def test_spawn_agent_becomes_one_tool_span(self):
+        """A spawn_agent tool_calls entry is one TOOL child named spawn_agent,
+        not a nested AGENT trace. tool.id is the call_id; input.value is the
+        raw argument string, including the nested model field.
+
+        TODO: monitor how #114 affects this"""
+        spawn_args = '{"model": "gpt-5.4", "prompt": "investigate the bug"}'
+        turn = {
+            "trace_count": 1,
+            "turn_start_ms": 1000,
+            "turn_end_ms": 2000,
+            "user_prompt": "hi",
+            "assistant_output": "hello",
+            "model": "",
+            "cwd": "",
+            "permission_mode": "",
+            "sandbox_mode": "",
+            "token_usage": None,
+            "tool_calls": [
+                {
+                    "tool": "spawn_agent",
+                    "args": spawn_args,
+                    "output": "",
+                    "call_id": "call_spawn_1",
+                    "start_ts": 1100,
+                    "end_ts": 1200,
+                    "decision": None,
+                },
+            ],
+        }
+
+        sent, patcher = self._send_capture()
+        with patcher:
+            _build_and_send_spans("sess-1", "turn-1", turn)
+
+        spans = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert len(spans) == 2  # parent + 1 child
+        child = spans[1]
+        assert child["name"] == "spawn_agent"
+        child_attrs = _attrs_of_span(child)
+        assert child_attrs["openinference.span.kind"]["stringValue"] == "TOOL"
+        assert child_attrs["tool.name"]["stringValue"] == "spawn_agent"
+        assert child_attrs["tool.id"]["stringValue"] == "call_spawn_1"
+        assert child_attrs["input.value"]["stringValue"] == spawn_args
 
     def test_single_span_when_no_tool_calls(self):
         turn = {
@@ -809,7 +872,6 @@ class TestBuildAndSendSpans:
 
 
 class TestLlmIdentity:
-
     def test_openai_provider_gives_openai_system(self):
         assert _llm_identity("gpt-5.5", "openai") == ("openai", "openai")
 
@@ -866,7 +928,6 @@ class TestLlmIdentity:
 
 
 class TestHandleNotify:
-
     def test_ignores_non_agent_turn_complete(self):
         with mock.patch("tracing.codex.hooks.handlers.send_span_to_backend") as send:
             _handle_notify({"type": "session-start"})
@@ -942,7 +1003,6 @@ class TestHandleNotify:
 
 
 class TestNotifyEntryPoint:
-
     def test_tracing_disabled_returns_early(self, monkeypatch):
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "false")
         with mock.patch.object(sys, "argv", ["hook", "{}"]):
@@ -969,7 +1029,6 @@ class TestNotifyEntryPoint:
 
 
 class TestSendLegacySingleSpan:
-
     def test_emits_one_span_with_fallback_marker(self):
         sent = []
         with mock.patch(
