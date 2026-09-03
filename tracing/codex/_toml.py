@@ -34,10 +34,9 @@ except ImportError:
 # non-loopback host, or a different path) is third-party and must be left
 # alone.
 #
-# core/setup/codex.py (the standalone arize-setup-codex wizard) still
-# rewrites [otel] unconditionally on every run; it is out of scope for this
-# fix and is being deleted entirely in a follow-up (#132), so it does not
-# use these helpers.
+# The standalone arize-setup-codex wizard, which used to rewrite [otel]
+# unconditionally on every run, has been removed (see #132), so it no
+# longer needs to be considered here.
 
 _ARIZE_OTLP_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
 

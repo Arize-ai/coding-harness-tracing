@@ -51,8 +51,7 @@ This repo emits OpenTelemetry / OpenInference spans from AI coding-assistant har
 A new harness must mirror the existing layout used by `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, and `kiro`:
 
 - A `tracing/<harness>/` package (with hooks, span builders, and any harness-specific helpers).
-- A `core/setup/<harness>.py` setup wizard.
-- Console-script entry points registered in `pyproject.toml` under `[project.scripts]` (hooks and a `arize-setup-<harness>` wizard).
+- Console-script entry points registered in `pyproject.toml` under `[project.scripts]` (hooks).
 
 Flag any new harness that skips one of these.
 

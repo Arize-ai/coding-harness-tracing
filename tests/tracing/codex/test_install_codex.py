@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -1051,31 +1051,6 @@ class TestWriteEnvFile:
         p = tmp_path / "env.sh"
         codex_install._write_env_file(p)
         assert not p.exists()
-
-
-# ---------------------------------------------------------------------------
-# core/setup/codex.py delegation tests
-# ---------------------------------------------------------------------------
-
-
-class TestCoreSetupDelegation:
-    """Test that core/setup/codex.py delegates to tracing.codex/install.py."""
-
-    def test_install_delegates(self, fake_home, mock_prompts):
-        import core.setup.codex as setup_codex
-
-        mock_mod = MagicMock()
-        with patch.object(setup_codex, "_install_mod", mock_mod):
-            setup_codex.install(with_skills=True)
-            mock_mod.install.assert_called_once_with(with_skills=True)
-
-    def test_uninstall_delegates(self, fake_home):
-        import core.setup.codex as setup_codex
-
-        mock_mod = MagicMock()
-        with patch.object(setup_codex, "_install_mod", mock_mod):
-            setup_codex.uninstall()
-            mock_mod.uninstall.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
