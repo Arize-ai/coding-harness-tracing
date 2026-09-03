@@ -78,7 +78,6 @@ EXPECTED_HARNESS_ENTRY_POINTS = {
 
 # Setup wizards stay on core.setup.*
 EXPECTED_SETUP_ENTRY_POINTS = {
-    "arize-setup-opencode": "core.setup.opencode:main",
     "arize-setup-omp": "core.setup.omp:main",
     "arize-setup-devin": "core.setup.devin:main",
 }
