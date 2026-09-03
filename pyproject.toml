@@ -73,7 +73,6 @@ arize-hook-omp = "tracing.omp.hooks.handlers:main"
 # Devin hook
 arize-hook-devin = "tracing.devin.hooks.handlers:main"
 # Setup wizards
-arize-setup-omp = "core.setup.omp:main"
 arize-setup-devin = "core.setup.devin:main"
 
 [tool.pytest.ini_options]
