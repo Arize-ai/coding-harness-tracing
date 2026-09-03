@@ -155,6 +155,19 @@ class TestTomlHelpers:
         raw = p.read_text()
         assert 'desc = "it\'s a value"' in raw
 
+    def test_roundtrip_float(self, tmp_path):
+        """A float value round-trips as a float, not a string (issue #94 review)."""
+        data = {"otel_x": 1.5}
+        p = tmp_path / "config.toml"
+        codex_toml._toml_write(data, p)
+
+        raw = p.read_text()
+        assert "otel_x = 1.5" in raw
+
+        parsed = codex_toml._toml_load_strict(p)
+        assert parsed["otel_x"] == 1.5
+        assert isinstance(parsed["otel_x"], float)
+
 
 class TestTomlLoadStrict:
     """Unit tests for _toml_load_strict's own contract, independent of install()."""
@@ -589,6 +602,258 @@ class TestDryRun:
 
         assert toml_path.is_file()
         assert env_path.is_file()
+
+
+# ---------------------------------------------------------------------------
+# Legacy [otel.exporter.otlp-http] cleanup — third-party preservation (#94)
+# ---------------------------------------------------------------------------
+#
+# cleanup_legacy_install() runs at the top of both install() and uninstall()
+# (tracing/codex/install.py), calling _strip_v1_otel_block() with the same
+# arguments either way — so exercising that function once for each of these
+# scenarios covers both call sites. Ownership requires the exact shape Arize
+# writes (loopback /v1/logs endpoint, protocol = "json", no other keys); a
+# loopback host/port alone must never be treated as proof of ownership.
+
+
+_THIRD_PARTY_OTEL_FIXTURE = (
+    "[otel]\n"
+    "log_user_prompt = true\n"
+    'metrics_exporter = "none"\n'
+    "\n"
+    "[otel.exporter.otlp-http]\n"
+    'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+    'protocol = "binary"\n'
+    'headers = { Authorization = "Bearer example-redacted" }\n'
+    "\n"
+    "[otel.trace_exporter.otlp-http]\n"
+    'endpoint = "http://127.0.0.1:4318/v1/traces"\n'
+    'protocol = "binary"\n'
+)
+
+
+class TestLegacyOtelCleanup:
+    """Regression coverage for issue #94."""
+
+    def test_third_party_fixture_untouched_on_install_path(self, tmp_path):
+        """Simulates the cleanup call install() makes at startup."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(_THIRD_PARTY_OTEL_FIXTURE)
+
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == _THIRD_PARTY_OTEL_FIXTURE
+
+    def test_third_party_fixture_untouched_on_uninstall_path(self, tmp_path):
+        """uninstall() calls the identical cleanup — running it again must still no-op."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(_THIRD_PARTY_OTEL_FIXTURE)
+
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)  # simulated install-path cleanup
+        _strip_v1_otel_block(config_path)  # simulated uninstall-path cleanup
+
+        assert config_path.read_text() == _THIRD_PARTY_OTEL_FIXTURE
+
+    def test_arize_owned_block_is_removed_other_otel_entries_survive(self, tmp_path):
+        """An Arize-owned exporter is removed; sibling [otel] content survives."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "[otel]\n"
+            "log_user_prompt = true\n"
+            "\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+            "\n"
+            "[otel.trace_exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/traces"\n'
+            'protocol = "binary"\n'
+        )
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        content = config_path.read_text()
+        assert "[otel.exporter.otlp-http]" not in content
+        assert "http://127.0.0.1:4318/v1/logs" not in content
+        assert "log_user_prompt = true" in content
+        assert "[otel.trace_exporter.otlp-http]" in content
+        assert 'endpoint = "http://127.0.0.1:4318/v1/traces"' in content
+
+    def test_owned_looking_block_with_extra_key_is_preserved(self, tmp_path):
+        """A block shaped like Arize's but carrying an extra key (headers) is
+        third-party and must survive byte-for-byte."""
+        config_path = tmp_path / "config.toml"
+        original = (
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+            'headers = { Authorization = "Bearer secret" }\n'
+        )
+        config_path.write_text(original)
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == original
+
+    def test_dry_run_changes_nothing(self, tmp_path, monkeypatch):
+        """ARIZE_DRY_RUN=true must not touch the file even when the block is owned."""
+        config_path = tmp_path / "config.toml"
+        original = (
+            "[otel]\nlog_user_prompt = true\n\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+        )
+        config_path.write_text(original)
+        monkeypatch.setenv("ARIZE_DRY_RUN", "true")
+
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == original
+
+    def test_cleanup_is_idempotent(self, tmp_path):
+        """Running the cleanup twice removes the owned block once, then no-ops."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "[otel]\nlog_user_prompt = true\n\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+        )
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+        once = config_path.read_text()
+        assert "[otel.exporter.otlp-http]" not in once
+
+        _strip_v1_otel_block(config_path)
+        twice = config_path.read_text()
+        assert twice == once
+
+    def test_inline_table_syntax_is_left_untouched(self, tmp_path):
+        """An Arize-shaped exporter written as an inline table has no literal
+        ``[otel.exporter.otlp-http]`` header line to locate — leave it alone
+        rather than falling back to a dict rewrite that could touch the wrong
+        text or (per issue #94 review) append a duplicate table."""
+        config_path = tmp_path / "config.toml"
+        original = "[otel.exporter]\n" 'otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" }\n'
+        config_path.write_text(original)
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == original
+
+    def test_quoted_key_header_is_left_untouched(self, tmp_path):
+        """A quoted-key header (``[otel.exporter."otlp-http"]``) is not the
+        literal bare header Arize writes, so it must be left alone too."""
+        config_path = tmp_path / "config.toml"
+        original = '[otel.exporter."otlp-http"]\n' 'endpoint = "http://127.0.0.1:4318/v1/logs"\n' 'protocol = "json"\n'
+        config_path.write_text(original)
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == original
+
+    def test_header_inside_multiline_string_is_not_matched(self, tmp_path):
+        """A line that merely *looks like* the header inside a multi-line
+        string must not be treated as the table to remove; the real table
+        elsewhere in the file is still removed, and the string survives."""
+        config_path = tmp_path / "config.toml"
+        original = (
+            "[otel]\n"
+            'note = """\n'
+            "[otel.exporter.otlp-http]\n"
+            '"""\n'
+            "\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+        )
+        config_path.write_text(original)
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        content = config_path.read_text()
+        # The string is untouched, including the fake header line inside it.
+        assert '"""\n[otel.exporter.otlp-http]\n"""' in content
+        # The real table is gone.
+        assert content.count("[otel.exporter.otlp-http]") == 1
+        assert "http://127.0.0.1:4318/v1/logs" not in content
+        # And the file is valid TOML again.
+        import tomllib
+
+        tomllib.loads(content)
+
+    def test_trailing_comment_before_next_table_is_preserved(self, tmp_path):
+        """A comment that belongs to the table *after* the removed one must
+        survive the removal (issue #94 review)."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+            "\n"
+            "# my own trace exporter, do not touch\n"
+            "[otel.trace_exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/traces"\n'
+            'protocol = "binary"\n'
+        )
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        content = config_path.read_text()
+        assert "[otel.exporter.otlp-http]" not in content
+        assert "# my own trace exporter, do not touch" in content
+        assert "[otel.trace_exporter.otlp-http]" in content
+
+
+class TestEndToEndThirdPartyOtelPreservation:
+    """End-to-end regression for issue #94, driven through the real
+    install()/uninstall() entry points (not just the isolated
+    _strip_v1_otel_block() unit above), covering the exact issue fixture.
+
+    install()/uninstall() rewrite config.toml through _codex_toml_apply()/
+    _codex_toml_remove(), which round-trip the whole file via a dict
+    (_toml_write()) — a separate, pre-existing limitation (drops comments,
+    restructures inline tables) called out as out of scope in the issue #94
+    review. So this asserts on *parsed* TOML values, not raw bytes.
+    """
+
+    def test_install_then_uninstall_preserves_third_party_otel(self, fake_home, mock_prompts):
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text(_THIRD_PARTY_OTEL_FIXTURE)
+
+        def _assert_third_party_otel_intact():
+            data = codex_toml._toml_load_strict(toml_path)
+            otel = data["otel"]
+            assert otel["log_user_prompt"] is True
+            assert otel["metrics_exporter"] == "none"
+            exporter = otel["exporter"]["otlp-http"]
+            assert exporter["endpoint"] == "http://127.0.0.1:4318/v1/logs"
+            assert exporter["protocol"] == "binary"
+            assert exporter["headers"] == {"Authorization": "Bearer example-redacted"}
+            trace_exporter = otel["trace_exporter"]["otlp-http"]
+            assert trace_exporter["endpoint"] == "http://127.0.0.1:4318/v1/traces"
+            assert trace_exporter["protocol"] == "binary"
+
+        codex_install.install()
+        _assert_third_party_otel_intact()
+
+        codex_install.uninstall()
+        _assert_third_party_otel_intact()
 
 
 # ---------------------------------------------------------------------------

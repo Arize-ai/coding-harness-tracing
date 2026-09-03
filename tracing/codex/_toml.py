@@ -20,6 +20,94 @@ except ImportError:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Arize-ownership detection for [otel.exporter.otlp-http]
+# ---------------------------------------------------------------------------
+#
+# Used by tracing/codex/install_legacy.py's legacy-install cleanup, which
+# runs on both install() and uninstall(), to decide what "ours" means. A
+# loopback host/port alone does not prove ownership — a user's own local
+# collector can live at 127.0.0.1 too — so ownership requires the *exact*
+# shape Arize itself writes: only `endpoint` and `protocol` keys, `protocol
+# = "json"`, and an endpoint of the form `http(s)://127.0.0.1:<port>/v1/logs`.
+# Anything else (extra keys such as `headers`/`tls`, `protocol = "binary"`, a
+# non-loopback host, or a different path) is third-party and must be left
+# alone.
+#
+# core/setup/codex.py (the standalone arize-setup-codex wizard) still
+# rewrites [otel] unconditionally on every run; it is out of scope for this
+# fix and is being deleted entirely in a follow-up (#132), so it does not
+# use these helpers.
+
+_ARIZE_OTLP_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
+
+
+def _is_arize_owned_otlp_exporter(table: object) -> bool:
+    """Return True only if *table* is provably an Arize-written OTLP exporter."""
+    if not isinstance(table, dict):
+        return False
+    if set(table.keys()) - {"endpoint", "protocol"}:
+        return False
+    endpoint = table.get("endpoint")
+    if not (isinstance(endpoint, str) and _ARIZE_OTLP_ENDPOINT_RE.match(endpoint)):
+        return False
+    return table.get("protocol") == "json"
+
+
+_ARIZE_OTLP_HEADER = "[otel.exporter.otlp-http]"
+
+
+def _toml_owned_exporter_span(text: str, endpoint: str) -> tuple[int, int] | None:
+    """Locate the literal, canonical Arize ``[otel.exporter.otlp-http]`` table.
+
+    Arize only ever writes this table one way: a bare header line, followed
+    by exactly two body lines — ``endpoint = "<endpoint>"`` and
+    ``protocol = "json"`` (order-independent), with no other content before
+    the next table header or EOF. Any other shape — an inline table, a
+    quoted or dotted-key header (``[otel.exporter."otlp-http"]``,
+    ``otel.exporter.otlp-http = ...``), or a header that merely *appears* as
+    a line inside a multi-line string — is not something we can safely
+    locate and edit, so this returns None for all of those instead of
+    guessing.
+
+    Callers must already know (via ``_is_arize_owned_otlp_exporter`` on the
+    parsed dict) that *some* Arize-shaped table exists before calling this;
+    this function's job is only to find *where in the text* it literally is,
+    so the caller can edit just those lines and leave everything else —
+    including comments and blank lines belonging to whatever table follows —
+    untouched.
+
+    The returned span's end excludes any trailing blank lines or comments
+    between the table's last body line and the next header/EOF, so removing
+    or replacing ``text[start:end]`` never disturbs a comment that belongs to
+    the following table (see issue #94 review). Returns None if zero or more
+    than one candidate header line has a body matching that exact shape —
+    ambiguity is treated the same as "not found": leave the file alone.
+    """
+    lines = text.splitlines(keepends=True)
+    expected = {f'endpoint = "{endpoint}"', 'protocol = "json"'}
+
+    matches: list[tuple[int, int]] = []
+    for start, line in enumerate(lines):
+        if line.strip() != _ARIZE_OTLP_HEADER:
+            continue
+        end = start + 1
+        body_end = start
+        body: list[str] = []
+        while end < len(lines) and not lines[end].lstrip().startswith("["):
+            stripped = lines[end].strip()
+            if stripped and not stripped.startswith("#"):
+                body.append(stripped)
+                body_end = end + 1
+            end += 1
+        if len(body) == 2 and set(body) == expected:
+            matches.append((start, body_end))
+
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def _toml_load_strict(path: Path) -> dict:
     """Load TOML without falling back to a lossy parser.
 
@@ -178,6 +266,8 @@ def _inline_table(table: dict) -> str:
             parts.append(f"{kk} = {'true' if v else 'false'}")
         elif isinstance(v, int):
             parts.append(f"{kk} = {v}")
+        elif isinstance(v, float):
+            parts.append(f"{kk} = {v!r}")
         elif isinstance(v, list):
             if _is_table_array(v):
                 items = ", ".join(_inline_table(d) for d in v)
@@ -199,6 +289,8 @@ def _toml_write_value(key: str, val: object, lines: list[str]) -> None:
         lines.append(f"{k} = {'true' if val else 'false'}")
     elif isinstance(val, int):
         lines.append(f"{k} = {val}")
+    elif isinstance(val, float):
+        lines.append(f"{k} = {val!r}")
     else:
         lines.append(f"{k} = {_toml_string_literal(val)}")
 
