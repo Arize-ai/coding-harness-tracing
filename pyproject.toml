@@ -73,7 +73,6 @@ arize-hook-omp = "tracing.omp.hooks.handlers:main"
 # Devin hook
 arize-hook-devin = "tracing.devin.hooks.handlers:main"
 # Setup wizards
-arize-setup-copilot = "core.setup.copilot:main"
 arize-setup-cursor = "core.setup.cursor:main"
 arize-setup-gemini = "core.setup.gemini:main"
 arize-setup-kiro = "core.setup.kiro:main"

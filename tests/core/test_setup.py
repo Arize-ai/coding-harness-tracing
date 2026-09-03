@@ -1245,60 +1245,6 @@ class TestInfoErr:
 
 
 # ---------------------------------------------------------------------------
-# Copilot setup tests (core.setup.copilot)
-# ---------------------------------------------------------------------------
-
-
-class TestCopilotSetup:
-    """Tests for core.setup.copilot."""
-
-    def test_main_keyboard_interrupt(self):
-        """main() catches KeyboardInterrupt gracefully."""
-        from core.setup.copilot import main
-
-        with patch("core.setup.copilot._run", side_effect=KeyboardInterrupt):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 1
-
-    def test_main_eof_error(self):
-        """main() catches EOFError gracefully."""
-        from core.setup.copilot import main
-
-        with patch("core.setup.copilot._run", side_effect=EOFError):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 1
-
-    def test_run_delegates_to_installer(self):
-        """_run() delegates to tracing.copilot/install.py install()."""
-        import core.setup.copilot as copilot_mod
-
-        mock_mod = MagicMock()
-        with patch.object(copilot_mod, "_install_mod", mock_mod):
-            copilot_mod._run()
-            mock_mod.install.assert_called_once()
-
-    def test_install_delegates_to_installer(self):
-        """install() delegates to tracing.copilot/install.py install()."""
-        import core.setup.copilot as copilot_mod
-
-        mock_mod = MagicMock()
-        with patch.object(copilot_mod, "_install_mod", mock_mod):
-            copilot_mod.install()
-            mock_mod.install.assert_called_once()
-
-    def test_uninstall_delegates_to_installer(self):
-        """uninstall() delegates to tracing.copilot/install.py uninstall()."""
-        import core.setup.copilot as copilot_mod
-
-        mock_mod = MagicMock()
-        with patch.object(copilot_mod, "_install_mod", mock_mod):
-            copilot_mod.uninstall()
-            mock_mod.uninstall.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
 # Gemini setup tests (core.setup.gemini)
 # ---------------------------------------------------------------------------
 
@@ -1373,15 +1319,8 @@ class TestEntryPoints:
         """pyproject.toml defines all five setup wizard entry points."""
         pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
         content = pyproject_path.read_text()
-        assert 'arize-setup-copilot = "core.setup.copilot:main"' in content
         assert 'arize-setup-cursor = "core.setup.cursor:main"' in content
         assert 'arize-setup-gemini = "core.setup.gemini:main"' in content
-
-    def test_copilot_main_is_callable(self):
-        """core.setup.copilot.main is importable and callable."""
-        from core.setup.copilot import main
-
-        assert callable(main)
 
     def test_cursor_main_is_callable(self):
         """core.setup.cursor.main is importable and callable."""
