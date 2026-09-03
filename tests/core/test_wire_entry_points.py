@@ -76,11 +76,6 @@ EXPECTED_HARNESS_ENTRY_POINTS = {
     "arize-hook-devin": "tracing.devin.hooks.handlers:main",
 }
 
-# Setup wizards stay on core.setup.*
-EXPECTED_SETUP_ENTRY_POINTS = {
-    "arize-setup-devin": "core.setup.devin:main",
-}
-
 
 def _parse_pyproject_scripts():
     """Parse [project.scripts] from pyproject.toml."""
@@ -118,21 +113,17 @@ class TestPyprojectEntryPointsUpdated:
         assert name in self.scripts, f"Missing entry point: {name}"
         assert self.scripts[name] == target, f"{name}: expected '{target}', got '{self.scripts[name]}'"
 
-    @pytest.mark.parametrize("name,target", list(EXPECTED_SETUP_ENTRY_POINTS.items()))
-    def test_setup_entry_point_unchanged(self, name, target):
-        """arize-setup-* entry points still point at core.setup.*."""
-        assert name in self.scripts, f"Missing setup entry point: {name}"
-        assert self.scripts[name] == target
-
     def test_no_core_hooks_in_pyproject(self):
         """pyproject.toml must not reference core.hooks anywhere in entry points."""
         assert "core.hooks" not in self.pyproject_text
 
+    def test_no_setup_wizard_entry_points(self):
+        """The legacy arize-setup-* wizard entry points have been removed (#132)."""
+        assert not any(name.startswith("arize-setup-") for name in self.scripts)
+
     def test_total_entry_point_count(self):
-        """Entry point count should match expected harness + setup + arize-config."""
-        expected_count = (
-            len(EXPECTED_HARNESS_ENTRY_POINTS) + len(EXPECTED_SETUP_ENTRY_POINTS) + 1
-        )  # +1 for arize-config
+        """Entry point count should match expected harness + arize-config."""
+        expected_count = len(EXPECTED_HARNESS_ENTRY_POINTS) + 1  # +1 for arize-config
         assert (
             len(self.scripts) == expected_count
         ), f"Expected {expected_count} entry points, got {len(self.scripts)}: {sorted(self.scripts.keys())}"

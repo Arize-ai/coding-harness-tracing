@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for core/setup/ — shared utilities and per-harness setup wizards."""
+"""Tests for core/setup/ — shared setup utilities used by the harness installers."""
 
 import json
 import os

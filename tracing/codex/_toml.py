@@ -34,7 +34,7 @@ except ImportError:
 # non-loopback host, or a different path) is third-party and must be left
 # alone.
 #
-# The standalone arize-setup-codex wizard, which used to rewrite [otel]
+# The standalone codex setup wizard, which used to rewrite [otel]
 # unconditionally on every run, has been removed (see #132), so it no
 # longer needs to be considered here.
 
