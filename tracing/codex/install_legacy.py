@@ -207,21 +207,7 @@ def _remove_windows_user_path_block() -> None:
 
 def _strip_v1_otel_block(path: Path) -> None:
     """Strip a stale v1 ``[otel.exporter.otlp-http]`` block pointing at the
-    local buffer service from ~/.codex/config.toml. Idempotent; no-op if the
-    file or block is absent, or if the table isn't provably Arize-owned (see
-    ``_is_arize_owned_otlp_exporter`` — a loopback host/port alone does not
-    prove ownership, so a third-party exporter is left untouched).
-
-    Removal is a targeted line-based edit of just the literal, canonical
-    ``[otel.exporter.otlp-http]`` table (see ``_toml_owned_exporter_span``),
-    so comments and everything else in the file are preserved unchanged. If
-    the table is Arize-shaped but its canonical header can't be located
-    (written as an inline table, a quoted/dotted key, or merely appearing as
-    text inside a multi-line string), that's treated as *not* provably ours
-    either — we leave the file untouched rather than risk editing the wrong
-    thing. There is no dict-rewrite fallback: without a safely located span
-    we do nothing.
-    """
+    local buffer service from ~/.codex/config.toml."""
     if not path.is_file():
         return
 
@@ -257,10 +243,8 @@ def _strip_v1_otel_block(path: Path) -> None:
     lines = text.splitlines(keepends=True)
     start, end = span
     del lines[start:end]
-    # Collapse a blank line left immediately before + after the removed
-    # block down to one, mirroring normal TOML spacing. If the removed
-    # table was the very first thing in the file, drop a lone leading
-    # blank line entirely instead of leaving the file starting on blank.
+    # Collapse a blank line left immediately before and after the removed
+    # block down to one, mirroring normal TOML spacing.
     if start == 0:
         if lines and lines[0].strip() == "":
             del lines[0]
