@@ -221,6 +221,109 @@ class TestPromptUserId:
         assert result == ""
 
 
+class TestPromptProjectName:
+    """Tests for prompt_project_name() interactive branch (non_interactive() is False)."""
+
+    def test_accepts_default_on_blank_input(self):
+        from core.setup import prompt_project_name
+
+        with patch("builtins.input", return_value=""):
+            result = prompt_project_name("codex")
+        assert result == "codex"
+
+    def test_returns_custom_name(self):
+        from core.setup import prompt_project_name
+
+        with patch("builtins.input", return_value="my-project"):
+            result = prompt_project_name("codex")
+        assert result == "my-project"
+
+    def test_strips_whitespace(self):
+        from core.setup import prompt_project_name
+
+        with patch("builtins.input", return_value="  spaced  "):
+            result = prompt_project_name("codex")
+        assert result == "spaced"
+
+
+class TestPromptContentLogging:
+    """Tests for prompt_content_logging() interactive branch (non_interactive() is False)."""
+
+    def test_defaults_all_true_on_blank_answers(self):
+        from core.setup import prompt_content_logging
+
+        with patch("builtins.input", return_value=""):
+            with patch.object(sys.stdout, "isatty", return_value=False):
+                block = prompt_content_logging()
+        assert block == {"prompts": True, "tool_details": True, "tool_content": True}
+
+    def test_declines_all_with_no(self):
+        from core.setup import prompt_content_logging
+
+        with patch("builtins.input", return_value="n"):
+            with patch.object(sys.stdout, "isatty", return_value=False):
+                block = prompt_content_logging()
+        assert block == {"prompts": False, "tool_details": False, "tool_content": False}
+
+    def test_mixed_answers_per_category(self):
+        from core.setup import prompt_content_logging
+
+        inputs = iter(["n", "y", "no"])
+        with patch("builtins.input", lambda prompt="": next(inputs)):
+            with patch.object(sys.stdout, "isatty", return_value=False):
+                block = prompt_content_logging()
+        assert block == {"prompts": False, "tool_details": True, "tool_content": False}
+
+    def test_shows_colored_prompt_on_tty(self):
+        """The isatty()-and-not-Windows branch prints an ANSI-colored security banner."""
+        from core.setup import prompt_content_logging
+
+        with patch("builtins.input", return_value="y"):
+            with patch.object(sys.stdout, "isatty", return_value=True):
+                block = prompt_content_logging()
+        assert block == {"prompts": True, "tool_details": True, "tool_content": True}
+
+
+class TestWriteLoggingConfig:
+    """Tests for write_logging_config()."""
+
+    def test_writes_logging_block_to_new_config(self, tmp_path):
+        from core.setup import write_logging_config
+
+        config_path = str(tmp_path / "config.json")
+        block = {"prompts": True, "tool_details": False, "tool_content": False}
+
+        write_logging_config(block, config_path=config_path)
+
+        written = json.loads(Path(config_path).read_text())
+        assert written["logging"] == block
+
+    def test_merges_into_existing_config(self, tmp_path):
+        """Other top-level keys survive; only `logging` is replaced."""
+        from core.setup import write_logging_config
+
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps({"harnesses": {"codex": {"project_name": "codex"}}}))
+        block = {"prompts": False, "tool_details": True, "tool_content": True}
+
+        write_logging_config(block, config_path=str(config_path))
+
+        written = json.loads(config_path.read_text())
+        assert written["logging"] == block
+        assert written["harnesses"]["codex"]["project_name"] == "codex"
+
+    def test_dry_run_does_not_write(self, tmp_path, monkeypatch):
+        from core.setup import write_logging_config
+
+        monkeypatch.setenv("ARIZE_DRY_RUN", "true")
+        config_path = tmp_path / "config.json"
+        block = {"prompts": True, "tool_details": True, "tool_content": True}
+
+        write_logging_config(block, config_path=str(config_path))
+
+        assert not config_path.exists()
+
+
 class TestNonInteractive:
     """Tests for non-interactive resolution of the four setup prompts.
 

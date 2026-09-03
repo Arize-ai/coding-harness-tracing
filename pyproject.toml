@@ -72,7 +72,6 @@ arize-hook-opencode = "tracing.opencode.hooks.handlers:main"
 arize-hook-omp = "tracing.omp.hooks.handlers:main"
 # Devin hook
 arize-hook-devin = "tracing.devin.hooks.handlers:main"
-# Setup wizards
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
