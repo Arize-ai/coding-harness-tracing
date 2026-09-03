@@ -5,7 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -1079,94 +1079,3 @@ class TestInfoErr:
         captured = capsys.readouterr().err
         assert "[arize] error message" in captured
         assert "\033[" not in captured
-
-
-# ---------------------------------------------------------------------------
-# Gemini setup tests (core.setup.gemini)
-# ---------------------------------------------------------------------------
-
-
-class TestGeminiSetup:
-    """Tests for core.setup.gemini."""
-
-    def test_main_keyboard_interrupt(self):
-        """main() catches KeyboardInterrupt gracefully."""
-        from core.setup.gemini import main
-
-        with patch("core.setup.gemini._run", side_effect=KeyboardInterrupt):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 1
-
-    def test_main_eof_error(self):
-        """main() catches EOFError gracefully."""
-        from core.setup.gemini import main
-
-        with patch("core.setup.gemini._run", side_effect=EOFError):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 1
-
-    def test_main_prints_cancelled_on_interrupt(self, capsys):
-        """main() prints 'Setup cancelled.' on KeyboardInterrupt."""
-        from core.setup.gemini import main
-
-        with patch("core.setup.gemini._run", side_effect=KeyboardInterrupt):
-            with pytest.raises(SystemExit):
-                main()
-        assert "Setup cancelled." in capsys.readouterr().out
-
-    def test_run_delegates_to_installer(self):
-        """_run() delegates to tracing.gemini/install.py install()."""
-        import core.setup.gemini as gemini_mod
-
-        mock_mod = MagicMock()
-        with patch.object(gemini_mod, "_install_mod", mock_mod):
-            gemini_mod._run()
-            mock_mod.install.assert_called_once()
-
-    def test_install_delegates_to_installer(self):
-        """install() delegates to tracing.gemini/install.py install()."""
-        import core.setup.gemini as gemini_mod
-
-        mock_mod = MagicMock()
-        with patch.object(gemini_mod, "_install_mod", mock_mod):
-            gemini_mod.install()
-            mock_mod.install.assert_called_once()
-
-    def test_uninstall_delegates_to_installer(self):
-        """uninstall() delegates to tracing.gemini/install.py uninstall()."""
-        import core.setup.gemini as gemini_mod
-
-        mock_mod = MagicMock()
-        with patch.object(gemini_mod, "_install_mod", mock_mod):
-            gemini_mod.uninstall()
-            mock_mod.uninstall.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Entry point registration tests
-# ---------------------------------------------------------------------------
-
-
-class TestEntryPoints:
-    """Tests that entry points are properly defined in pyproject.toml."""
-
-    def test_pyproject_has_setup_entry_points(self):
-        """pyproject.toml defines all five setup wizard entry points."""
-        pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
-        content = pyproject_path.read_text()
-        assert 'arize-setup-gemini = "core.setup.gemini:main"' in content
-
-    def test_gemini_main_is_callable(self):
-        """core.setup.gemini.main is importable and callable."""
-        from core.setup.gemini import main
-
-        assert callable(main)
-
-    def test_gemini_install_uninstall_importable(self):
-        """core.setup.gemini exports install and uninstall."""
-        from core.setup.gemini import install, uninstall
-
-        assert callable(install)
-        assert callable(uninstall)
