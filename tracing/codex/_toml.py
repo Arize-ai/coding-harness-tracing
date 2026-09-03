@@ -19,6 +19,56 @@ except ImportError:
     except ImportError:
         pass
 
+_ARIZE_OTLP_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
+
+
+def _is_arize_owned_otlp_exporter(table: object) -> bool:
+    """Return True only if *table* is provably an Arize-written OTLP exporter."""
+    if not isinstance(table, dict):
+        return False
+    if set(table.keys()) - {"endpoint", "protocol"}:
+        return False
+    endpoint = table.get("endpoint")
+    if not (isinstance(endpoint, str) and _ARIZE_OTLP_ENDPOINT_RE.match(endpoint)):
+        return False
+    return table.get("protocol") == "json"
+
+
+_ARIZE_OTLP_HEADER = "[otel.exporter.otlp-http]"
+
+
+def _toml_owned_exporter_span(text: str, endpoint: str) -> tuple[int, int] | None:
+    """Locate the literal, canonical Arize ``[otel.exporter.otlp-http]`` table.
+
+    Arize only ever writes this table one way: a bare header line, followed
+    by exactly two body lines — ``endpoint = "<endpoint>"`` and
+    ``protocol = "json"`` with no other content before the next table header or
+    EOF. Any other shape is not something we can safely locate and edit, so this
+    returns None for all of those instead of guessing.
+    """
+    lines = text.splitlines(keepends=True)
+    expected = {f'endpoint = "{endpoint}"', 'protocol = "json"'}
+
+    matches: list[tuple[int, int]] = []
+    for start, line in enumerate(lines):
+        if line.strip() != _ARIZE_OTLP_HEADER:
+            continue
+        end = start + 1
+        body_end = start
+        body: list[str] = []
+        while end < len(lines) and not lines[end].lstrip().startswith("["):
+            stripped = lines[end].strip()
+            if stripped and not stripped.startswith("#"):
+                body.append(stripped)
+                body_end = end + 1
+            end += 1
+        if len(body) == 2 and set(body) == expected:
+            matches.append((start, body_end))
+
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
 
 def _toml_load_strict(path: Path) -> dict:
     """Load TOML without falling back to a lossy parser.
@@ -178,6 +228,8 @@ def _inline_table(table: dict) -> str:
             parts.append(f"{kk} = {'true' if v else 'false'}")
         elif isinstance(v, int):
             parts.append(f"{kk} = {v}")
+        elif isinstance(v, float):
+            parts.append(f"{kk} = {v!r}")
         elif isinstance(v, list):
             if _is_table_array(v):
                 items = ", ".join(_inline_table(d) for d in v)
@@ -199,6 +251,8 @@ def _toml_write_value(key: str, val: object, lines: list[str]) -> None:
         lines.append(f"{k} = {'true' if val else 'false'}")
     elif isinstance(val, int):
         lines.append(f"{k} = {val}")
+    elif isinstance(val, float):
+        lines.append(f"{k} = {val!r}")
     else:
         lines.append(f"{k} = {_toml_string_literal(val)}")
 

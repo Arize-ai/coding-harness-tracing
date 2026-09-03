@@ -16,15 +16,11 @@ import time
 from pathlib import Path
 
 from core.setup import BIN_DIR, dry_run, info
-from tracing.codex._toml import _toml_load_strict, _toml_write
+from tracing.codex._toml import _is_arize_owned_otlp_exporter, _toml_load_strict, _toml_owned_exporter_span
 from tracing.codex.constants import get_codex_home
 
 _PATH_MARKER_BEGIN = "# >>> arize codex tracing PATH >>>"
 _PATH_MARKER_END = "# <<< arize codex tracing PATH <<<"
-
-# v1 OTLP endpoint pattern. Matches any 127.0.0.1 endpoint ending in /v1/logs
-# to catch installs where the user customized the buffer port via config.json.
-_V1_OTEL_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
 
 
 def _codex_proxy_shim_path() -> Path:
@@ -211,9 +207,7 @@ def _remove_windows_user_path_block() -> None:
 
 def _strip_v1_otel_block(path: Path) -> None:
     """Strip a stale v1 ``[otel.exporter.otlp-http]`` block pointing at the
-    local buffer service from ~/.codex/config.toml. Idempotent; no-op if the
-    file or block is absent, or if the endpoint targets a foreign collector.
-    """
+    local buffer service from ~/.codex/config.toml."""
     if not path.is_file():
         return
 
@@ -229,22 +223,34 @@ def _strip_v1_otel_block(path: Path) -> None:
     if not isinstance(exporter, dict):
         return
     otlp = exporter.get("otlp-http")
-    if not isinstance(otlp, dict):
-        return
-    endpoint = otlp.get("endpoint", "")
-    if not (isinstance(endpoint, str) and _V1_OTEL_ENDPOINT_RE.match(endpoint)):
+    if not isinstance(otlp, dict) or not _is_arize_owned_otlp_exporter(otlp):
         return
 
     if dry_run():
         info(f"would strip legacy [otel.exporter.otlp-http] block from {path}")
         return
 
-    del exporter["otlp-http"]
-    if not exporter:
-        del otel["exporter"]
-    if not otel:
-        del data["otel"]
-    _toml_write(data, path)
+    text = path.read_text()
+    span = _toml_owned_exporter_span(text, otlp["endpoint"])
+    if span is None:
+        info(
+            f"Found an Arize-shaped [otel.exporter.otlp-http] table in {path} written in "
+            "non-standard syntax (inline table, quoted/dotted key, or found inside a string) "
+            "— left untouched."
+        )
+        return
+
+    lines = text.splitlines(keepends=True)
+    start, end = span
+    del lines[start:end]
+    # Collapse a blank line left immediately before and after the removed
+    # block down to one, mirroring normal TOML spacing.
+    if start == 0:
+        if lines and lines[0].strip() == "":
+            del lines[0]
+    elif start < len(lines) and lines[start - 1].strip() == "" and lines[start].strip() == "":
+        del lines[start]
+    path.write_text("".join(lines))
     info(f"Removed legacy [otel.exporter.otlp-http] block from {path}")
 
 
