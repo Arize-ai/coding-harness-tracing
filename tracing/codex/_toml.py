@@ -54,20 +54,81 @@ _BARE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 def _toml_key(key: str) -> str:
     """Quote a TOML key if it contains characters not allowed in bare keys."""
-    if _BARE_KEY_RE.match(key):
+    if _BARE_KEY_RE.fullmatch(key):
         return key
-    escaped = key.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+
+    escapes = {
+        '"': '\\"',
+        "\\": "\\\\",
+        "\b": "\\b",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\f": "\\f",
+        "\r": "\\r",
+    }
+    escaped: list[str] = []
+    for ch in key:
+        if ch in escapes:
+            escaped.append(escapes[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            escaped.append(f"\\u{ord(ch):04X}")
+        else:
+            escaped.append(ch)
+    return f'"{"".join(escaped)}"'
 
 
 def _toml_unkey(key: str) -> str:
     """Inverse of _toml_key — strip quotes and unescape a TOML key."""
-    if len(key) >= 2 and key.startswith('"') and key.endswith('"'):
-        inner = key[1:-1]
-        inner = inner.replace('\\"', '"')
-        inner = inner.replace("\\\\", "\\")
-        return inner
-    return key
+    if len(key) < 2:
+        return key
+    if key.startswith("'") and key.endswith("'"):
+        return key[1:-1]
+    if not (key.startswith('"') and key.endswith('"')):
+        return key
+
+    inner = key[1:-1]
+    result: list[str] = []
+    simple_escapes = {
+        '"': '"',
+        "\\": "\\",
+        "b": "\b",
+        "t": "\t",
+        "n": "\n",
+        "f": "\f",
+        "r": "\r",
+    }
+    index = 0
+    while index < len(inner):
+        ch = inner[index]
+        if ch != "\\" or index + 1 >= len(inner):
+            result.append(ch)
+            index += 1
+            continue
+
+        escape = inner[index + 1]
+        if escape in simple_escapes:
+            result.append(simple_escapes[escape])
+            index += 2
+            continue
+        if escape in ("u", "U"):
+            width = 4 if escape == "u" else 8
+            digits = inner[index + 2 : index + 2 + width]
+            if len(digits) == width and all(c in "0123456789abcdefABCDEF" for c in digits):
+                try:
+                    codepoint = int(digits, 16)
+                    if 0xD800 <= codepoint <= 0xDFFF:
+                        raise ValueError
+                    result.append(chr(codepoint))
+                    index += width + 2
+                    continue
+                except ValueError:
+                    pass
+
+        # Preserve malformed or unknown escapes for a lossless round trip.
+        result.extend(("\\", escape))
+        index += 2
+
+    return "".join(result)
 
 
 def _toml_split_key_path(path: str) -> list[str]:
