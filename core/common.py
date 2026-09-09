@@ -598,6 +598,15 @@ def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
     )
 
 
+def _inject_arize_project_type(span_dict: dict) -> dict:
+    """Arize AX stores this resource attribute as models.project_type. Phoenix does not use it."""
+    return _inject_project_attr(
+        span_dict,
+        key="arize.project.type",
+        project_name="harness",
+    )
+
+
 def _inject_openinference_project_resource_attr(span_dict: dict, project_name: str) -> dict:
     """Phoenix routes OTLP-ingested spans to a project via this resource attribute."""
     return _inject_project_attr(
@@ -680,6 +689,7 @@ def send_span(span_dict: dict) -> bool:
 
             # Inject arize.project.name into span attributes (required by Arize)
             payload = _inject_arize_project_name(span_dict, project_name=project)
+            payload = _inject_arize_project_type(payload)
 
             # Normalize endpoint to HTTPS URL for HTTP/JSON transport
             if endpoint.startswith("http://") or endpoint.startswith("https://"):
