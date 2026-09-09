@@ -561,6 +561,12 @@ def resolve_backend(span_dict: dict) -> dict:
     return {"target": "none", "project_name": project_name}
 
 
+# OTLP resource attribute Arize ingest maps to models.project_type.
+# FromString accepts only application | harness | experiment.
+ARIZE_PROJECT_TYPE_KEY = "arize.project.type"
+ARIZE_PROJECT_TYPE_HARNESS = "harness"
+
+
 def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span: bool = False) -> dict:
     """Return a copy of span_dict with {key: project_name} added as a resource
     attribute on every resource in resourceSpans.
@@ -602,8 +608,8 @@ def _inject_arize_project_type(span_dict: dict) -> dict:
     """Arize AX stores this resource attribute as models.project_type. Phoenix does not use it."""
     return _inject_project_attr(
         span_dict,
-        key="arize.project.type",
-        project_name="harness",
+        key=ARIZE_PROJECT_TYPE_KEY,
+        project_name=ARIZE_PROJECT_TYPE_HARNESS,
     )
 
 
