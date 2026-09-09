@@ -567,8 +567,8 @@ ARIZE_PROJECT_TYPE_KEY = "arize.project.type"
 ARIZE_PROJECT_TYPE_HARNESS = "harness"
 
 
-def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span: bool = False) -> dict:
-    """Return a copy of span_dict with {key: project_name} added as a resource
+def _inject_project_attr(span_dict: dict, key: str, value: str, per_span: bool = False) -> dict:
+    """Return a copy of span_dict with {key: value} added as a resource
     attribute on every resource in resourceSpans.
 
     With per_span=True the attribute is also appended to each individual
@@ -578,10 +578,10 @@ def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span:
     O(payload) per send); untouched span data is shared with the original,
     which is never mutated.
     """
-    project_attr = {"key": key, "value": _to_otlp_attr_value(project_name)}
+    attr = {"key": key, "value": _to_otlp_attr_value(value)}
 
     def _with_attr(owner: dict) -> dict:
-        return {**owner, "attributes": [*owner.get("attributes", []), project_attr]}
+        return {**owner, "attributes": [*owner.get("attributes", []), attr]}
 
     new_resource_spans = []
     for rs in span_dict.get("resourceSpans", []):
@@ -599,7 +599,7 @@ def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
     return _inject_project_attr(
         span_dict,
         key="arize.project.name",
-        project_name=project_name,
+        value=project_name,
         per_span=True,
     )
 
@@ -609,7 +609,7 @@ def _inject_arize_project_type(span_dict: dict) -> dict:
     return _inject_project_attr(
         span_dict,
         key=ARIZE_PROJECT_TYPE_KEY,
-        project_name=ARIZE_PROJECT_TYPE_HARNESS,
+        value=ARIZE_PROJECT_TYPE_HARNESS,
     )
 
 
@@ -618,7 +618,7 @@ def _inject_openinference_project_resource_attr(span_dict: dict, project_name: s
     return _inject_project_attr(
         span_dict,
         key="openinference.project.name",
-        project_name=project_name,
+        value=project_name,
     )
 
 
