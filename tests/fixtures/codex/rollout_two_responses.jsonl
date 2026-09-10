@@ -1,0 +1,12 @@
+{"timestamp":"2026-05-20T10:00:00.000Z","type":"turn_context","payload":{"turn_id":"turn-fixture","model":"gpt-5.5-codex","cwd":"/workspace/demo","approval_policy":"on-request","sandbox_policy":{"type":"workspace-write"}}}
+{"timestamp":"2026-05-20T10:00:00.100Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-fixture","started_at":1779271200}}
+{"timestamp":"2026-05-20T10:00:00.150Z","type":"event_msg","payload":{"type":"user_message","message":"Inspect the repository"}}
+{"timestamp":"2026-05-20T10:00:00.200Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the repository"}]}}
+{"timestamp":"2026-05-20T10:00:00.300Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"I should list the files."}],"content":null,"encrypted_content":null}}
+{"timestamp":"2026-05-20T10:00:00.400Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call-fixture-1"}}
+{"timestamp":"2026-05-20T10:00:00.500Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":8,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}}}}
+{"timestamp":"2026-05-20T10:00:00.700Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-fixture-1","output":"README.md"}}
+{"timestamp":"2026-05-20T10:00:00.800Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Now I can answer."}],"content":null,"encrypted_content":null}}
+{"timestamp":"2026-05-20T10:00:00.900Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Repository inspected."}]}}
+{"timestamp":"2026-05-20T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"cached_input_tokens":15,"output_tokens":4,"reasoning_output_tokens":1,"total_tokens":24}}}}
+{"timestamp":"2026-05-20T10:00:01.100Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-fixture","last_agent_message":"Repository inspected."}}

@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 """Codex notify handler -- rollout-JSONL-driven span emission.
 
-Codex's `agent-turn-complete` notify callback is the only signal we listen
-for. When it fires, we locate the session's rollout JSONL at
-``~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<session_id>.jsonl`` and extract
-the full turn's data: user prompt, assistant message, token usage, and every
-tool call (shell, apply_patch, web_search, open_page) with structured args,
-output, and timing. We then ship one OTLP payload with the parent LLM span
-plus all TOOL child spans.
+Codex's `agent-turn-complete` notify callback is the signal used here. When it
+fires, we locate the session rollout JSONL and reconstruct each model response,
+its token usage, and the tool calls it originated. Complete rollouts produce:
 
-This replaces an earlier design that relied on Codex's lifecycle hooks
-(SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop). Those hooks
-only cover SOME tool types (shell/apply_patch but not web_search), use a
-brittle hook-payload schema, and require explicit ``/hooks`` trust approval.
-The rollout JSONL covers every tool, has a stable JSON schema, and is the
-single source of truth for the session.
+    CHAIN (turn)
+    ├── LLM (response cycle)
+    │   └── TOOL
+    └── LLM (next response cycle)
+
+Older or incomplete rollouts retain the legacy single-LLM/fallback behavior.
+The parser is fail-soft: unknown and malformed records do not prevent a basic
+turn trace from being exported.
 
 Input contract: JSON as ``sys.argv[1]`` (NOT stdin -- Codex passes notify
 JSON as a CLI argument). No stdout response expected.
@@ -24,8 +22,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from core.common import (
@@ -43,9 +41,35 @@ from core.common import (
 from core.common import send_span as send_span_to_backend
 from tracing.codex.constants import get_codex_home
 from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
+from tracing.codex.hooks.transcript import _extract_turn_from_rollout, _open_regular_text
 
 # Root of Codex's per-session rollout transcripts.
 _CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_MAX_CONTENT_CHARS = 64 * 1024
+_MAX_METADATA_CHARS = 4096
+
+
+def _logged_content(enabled: bool, value: object) -> str:
+    """Apply the content gate and bound enabled attributes for backend safety."""
+    text = value if isinstance(value, str) else ""
+    if not enabled:
+        return redact_content(False, text)
+    if len(text) <= _MAX_CONTENT_CHARS:
+        return text
+    visible = _MAX_CONTENT_CHARS
+    marker = ""
+    # The omitted count changes slightly when the marker itself consumes space;
+    # iterate to a stable fixed-width result while keeping the whole value bounded.
+    for _ in range(3):
+        omitted = len(text) - visible
+        marker = f"\n<truncated ({omitted} chars)>"
+        visible = _MAX_CONTENT_CHARS - len(marker)
+    return f"{text[:visible]}{marker}"
+
+
+def _metadata_text(value: object, limit: int = _MAX_METADATA_CHARS) -> str:
+    return value[:limit] if isinstance(value, str) else ""
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +81,7 @@ def _flex_get(d: dict, *keys, default: str = "") -> str:
     """Return the first non-empty value among `keys`, else `default`."""
     for key in keys:
         val = d.get(key)
-        if val is not None and val != "":
+        if isinstance(val, str) and val:
             return val
     return default
 
@@ -65,6 +89,26 @@ def _flex_get(d: dict, *keys, default: str = "") -> str:
 # ---------------------------------------------------------------------------
 # Rollout location
 # ---------------------------------------------------------------------------
+
+
+def _rollout_session_matches(path: Path, session_id: str) -> bool:
+    """Reject a candidate when its durable session metadata names another ID."""
+    try:
+        with _open_regular_text(path) as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "session_meta":
+                    continue
+                payload = record.get("payload")
+                return isinstance(payload, dict) and payload.get("id") == session_id
+    except (OSError, UnicodeError):
+        return False
+    # Older rollouts may not have session_meta; the literal filename still
+    # provides backward-compatible correlation.
+    return True
 
 
 def _find_rollout_file(session_id: str, sessions_root: "Path | None" = None) -> "Path | None":
@@ -79,289 +123,23 @@ def _find_rollout_file(session_id: str, sessions_root: "Path | None" = None) -> 
         root = get_codex_home() / "sessions"
     else:
         root = _CODEX_SESSIONS_ROOT
-    if not root.is_dir() or not session_id:
+    if not root.is_dir() or not _SESSION_ID_RE.fullmatch(session_id):
         return None
     try:
-        for path in root.rglob(f"rollout-*-{session_id}.jsonl"):
-            return path
+        root_resolved = root.resolve()
+        suffix = f"-{session_id}.jsonl"
+        for path in root.rglob("rollout-*.jsonl"):
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if root_resolved not in resolved.parents:
+                continue
+            if path.name.endswith(suffix) and _rollout_session_matches(path, session_id):
+                return path
     except OSError:
         return None
     return None
-
-
-# ---------------------------------------------------------------------------
-# Rollout extraction
-# ---------------------------------------------------------------------------
-
-
-def _iso_to_ms(ts: str) -> int:
-    """Convert an ISO-8601 timestamp string (e.g. ``2026-05-20T23:42:45.649Z``) to ms.
-
-    Returns 0 on any parse failure -- callers tolerate zero timestamps.
-    """
-    if not ts:
-        return 0
-    try:
-        # Python's fromisoformat doesn't accept the trailing Z prior to 3.11;
-        # normalize by swapping Z for +00:00 for compatibility.
-        normalized = ts.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(normalized)
-        return int(dt.timestamp() * 1000)
-    except (ValueError, TypeError):
-        return 0
-
-
-def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None":
-    """Walk the rollout JSONL and extract everything for one turn.
-
-    Returns a dict with: ``trace_count``, ``turn_start_ms``, ``turn_end_ms``,
-    ``duration_ms``, ``user_prompt``, ``assistant_output``, ``model``, ``cwd``,
-    ``permission_mode``, ``sandbox_mode``, ``token_usage`` (or None), and
-    ``tool_calls`` (a list of ``{tool, args, output, call_id, start_ts, end_ts}``).
-
-    Returns None if the turn isn't found.
-    """
-    if not turn_id or not rollout_path.is_file():
-        return None
-
-    fields = (
-        "input_tokens",
-        "output_tokens",
-        "total_tokens",
-        "cached_input_tokens",
-        "non_cached_input_tokens",
-        "reasoning_output_tokens",
-    )
-    token_sums: dict = {k: 0 for k in fields}
-    saw_tokens = False
-
-    in_turn = False
-    trace_count = 0
-    turn_start_ms = 0
-    turn_end_ms = 0
-    duration_ms: "int | None" = None
-    user_prompt = ""
-    assistant_output = ""
-    model = ""
-    cwd = ""
-    permission_mode = ""
-    sandbox_mode = ""
-
-    tool_calls: list = []
-    pending_func: dict = {}  # call_id -> entry being filled
-    pending_custom: dict = {}  # call_id -> Code Mode entry being filled
-    pending_search_end: "dict | None" = None  # most recent unmatched web_search_end
-
-    try:
-        with open(rollout_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                outer = obj.get("type")
-                payload = obj.get("payload") or {}
-                ptype = payload.get("type") if isinstance(payload, dict) else None
-                ts_ms = _iso_to_ms(obj.get("timestamp", ""))
-
-                # turn_context records carry per-turn settings (model, cwd, sandbox).
-                # They live at the outer level (no payload.type).
-                if outer == "turn_context" and isinstance(payload, dict):
-                    if payload.get("turn_id") == turn_id:
-                        model = payload.get("model") or model
-                        cwd = payload.get("cwd") or cwd
-                        permission_mode = payload.get("approval_policy") or permission_mode
-                        sandbox_mode = (payload.get("sandbox_policy") or {}).get("type") or sandbox_mode
-                    continue
-
-                if outer != "event_msg" and outer != "response_item":
-                    continue
-
-                # Turn boundaries
-                if outer == "event_msg" and ptype == "task_started":
-                    if in_turn:
-                        # Next turn started after ours -- stop walking.
-                        break
-                    trace_count += 1
-                    if payload.get("turn_id") == turn_id:
-                        in_turn = True
-                        # started_at is unix seconds; convert to ms.
-                        started_at = payload.get("started_at")
-                        if isinstance(started_at, int):
-                            turn_start_ms = started_at * 1000
-                        elif ts_ms:
-                            turn_start_ms = ts_ms
-                    continue
-
-                if not in_turn:
-                    continue
-
-                # task_complete: final assistant message + accurate timing
-                if outer == "event_msg" and ptype == "task_complete":
-                    msg = payload.get("last_agent_message")
-                    if msg:
-                        assistant_output = msg
-                    # completed_at is unix seconds; convert to ms.
-                    completed_at = payload.get("completed_at")
-                    if isinstance(completed_at, int):
-                        turn_end_ms = completed_at * 1000
-                    d = payload.get("duration_ms")
-                    if isinstance(d, int):
-                        duration_ms = d
-                    continue
-
-                # User prompt
-                if outer == "event_msg" and ptype == "user_message":
-                    msg = payload.get("message")
-                    if msg:
-                        user_prompt = msg
-                    continue
-
-                # Intermediate assistant message (overwritten by task_complete if both present)
-                if outer == "event_msg" and ptype == "agent_message":
-                    msg = payload.get("message")
-                    if msg:
-                        assistant_output = msg
-                    continue
-
-                # Token counts -- sum per-call deltas
-                if outer == "event_msg" and ptype == "token_count":
-                    last = (payload.get("info") or {}).get("last_token_usage") or {}
-                    for k in fields:
-                        v = last.get(k)
-                        if isinstance(v, int):
-                            token_sums[k] += v
-                            saw_tokens = True
-                    continue
-
-                # Shell / apply_patch tool call
-                if outer == "response_item" and ptype == "function_call":
-                    call_id = payload.get("call_id") or ""
-                    entry = {
-                        "tool": payload.get("name") or "function_call",
-                        "args": payload.get("arguments") or "",
-                        "output": "",
-                        "call_id": call_id,
-                        "start_ts": ts_ms,
-                        "end_ts": ts_ms,
-                        "decision": None,
-                    }
-                    tool_calls.append(entry)
-                    if call_id:
-                        pending_func[call_id] = entry
-                    continue
-
-                if outer == "response_item" and ptype == "function_call_output":
-                    call_id = payload.get("call_id") or ""
-                    pending = pending_func.get(call_id) if call_id else None
-                    if pending is not None:
-                        pending["output"] = payload.get("output") or ""
-                        pending["end_ts"] = ts_ms or pending["end_ts"]
-                    continue
-
-                # Code Mode exposes its outer exec invocation as a custom tool
-                # call rather than a function_call. Pair it with the durable
-                # output record by call_id so it is rendered like other tools.
-                if outer == "response_item" and ptype == "custom_tool_call":
-                    call_id = payload.get("call_id") or ""
-                    entry = {
-                        "tool": payload.get("name") or "custom_tool_call",
-                        "args": payload.get("input") or "",
-                        "output": "",
-                        "call_id": call_id,
-                        "start_ts": ts_ms,
-                        "end_ts": ts_ms,
-                        "decision": None,
-                    }
-                    tool_calls.append(entry)
-                    if call_id:
-                        pending_custom[call_id] = entry
-                    continue
-
-                if outer == "response_item" and ptype == "custom_tool_call_output":
-                    call_id = payload.get("call_id") or ""
-                    pending = pending_custom.get(call_id) if call_id else None
-                    if pending is not None:
-                        pending["output"] = payload.get("output") or ""
-                        pending["end_ts"] = ts_ms or pending["end_ts"]
-                    continue
-
-                # Web search: web_search_end (event_msg, has call_id) is paired with
-                # the next web_search_call (response_item) by emission order.
-                if outer == "event_msg" and ptype == "web_search_end":
-                    pending_search_end = {
-                        "call_id": payload.get("call_id") or "",
-                        "ts_ms": ts_ms,
-                    }
-                    continue
-
-                if outer == "response_item" and ptype == "web_search_call":
-                    action = payload.get("action") or {}
-                    action_type = action.get("type") or "search"
-                    if action_type == "open_page":
-                        tool_name = "open_page"
-                        args = action.get("url") or ""
-                    else:
-                        tool_name = "web_search"
-                        args = action.get("query") or ""
-                    start_ts = ts_ms
-                    call_id = ""
-                    if pending_search_end is not None:
-                        call_id = pending_search_end["call_id"]
-                        start_ts = pending_search_end["ts_ms"] or start_ts
-                        pending_search_end = None
-                    tool_calls.append(
-                        {
-                            "tool": tool_name,
-                            "args": args,
-                            "output": payload.get("status") or "",
-                            "call_id": call_id,
-                            "start_ts": start_ts,
-                            "end_ts": ts_ms,
-                            "decision": None,
-                        }
-                    )
-                    continue
-    except OSError:
-        return None
-
-    if not in_turn:
-        return None
-
-    if not turn_end_ms:
-        candidates = [e["end_ts"] for e in tool_calls if e.get("end_ts")]
-        turn_end_ms = max(candidates) if candidates else turn_start_ms
-
-    token_usage: "dict | None" = None
-    if saw_tokens:
-        token_usage = {
-            "prompt_tokens": token_sums["input_tokens"] or None,
-            "completion_tokens": token_sums["output_tokens"] or None,
-            "total_tokens": token_sums["total_tokens"] or None,
-            "cached_input_tokens": token_sums["cached_input_tokens"],
-            "non_cached_input_tokens": token_sums["non_cached_input_tokens"],
-            "reasoning_output_tokens": token_sums["reasoning_output_tokens"],
-            "model": model or "",
-        }
-
-    return {
-        "trace_count": trace_count,
-        "turn_start_ms": turn_start_ms or get_timestamp_ms(),
-        "turn_end_ms": turn_end_ms or get_timestamp_ms(),
-        "duration_ms": duration_ms,
-        "user_prompt": user_prompt,
-        "assistant_output": assistant_output,
-        "model": model,
-        "cwd": cwd,
-        "permission_mode": permission_mode,
-        "sandbox_mode": sandbox_mode,
-        "token_usage": token_usage,
-        "tool_calls": tool_calls,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -370,24 +148,31 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 
 
 def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
-    """Assemble the LLM + TOOL spans from an extracted turn and ship them."""
-    project_name = env.project_name_for(SERVICE_NAME) or "codex"
-    user_id = env.get_user_id(SERVICE_NAME) or ""
+    """Assemble CHAIN/LLM/TOOL spans from an extracted turn and ship them."""
+    thread_id = _metadata_text(thread_id, 128)
+    turn_id = _metadata_text(turn_id, 128)
+    project_name = _metadata_text(env.project_name_for(SERVICE_NAME)) or "codex"
+    user_id = _metadata_text(env.get_user_id(SERVICE_NAME))
 
     trace_id = generate_trace_id()
     parent_span_id = generate_span_id()
 
-    user_prompt = redact_content(env.log_prompts, turn.get("user_prompt") or "")
-    assistant_output = redact_content(env.log_prompts, turn.get("assistant_output") or "")
+    user_prompt = _logged_content(env.log_prompts, turn.get("user_prompt"))
+    assistant_output = _logged_content(env.log_prompts, turn.get("assistant_output"))
     final_output = assistant_output or "(No response)"
-    cwd = turn.get("cwd") or ""
+    cwd = _metadata_text(turn.get("cwd"))
     workspace = Path(cwd).name if cwd else ""
+    turn_model = _metadata_text(turn.get("model"))
+    permission_mode = _metadata_text(turn.get("permission_mode"))
+    sandbox_mode = _metadata_text(turn.get("sandbox_mode"))
 
+    high_fidelity = bool(turn.get("llm_calls"))
+    root_kind = "CHAIN" if high_fidelity else "LLM"
     attrs: dict = {
         "session.id": thread_id,
         "trace.number": str(turn.get("trace_count") or 1),
         "project.name": project_name,
-        "openinference.span.kind": "LLM",
+        "openinference.span.kind": root_kind,
         "input.value": user_prompt,
         "output.value": final_output,
         "codex.thread_id": thread_id,
@@ -400,66 +185,139 @@ def _build_and_send_spans(thread_id: str, turn_id: str, turn: dict) -> None:
         attrs["codex.turn_id"] = turn_id
     if user_id:
         attrs["user.id"] = user_id
-    if turn.get("model"):
-        attrs["llm.model_name"] = turn["model"]
-    if turn.get("permission_mode"):
-        attrs["codex.approval_mode"] = turn["permission_mode"]
-    if turn.get("sandbox_mode"):
-        attrs["codex.sandbox_mode"] = turn["sandbox_mode"]
+    if turn_model:
+        attrs["llm.model_name"] = turn_model
+    if permission_mode:
+        attrs["codex.approval_mode"] = permission_mode
+    if sandbox_mode:
+        attrs["codex.sandbox_mode"] = sandbox_mode
     if turn.get("duration_ms") is not None:
         attrs["codex.turn.duration_ms"] = turn["duration_ms"]
     if assistant_output:
-        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
+        attrs["llm.output_messages"] = _logged_content(
+            True,
+            json.dumps([{"message.role": "assistant", "message.content": assistant_output}]),
+        )
 
     usage = turn.get("token_usage") or {}
-    for src, dst in (
-        ("prompt_tokens", "llm.token_count.prompt"),
-        ("completion_tokens", "llm.token_count.completion"),
-        ("total_tokens", "llm.token_count.total"),
-    ):
-        v = usage.get(src)
-        if isinstance(v, int):
-            attrs[dst] = v
+    if not high_fidelity:
+        for src, dst in (
+            ("prompt_tokens", "llm.token_count.prompt"),
+            ("completion_tokens", "llm.token_count.completion"),
+            ("total_tokens", "llm.token_count.total"),
+        ):
+            v = usage.get(src)
+            if isinstance(v, int):
+                attrs[dst] = v
     if usage:
         attrs["codex.token_usage"] = json.dumps(usage)
 
     child_spans: list = []
-    for entry in turn.get("tool_calls") or []:
-        tool_name = entry.get("tool") or "unknown_tool"
+
+    def redact_llm_input(llm_call: dict) -> str:
+        parts = llm_call.get("input_parts")
+        if not isinstance(parts, list):
+            return _logged_content(env.log_prompts, llm_call.get("input_value"))
+        rendered: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict) or not isinstance(part.get("value"), str):
+                continue
+            enabled = env.log_tool_content if part.get("kind") == "tool_output" else env.log_prompts
+            rendered.append(_logged_content(enabled, part["value"]))
+        return _logged_content(True, "\n".join(rendered))
+
+    def build_tool_child(entry: dict, parent_id: str) -> dict:
+        tool_name = _metadata_text(entry.get("tool")) or "unknown_tool"
         args_raw = entry.get("args") or ""
         output_raw = entry.get("output") or ""
         tool_attrs: dict = {
             "openinference.span.kind": "TOOL",
             "tool.name": tool_name,
-            "input.value": redact_content(env.log_tool_details, args_raw),
-            "output.value": redact_content(env.log_tool_content, output_raw),
+            "input.value": _logged_content(env.log_tool_details, args_raw),
+            "output.value": _logged_content(env.log_tool_content, output_raw),
             "session.id": thread_id,
         }
         if cwd:
             tool_attrs["codex.cwd"] = cwd
         if workspace:
             tool_attrs["codex.workspace"] = workspace
-        if entry.get("call_id"):
-            tool_attrs["codex.tool.call_id"] = entry["call_id"]
+        call_id = _metadata_text(entry.get("call_id"))
+        if call_id:
+            tool_attrs["codex.tool.call_id"] = call_id
         child_start = entry.get("start_ts") or turn["turn_start_ms"]
-        child_end = entry.get("end_ts") or child_start
-        child = build_span(
+        child_end = max(child_start, entry.get("end_ts") or child_start)
+        return build_span(
             tool_name,
             "TOOL",
             generate_span_id(),
             trace_id,
-            parent_span_id,
+            parent_id,
             child_start,
             child_end,
             tool_attrs,
             SERVICE_NAME,
-            SCOPE_NAME,
         )
-        child_spans.append(child)
+
+    if high_fidelity:
+        for index, llm_call in enumerate(turn["llm_calls"], start=1):
+            llm_span_id = generate_span_id()
+            llm_usage = llm_call.get("token_usage") or {}
+            llm_model = _metadata_text(llm_usage.get("model") or turn_model)
+            llm_input = redact_llm_input(llm_call)
+            llm_output = _logged_content(env.log_prompts, llm_call.get("assistant_output"))
+            llm_attrs: dict = {
+                "openinference.span.kind": "LLM",
+                "session.id": thread_id,
+                "input.value": llm_input,
+                "output.value": llm_output,
+                "codex.thread_id": thread_id,
+                "codex.turn_id": turn_id,
+                "codex.response.number": index,
+            }
+            if llm_model:
+                llm_attrs["llm.model_name"] = llm_model
+            for src, dst in (
+                ("prompt_tokens", "llm.token_count.prompt"),
+                ("completion_tokens", "llm.token_count.completion"),
+                ("total_tokens", "llm.token_count.total"),
+            ):
+                value = llm_usage.get(src)
+                if isinstance(value, int):
+                    llm_attrs[dst] = value
+            cache_read = llm_usage.get("cached_input_tokens")
+            if isinstance(cache_read, int) and cache_read:
+                llm_attrs["llm.token_count.prompt_details.cache_read"] = cache_read
+            reasoning = llm_usage.get("reasoning_output_tokens")
+            if isinstance(reasoning, int) and reasoning:
+                llm_attrs["llm.token_count.completion_details.reasoning"] = reasoning
+            if llm_usage:
+                llm_attrs["codex.token_usage"] = json.dumps(llm_usage)
+            if llm_output:
+                llm_attrs["llm.output_messages"] = _logged_content(
+                    True,
+                    json.dumps([{"message.role": "assistant", "message.content": llm_output}]),
+                )
+            child_spans.append(
+                build_span(
+                    f"LLM call {index}{f': {llm_model}' if llm_model else ''}",
+                    "LLM",
+                    llm_span_id,
+                    trace_id,
+                    parent_span_id,
+                    llm_call.get("start_ts") or turn["turn_start_ms"],
+                    llm_call.get("end_ts") or turn["turn_end_ms"],
+                    llm_attrs,
+                    SERVICE_NAME,
+                    SCOPE_NAME,
+                )
+            )
+            child_spans.extend(build_tool_child(entry, llm_span_id) for entry in llm_call.get("tool_calls") or [])
+    else:
+        child_spans.extend(build_tool_child(entry, parent_span_id) for entry in turn.get("tool_calls") or [])
 
     parent_span = build_span(
         f"Turn {turn.get('trace_count') or 1}",
-        "LLM",
+        root_kind,
         parent_span_id,
         trace_id,
         "",
@@ -503,28 +361,32 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
     user_msgs = input_json.get("input-messages") or input_json.get("input_messages") or ""
     user_prompt = ""
     if isinstance(user_msgs, list):
-        for m in reversed(user_msgs):
-            if isinstance(m, str) and m:
-                user_prompt = m
-                break
-            if isinstance(m, dict) and m.get("role") == "user":
-                c = m.get("content")
-                if isinstance(c, str) and c:
-                    user_prompt = c
-                    break
-                if isinstance(c, list):
-                    for piece in c:
-                        if isinstance(piece, dict) and piece.get("text"):
-                            user_prompt = piece["text"]
-                            break
-                    if user_prompt:
-                        break
+        prompt_parts = []
+        for message in user_msgs:
+            if isinstance(message, str) and message:
+                prompt_parts.append(message)
+                continue
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                prompt_parts.append(content)
+            elif isinstance(content, list):
+                prompt_parts.extend(
+                    piece["text"]
+                    for piece in content
+                    if isinstance(piece, dict) and isinstance(piece.get("text"), str) and piece["text"]
+                )
+        user_prompt = "\n".join(prompt_parts)
     elif isinstance(user_msgs, str):
         user_prompt = user_msgs
 
-    user_prompt = redact_content(env.log_prompts, user_prompt)
-    assistant_output = redact_content(env.log_prompts, assistant_msg if isinstance(assistant_msg, str) else "")
+    user_prompt = _logged_content(env.log_prompts, user_prompt)
+    assistant_output = _logged_content(env.log_prompts, assistant_msg if isinstance(assistant_msg, str) else "")
     final_output = assistant_output or "(No response)"
+    thread_id = _metadata_text(thread_id, 128)
+    turn_id = _metadata_text(turn_id, 128)
+    project_name = _metadata_text(env.project_name_for(SERVICE_NAME)) or "codex"
 
     trace_id = generate_trace_id()
     span_id = generate_span_id()
@@ -532,7 +394,7 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
 
     attrs = {
         "session.id": thread_id,
-        "project.name": env.project_name_for(SERVICE_NAME) or "codex",
+        "project.name": project_name,
         "openinference.span.kind": "LLM",
         "input.value": user_prompt,
         "output.value": final_output,
@@ -540,11 +402,14 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
         "codex.turn_id": turn_id,
         "codex.notify_fallback": "true",
     }
-    user_id = env.get_user_id(SERVICE_NAME)
+    user_id = _metadata_text(env.get_user_id(SERVICE_NAME))
     if user_id:
         attrs["user.id"] = user_id
     if assistant_output:
-        attrs["llm.output_messages"] = json.dumps([{"message.role": "assistant", "message.content": assistant_output}])
+        attrs["llm.output_messages"] = _logged_content(
+            True,
+            json.dumps([{"message.role": "assistant", "message.content": assistant_output}]),
+        )
 
     parent_span = build_span(
         "Turn",

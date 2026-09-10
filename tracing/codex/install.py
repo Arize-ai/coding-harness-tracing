@@ -3,7 +3,7 @@
 
 Self-contained module that handles:
 - Writing ~/.codex/arize-env.sh (env file)
-- Updating ~/.codex/config.toml (notify + five hook entry points)
+- Updating ~/.codex/config.toml (notify-only entry)
 - Managing the shared config.json harness entry
 - Symlinking skills
 - Migrating legacy v1 installs via tracing.codex.install_legacy
@@ -107,12 +107,27 @@ def _strip_arize_hooks(data: dict) -> bool:
     return changed
 
 
+def _validate_notify_value(existing_notify: object, notify_cmd: str) -> None:
+    """Reject a notify argv owned by a different external program."""
+    if existing_notify not in (None, [], [notify_cmd]):
+        raise ValueError(
+            "Codex config already defines a different notify command. "
+            "Codex supports one notify program argv; remove it or install a dispatcher before enabling Arize tracing."
+        )
+
+
+def _validate_notify_compatibility(path: Path, notify_cmd: str) -> None:
+    """Fail before installation side effects when another notify program owns the slot."""
+    _validate_notify_value(_toml_load_strict(path).get("notify"), notify_cmd)
+
+
 def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
     """Write the notify-only layout to ~/.codex/config.toml. Idempotent.
 
-    Ensures our ``notify_cmd`` is present exactly once in ``notify = [...]``.
-    Does not touch any existing ``[[hooks.<Event>]]`` entries -- if a prior
-    install left some behind, manage them out-of-band or run ``uninstall``.
+    Writes our command as the sole Codex notify argv. Because Codex supports
+    one external notify program (the array is that program's argv), a different
+    existing command is an explicit conflict and is never appended or replaced.
+    Existing ``[[hooks.<Event>]]`` entries are left untouched.
     """
     if dry_run():
         info(f"would add notify entry to {path}")
@@ -120,12 +135,8 @@ def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
 
     data = _toml_load_strict(path)
 
-    existing_notify = data.get("notify", [])
-    if not isinstance(existing_notify, list):
-        existing_notify = [existing_notify] if existing_notify else []
-    if notify_cmd not in existing_notify:
-        existing_notify.append(notify_cmd)
-    data["notify"] = existing_notify
+    _validate_notify_value(data.get("notify"), notify_cmd)
+    data["notify"] = [notify_cmd]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     _toml_write(data, path)
@@ -144,12 +155,8 @@ def _codex_toml_remove(path: Path, notify_cmd: str) -> None:
     changed = False
 
     existing_notify = data.get("notify", [])
-    if isinstance(existing_notify, list) and notify_cmd in existing_notify:
-        existing_notify.remove(notify_cmd)
-        if existing_notify:
-            data["notify"] = existing_notify
-        else:
-            del data["notify"]
+    if isinstance(existing_notify, list) and existing_notify and existing_notify[0] == notify_cmd:
+        del data["notify"]
         changed = True
     elif isinstance(existing_notify, str) and existing_notify == notify_cmd:
         del data["notify"]
@@ -205,13 +212,15 @@ def _is_our_env_file(path: Path) -> bool:
 
 
 def install(with_skills: bool = False) -> None:
-    """Install codex tracing harness (hooks-based v2 layout)."""
+    """Install the notify-only Codex tracing harness."""
     codex_home = get_codex_home()
     codex_config_file = codex_home / "config.toml"
     codex_env_file = codex_home / "arize-env.sh"
-    load_config(str(CONFIG_FILE))
-    _toml_load_strict(codex_config_file)
 
+    # Validate both user-owned configs before any installation side effects.
+    config = load_config(str(CONFIG_FILE))
+    notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
+    _validate_notify_compatibility(codex_config_file, notify_cmd)
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -221,7 +230,6 @@ def install(with_skills: bool = False) -> None:
 
     # 2. Shared runtime + harness entry.
     ensure_shared_runtime()
-    config = load_config(str(CONFIG_FILE))
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
     project_name = prompt_project_name("codex")
 
@@ -258,7 +266,6 @@ def install(with_skills: bool = False) -> None:
     _write_env_file(codex_env_file, user_id=user_id)
 
     # 4. Write the notify-only TOML layout.
-    notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
     _codex_toml_apply(codex_config_file, notify_cmd)
     info(f"Updated TOML config: {codex_config_file}")
 
@@ -331,6 +338,9 @@ def cli_main(argv: list[str] | None = None) -> None:
 if __name__ == "__main__":
     try:
         cli_main()
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.")
         sys.exit(1)
