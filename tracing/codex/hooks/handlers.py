@@ -620,10 +620,8 @@ def _send_legacy_single_span(thread_id: str, turn_id: str, input_json: dict) -> 
         "codex.thread_id": thread_id,
         "codex.turn_id": turn_id,
         "codex.notify_fallback": "true",
-        # Codex is OpenAI's own CLI and this fallback path has no rollout to
-        # say otherwise, so llm.system is hardcoded to openai.
-        # llm.provider is left out bc we have no session_meta to confirm hosting
-        "llm.system": "openai",
+        # No rollout here, so the real model/provider is unknown.
+        "llm.system": "codex",
     }
     user_id = env.get_user_id(SERVICE_NAME)
     if user_id:

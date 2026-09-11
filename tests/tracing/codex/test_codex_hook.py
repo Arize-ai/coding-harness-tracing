@@ -1116,15 +1116,29 @@ class TestSendLegacySingleSpan:
         assert attrs["codex.notify_fallback"]["stringValue"] == "true"
         assert attrs["input.value"]["stringValue"] == "yo"
         assert attrs["output.value"]["stringValue"] == "hi"
-        # The fallback path has no rollout/session_meta to confirm hosting
-        # provider, but llm.system is still required and trustworthy: Codex
-        # is OpenAI's own CLI.
-        assert attrs["llm.system"]["stringValue"] == "openai"
+        # No rollout here, so the real model/provider is unknown.
+        assert attrs["llm.system"]["stringValue"] == "codex"
         assert "llm.provider" not in attrs
         assert attrs["llm.input_messages.0.message.role"]["stringValue"] == "user"
         assert attrs["llm.input_messages.0.message.content"]["stringValue"] == "yo"
         assert attrs["llm.output_messages.0.message.role"]["stringValue"] == "assistant"
         assert attrs["llm.output_messages.0.message.content"]["stringValue"] == "hi"
+
+    def test_ephemeral_custom_provider_turn_not_labeled_openai(self):
+        # `codex exec --ephemeral` writes no rollout, so the model is unknown; never guess openai
+        sent = []
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
+        ):
+            _send_legacy_single_span(
+                "sess-x",
+                "turn-x",
+                {"last-assistant-message": "hi", "input-messages": [{"role": "user", "content": "yo"}]},
+            )
+        attrs = _attrs_of_span(sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert attrs["llm.system"]["stringValue"] == "codex"
+        assert "llm.provider" not in attrs
 
     def test_extracts_string_array_prompt(self):
         sent = []
