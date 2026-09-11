@@ -904,10 +904,10 @@ class TestEndToEndThirdPartyOtelPreservation:
     _strip_v1_otel_block() unit above), covering the exact issue fixture.
 
     install()/uninstall() rewrite config.toml through _codex_toml_apply()/
-    _codex_toml_remove(), which round-trip the whole file via a dict
-    (_toml_write()) — a separate, pre-existing limitation (drops comments,
-    restructures inline tables) called out as out of scope in the issue #94
-    review. So this asserts on *parsed* TOML values, not raw bytes.
+    _codex_toml_remove() to add/remove one ``notify`` entry. A separate,
+    pre-existing limitation (drops comments, restructures inline tables)
+    called out as out of scope in the issue #94 review. So, this asserts
+    on parsed TOML values, not raw bytes.
     """
 
     def test_install_then_uninstall_preserves_third_party_otel(self, fake_home, mock_prompts):
