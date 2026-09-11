@@ -742,6 +742,27 @@ class TestLegacyOtelCleanup:
 
         assert config_path.read_text() == "# not the Arize comment\n[otel]\n"
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="A user's own loopback otlp-http/json logs exporter is indistinguishable from the v1 shape by value",
+    )
+    def test_user_owned_loopback_json_exporter_is_a_known_false_positive(self, tmp_path):
+        """Documents the accepted limitation: by-value ownership inference removes this table."""
+        config_path = tmp_path / "config.toml"
+        original = (
+            "# my local otel collector\n"
+            "[otel]\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+        )
+        config_path.write_text(original)
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == original
+
     def test_owned_looking_block_with_extra_key_is_preserved(self, tmp_path):
         """A block shaped like Arize's but carrying an extra key (headers) is
         third-party and must survive byte-for-byte."""

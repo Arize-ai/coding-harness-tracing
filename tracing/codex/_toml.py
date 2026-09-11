@@ -20,10 +20,32 @@ except ImportError:
         pass
 
 _ARIZE_OTLP_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
+"""Legacy-only heuristic for the v1 cleanup path.
+
+``127.0.0.1:4318/v1/logs`` is the OTLP/HTTP default endpoint, the least
+distinctive value possible, so this regex proves nothing on its own. Any
+future code that writes ``[otel]`` must mark what it writes and remove by
+marker, not by value.
+"""
 
 
 def _is_arize_owned_otlp_exporter(table: object) -> bool:
-    """Return True only if *table* is provably an Arize-written OTLP exporter."""
+    """Return True only if *table* is provably an Arize-written OTLP exporter.
+
+    Codex's ``[otel]`` table is a per-signal pipeline: ``exporter`` is the
+    logs pipeline, while ``trace_exporter`` and ``metrics_exporter`` are
+    separate slots, mirroring ``OTEL_LOGS_EXPORTER`` / ``OTEL_TRACES_EXPORTER``
+    / ``OTEL_METRICS_EXPORTER``. v1 only ever configured the logs exporter, so
+    the cleanup helpers only inspect ``exporter.otlp-http`` and never touch
+    ``trace_exporter`` or ``metrics_exporter``; a user's
+    ``[otel.trace_exporter.otlp-http]`` always survives.
+
+    Known false positive: a user's own collector configured as ``otlp-http``
+    with ``protocol = "json"``, no headers, on a loopback ``/v1/logs``
+    endpoint is indistinguishable from what v1 wrote, and cleanup removes it.
+    This is inherent to inferring ownership from values and must not be
+    "fixed" by widening or narrowing the match.
+    """
     if not isinstance(table, dict):
         return False
     if set(table.keys()) - {"endpoint", "protocol"}:
