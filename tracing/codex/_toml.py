@@ -35,6 +35,8 @@ def _is_arize_owned_otlp_exporter(table: object) -> bool:
 
 
 _ARIZE_OTLP_HEADER = "[otel.exporter.otlp-http]"
+_ARIZE_OTEL_HEADER = "[otel]"
+ARIZE_OTEL_COMMENT = "# Arize shared collector — captures Codex events for rich span trees"
 
 
 def _toml_owned_exporter_span(text: str, endpoint: str) -> tuple[int, int] | None:
@@ -45,6 +47,15 @@ def _toml_owned_exporter_span(text: str, endpoint: str) -> tuple[int, int] | Non
     ``protocol = "json"`` with no other content before the next table header or
     EOF. Any other shape is not something we can safely locate and edit, so this
     returns None for all of those instead of guessing.
+
+    The v1 writer also emitted a bare ``[otel]`` header and the
+    ``ARIZE_OTEL_COMMENT`` line directly above the table. The returned span
+    grows upward to include the ``[otel]`` line when nothing but blank lines
+    separate it from our header (so it carries no keys of its own), and the
+    comment line above that when its stripped text equals
+    ``ARIZE_OTEL_COMMENT`` exactly. A populated ``[otel]`` table is left in
+    place, as is any other comment together with the ``[otel]`` header it
+    sits above.
     """
     lines = text.splitlines(keepends=True)
     expected = {f'endpoint = "{endpoint}"', 'protocol = "json"'}
@@ -63,11 +74,27 @@ def _toml_owned_exporter_span(text: str, endpoint: str) -> tuple[int, int] | Non
                 body_end = end + 1
             end += 1
         if len(body) == 2 and set(body) == expected:
-            matches.append((start, body_end))
+            matches.append((_extend_span_upward(lines, start), body_end))
 
     if len(matches) != 1:
         return None
     return matches[0]
+
+
+def _extend_span_upward(lines: list[str], start: int) -> int:
+    i = start - 1
+    while i >= 0 and lines[i].strip() == "":
+        i -= 1
+    if i < 0 or lines[i].strip() != _ARIZE_OTEL_HEADER:
+        return start
+    j = i - 1
+    while j >= 0 and lines[j].strip() == "":
+        j -= 1
+    if j >= 0 and lines[j].strip() == ARIZE_OTEL_COMMENT:
+        return j
+    if j >= 0 and lines[j].lstrip().startswith("#"):
+        return start
+    return i
 
 
 def _toml_load_strict(path: Path) -> dict:

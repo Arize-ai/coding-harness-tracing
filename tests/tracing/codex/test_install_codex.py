@@ -676,6 +676,72 @@ class TestLegacyOtelCleanup:
         assert "[otel.trace_exporter.otlp-http]" in content
         assert 'endpoint = "http://127.0.0.1:4318/v1/traces"' in content
 
+    def test_v1_fixture_with_comment_and_bare_otel_header_becomes_empty(self, tmp_path):
+        """The exact five-line block v1 wrote (plus its leading blank) is removed whole."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "\n"
+            "# Arize shared collector — captures Codex events for rich span trees\n"
+            "[otel]\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+        )
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == ""
+
+    def test_round_trip_through_real_v1_writer(self, tmp_path):
+        """Writing with the v1 writer and then cleaning up restores the original bytes."""
+        config_path = tmp_path / "config.toml"
+        original = '[general]\nname = "x"\n'
+        config_path.write_text(original)
+
+        from core.setup.codex import _update_toml_otel_section
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _update_toml_otel_section(config_path, 4318)
+        assert config_path.read_text() != original
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == original
+
+    def test_populated_otel_header_and_foreign_comment_survive(self, tmp_path):
+        """A [otel] table with its own keys and a comment that is not Arize's literal stay."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "# my own otel notes\n"
+            "[otel]\n"
+            "log_user_prompt = true\n"
+            "\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+        )
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == "# my own otel notes\n[otel]\nlog_user_prompt = true\n"
+
+    def test_bare_otel_header_under_foreign_comment_keeps_both(self, tmp_path):
+        """A bare [otel] header under a comment that is not ours stays with its comment."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "# not the Arize comment\n"
+            "[otel]\n"
+            "[otel.exporter.otlp-http]\n"
+            'endpoint = "http://127.0.0.1:4318/v1/logs"\n'
+            'protocol = "json"\n'
+        )
+        from tracing.codex.install_legacy import _strip_v1_otel_block
+
+        _strip_v1_otel_block(config_path)
+
+        assert config_path.read_text() == "# not the Arize comment\n[otel]\n"
+
     def test_owned_looking_block_with_extra_key_is_preserved(self, tmp_path):
         """A block shaped like Arize's but carrying an extra key (headers) is
         third-party and must survive byte-for-byte."""

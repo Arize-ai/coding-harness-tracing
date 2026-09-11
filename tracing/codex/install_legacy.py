@@ -245,7 +245,10 @@ def _strip_v1_otel_block(path: Path) -> None:
     del lines[start:end]
     # Collapse a blank line left immediately before and after the removed
     # block down to one, mirroring normal TOML spacing.
-    if start == 0:
+    if start >= len(lines):
+        while lines and lines[-1].strip() == "":
+            lines.pop()
+    elif start == 0:
         if lines and lines[0].strip() == "":
             del lines[0]
     elif start < len(lines) and lines[start - 1].strip() == "" and lines[start].strip() == "":
