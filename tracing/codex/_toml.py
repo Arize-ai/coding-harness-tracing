@@ -19,6 +19,105 @@ except ImportError:
     except ImportError:
         pass
 
+_ARIZE_OTLP_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
+"""Legacy-only heuristic for the v1 cleanup path.
+
+``127.0.0.1:4318/v1/logs`` is the OTLP/HTTP default endpoint, the least
+distinctive value possible, so this regex proves nothing on its own. Any
+future code that writes ``[otel]`` must mark what it writes and remove by
+marker, not by value.
+"""
+
+
+def _is_arize_owned_otlp_exporter(table: object) -> bool:
+    """Return True only if *table* is provably an Arize-written OTLP exporter.
+
+    Codex's ``[otel]`` table is a per-signal pipeline: ``exporter`` is the
+    logs pipeline, while ``trace_exporter`` and ``metrics_exporter`` are
+    separate slots, mirroring ``OTEL_LOGS_EXPORTER`` / ``OTEL_TRACES_EXPORTER``
+    / ``OTEL_METRICS_EXPORTER``. v1 only ever configured the logs exporter, so
+    the cleanup helpers only inspect ``exporter.otlp-http`` and never touch
+    ``trace_exporter`` or ``metrics_exporter``; a user's
+    ``[otel.trace_exporter.otlp-http]`` always survives.
+
+    Known false positive: a user's own collector configured as ``otlp-http``
+    with ``protocol = "json"``, no headers, on a loopback ``/v1/logs``
+    endpoint is indistinguishable from what v1 wrote, and cleanup removes it.
+    This is inherent to inferring ownership from values and must not be
+    "fixed" by widening or narrowing the match.
+    """
+    if not isinstance(table, dict):
+        return False
+    if set(table.keys()) - {"endpoint", "protocol"}:
+        return False
+    endpoint = table.get("endpoint")
+    if not (isinstance(endpoint, str) and _ARIZE_OTLP_ENDPOINT_RE.match(endpoint)):
+        return False
+    return table.get("protocol") == "json"
+
+
+_ARIZE_OTLP_HEADER = "[otel.exporter.otlp-http]"
+_ARIZE_OTEL_HEADER = "[otel]"
+ARIZE_OTEL_COMMENT = "# Arize shared collector — captures Codex events for rich span trees"
+
+
+def _toml_owned_exporter_span(text: str, endpoint: str) -> tuple[int, int] | None:
+    """Locate the literal, canonical Arize ``[otel.exporter.otlp-http]`` table.
+
+    Arize only ever writes this table one way: a bare header line, followed
+    by exactly two body lines — ``endpoint = "<endpoint>"`` and
+    ``protocol = "json"`` with no other content before the next table header or
+    EOF. Any other shape is not something we can safely locate and edit, so this
+    returns None for all of those instead of guessing.
+
+    The v1 writer also emitted a bare ``[otel]`` header and the
+    ``ARIZE_OTEL_COMMENT`` line directly above the table. The returned span
+    grows upward to include the ``[otel]`` line when nothing but blank lines
+    separate it from our header (so it carries no keys of its own), and the
+    comment line above that when its stripped text equals
+    ``ARIZE_OTEL_COMMENT`` exactly. A populated ``[otel]`` table is left in
+    place, as is any other comment together with the ``[otel]`` header it
+    sits above.
+    """
+    lines = text.splitlines(keepends=True)
+    expected = {f'endpoint = "{endpoint}"', 'protocol = "json"'}
+
+    matches: list[tuple[int, int]] = []
+    for start, line in enumerate(lines):
+        if line.strip() != _ARIZE_OTLP_HEADER:
+            continue
+        end = start + 1
+        body_end = start
+        body: list[str] = []
+        while end < len(lines) and not lines[end].lstrip().startswith("["):
+            stripped = lines[end].strip()
+            if stripped and not stripped.startswith("#"):
+                body.append(stripped)
+                body_end = end + 1
+            end += 1
+        if len(body) == 2 and set(body) == expected:
+            matches.append((_extend_span_upward(lines, start), body_end))
+
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _extend_span_upward(lines: list[str], start: int) -> int:
+    i = start - 1
+    while i >= 0 and lines[i].strip() == "":
+        i -= 1
+    if i < 0 or lines[i].strip() != _ARIZE_OTEL_HEADER:
+        return start
+    j = i - 1
+    while j >= 0 and lines[j].strip() == "":
+        j -= 1
+    if j >= 0 and lines[j].strip() == ARIZE_OTEL_COMMENT:
+        return j
+    if j >= 0 and lines[j].lstrip().startswith("#"):
+        return start
+    return i
+
 
 def _toml_load_strict(path: Path) -> dict:
     """Load TOML without falling back to a lossy parser.
@@ -178,6 +277,8 @@ def _inline_table(table: dict) -> str:
             parts.append(f"{kk} = {'true' if v else 'false'}")
         elif isinstance(v, int):
             parts.append(f"{kk} = {v}")
+        elif isinstance(v, float):
+            parts.append(f"{kk} = {v!r}")
         elif isinstance(v, list):
             if _is_table_array(v):
                 items = ", ".join(_inline_table(d) for d in v)
@@ -199,6 +300,8 @@ def _toml_write_value(key: str, val: object, lines: list[str]) -> None:
         lines.append(f"{k} = {'true' if val else 'false'}")
     elif isinstance(val, int):
         lines.append(f"{k} = {val}")
+    elif isinstance(val, float):
+        lines.append(f"{k} = {val!r}")
     else:
         lines.append(f"{k} = {_toml_string_literal(val)}")
 
