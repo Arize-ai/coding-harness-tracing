@@ -561,8 +561,14 @@ def resolve_backend(span_dict: dict) -> dict:
     return {"target": "none", "project_name": project_name}
 
 
-def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span: bool = False) -> dict:
-    """Return a copy of span_dict with {key: project_name} added as a resource
+# OTLP resource attribute Arize ingest maps to models.project_type.
+# FromString accepts only application | harness | experiment.
+ARIZE_PROJECT_TYPE_KEY = "arize.project.type"
+ARIZE_PROJECT_TYPE_HARNESS = "harness"
+
+
+def _inject_project_attr(span_dict: dict, key: str, value: str, per_span: bool = False) -> dict:
+    """Return a copy of span_dict with {key: value} added as a resource
     attribute on every resource in resourceSpans.
 
     With per_span=True the attribute is also appended to each individual
@@ -572,10 +578,10 @@ def _inject_project_attr(span_dict: dict, key: str, project_name: str, per_span:
     O(payload) per send); untouched span data is shared with the original,
     which is never mutated.
     """
-    project_attr = {"key": key, "value": _to_otlp_attr_value(project_name)}
+    attr = {"key": key, "value": _to_otlp_attr_value(value)}
 
     def _with_attr(owner: dict) -> dict:
-        return {**owner, "attributes": [*owner.get("attributes", []), project_attr]}
+        return {**owner, "attributes": [*owner.get("attributes", []), attr]}
 
     new_resource_spans = []
     for rs in span_dict.get("resourceSpans", []):
@@ -593,8 +599,17 @@ def _inject_arize_project_name(span_dict: dict, project_name: str) -> dict:
     return _inject_project_attr(
         span_dict,
         key="arize.project.name",
-        project_name=project_name,
+        value=project_name,
         per_span=True,
+    )
+
+
+def _inject_arize_project_type(span_dict: dict) -> dict:
+    """Arize AX stores this resource attribute as models.project_type. Phoenix does not use it."""
+    return _inject_project_attr(
+        span_dict,
+        key=ARIZE_PROJECT_TYPE_KEY,
+        value=ARIZE_PROJECT_TYPE_HARNESS,
     )
 
 
@@ -603,7 +618,7 @@ def _inject_openinference_project_resource_attr(span_dict: dict, project_name: s
     return _inject_project_attr(
         span_dict,
         key="openinference.project.name",
-        project_name=project_name,
+        value=project_name,
     )
 
 
@@ -680,6 +695,7 @@ def send_span(span_dict: dict) -> bool:
 
             # Inject arize.project.name into span attributes (required by Arize)
             payload = _inject_arize_project_name(span_dict, project_name=project)
+            payload = _inject_arize_project_type(payload)
 
             # Normalize endpoint to HTTPS URL for HTTP/JSON transport
             if endpoint.startswith("http://") or endpoint.startswith("https://"):
