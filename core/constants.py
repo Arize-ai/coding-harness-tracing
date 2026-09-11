@@ -93,6 +93,8 @@ HARNESSES: dict[str, HarnessMetadata] = {
     },
 }
 
+# model-name substring -> OpenInference llm.system well-known value
+# https://github.com/Arize-ai/openinference/blob/main/spec/semantic_conventions.md#llm-spans (llm.system table)
 MODEL_FAMILY_SYSTEMS: tuple[tuple[str, str], ...] = (
     ("codex", "openai"),
     ("gpt-", "openai"),
