@@ -4,6 +4,7 @@
 Every module that needs a path imports it from here. Tests monkeypatch these
 values via the tmp_harness_dir fixture to avoid touching the real filesystem.
 """
+
 from pathlib import Path
 from typing import TypedDict
 
@@ -91,3 +92,18 @@ HARNESSES: dict[str, HarnessMetadata] = {
         "default_log_file": LOG_DIR / "omp.log",
     },
 }
+
+# model-name substring -> OpenInference llm.system well-known value
+# https://github.com/Arize-ai/openinference/blob/main/spec/semantic_conventions.md#llm-spans (llm.system table)
+MODEL_FAMILY_SYSTEMS: tuple[tuple[str, str], ...] = (
+    ("codex", "openai"),
+    ("gpt-", "openai"),
+    ("claude", "anthropic"),
+    ("llama", "meta"),
+    ("deepseek", "deepseek"),
+    ("mixtral", "mistralai"),
+    ("mistral", "mistralai"),
+    ("gemini", "vertexai"),
+    ("grok", "xai"),
+    ("command-", "cohere"),
+)
