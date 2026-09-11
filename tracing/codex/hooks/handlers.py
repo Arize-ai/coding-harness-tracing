@@ -119,6 +119,7 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
     )
     token_sums: dict = {k: 0 for k in codex_token_count_fields}
     observed_fields: set = set()
+    prev_total_token_usage: "dict | None" = None
 
     in_turn = False
     trace_count = 0
@@ -223,7 +224,14 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
 
                 # Token counts -- sum per-call deltas
                 if outer == "event_msg" and ptype == "token_count":
-                    last = (payload.get("info") or {}).get("last_token_usage") or {}
+                    info = payload.get("info") or {}
+                    total = info.get("total_token_usage")
+                    # rate-limit-only rebroadcasts repeat the prior snapshot (openai/codex#14489)
+                    if isinstance(total, dict) and total == prev_total_token_usage:
+                        continue
+                    if isinstance(total, dict):
+                        prev_total_token_usage = total
+                    last = info.get("last_token_usage") or {}
                     for k in codex_token_count_fields:
                         v = last.get(k)
                         if isinstance(v, int):

@@ -262,6 +262,75 @@ class TestExtractTurnFromRollout:
         turn = _extract_turn_from_rollout(path, "t1")
         assert turn["token_usage"]["cache_write_input_tokens"] == 7
 
+    def test_rate_limit_only_token_count_rebroadcast_not_double_counted(self, tmp_path):
+        """A token_count event with an unchanged total_token_usage only reports a
+        rate-limit update (openai/codex#14489) and must not be summed again."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {"total_tokens": 120},
+                        "last_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+                    },
+                }
+            ),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {"total_tokens": 120},
+                        "last_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+                    },
+                }
+            ),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {"total_tokens": 180},
+                        "last_token_usage": {"input_tokens": 50, "output_tokens": 10, "total_tokens": 60},
+                    },
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        usage = turn["token_usage"]
+        assert usage["prompt_tokens"] == 150
+        assert usage["completion_tokens"] == 30
+        assert usage["total_tokens"] == 180
+
+    def test_token_count_without_total_token_usage_still_sums_every_event(self, tmp_path):
+        """Older rollouts that never carried total_token_usage keep summing every
+        last_token_usage delta (no snapshot to compare against)."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {"last_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}},
+                }
+            ),
+            _evt(
+                {
+                    "type": "token_count",
+                    "info": {"last_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}},
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        usage = turn["token_usage"]
+        assert usage["prompt_tokens"] == 200
+        assert usage["completion_tokens"] == 40
+        assert usage["total_tokens"] == 240
+
     def test_observed_zero_preserved_unobserved_field_absent(self, tmp_path):
         """An observed 0 stays in the dict; a field never seen anywhere is absent."""
         path = _write_rollout(
