@@ -216,22 +216,26 @@ def _strip_v1_otel_block(path: Path) -> None:
     except ValueError as exc:
         info(f"Skipping legacy TOML cleanup for {path}: {exc}")
         return
+
     otel = data.get("otel")
     if not isinstance(otel, dict):
         return
+
     exporter = otel.get("exporter")
     if not isinstance(exporter, dict):
         return
+
     otlp = exporter.get("otlp-http")
     if not isinstance(otlp, dict) or not _is_arize_owned_otlp_exporter(otlp):
         return
 
-    if dry_run():
+    text = path.read_text(encoding="utf-8")
+    span = _toml_owned_exporter_span(text, otlp["endpoint"])
+
+    if span is not None and dry_run():
         info(f"would strip legacy [otel.exporter.otlp-http] block from {path}")
         return
 
-    text = path.read_text()
-    span = _toml_owned_exporter_span(text, otlp["endpoint"])
     if span is None:
         info(
             f"Found an Arize-shaped [otel.exporter.otlp-http] table in {path} written in "
