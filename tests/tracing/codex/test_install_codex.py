@@ -870,8 +870,7 @@ class TestLegacyOtelCleanup:
         assert content.count("[otel.exporter.otlp-http]") == 1
         assert "http://127.0.0.1:4318/v1/logs" not in content
         # And the file is valid TOML again.
-        import tomllib
-
+        tomllib = pytest.importorskip("tomllib")
         tomllib.loads(content)
 
     def test_trailing_comment_before_next_table_is_preserved(self, tmp_path):
