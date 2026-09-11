@@ -967,6 +967,11 @@ class TestLlmIdentity:
         for model in ("o1-preview", "o3-mini", "o4-mini"):
             assert _llm_identity(model, "some-provider")[0] == "openai"
 
+    def test_provider_qualified_o_series_model_gives_openai_system(self):
+        assert _llm_identity("openai/o3-mini", "openrouter") == ("openai", "openrouter")
+        assert _llm_identity("openai/o4-mini:batch", "openrouter") == ("openai", "openrouter")
+        assert _llm_identity("o3-mini", "openrouter") == ("openai", "openrouter")
+
     def test_deepseek_model_on_azure_gives_deepseek_system(self):
         assert _llm_identity("DeepSeek-R1", "azure") == ("deepseek", "azure")
 

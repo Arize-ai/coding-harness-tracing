@@ -407,7 +407,8 @@ def _llm_identity(model: "object", provider: "object") -> "tuple[str, str | None
     provider_lower = provider_str.lower() if provider_str else None
 
     llm_system: "str | None" = None
-    if _O_SERIES_MODEL_RE.match(model_lower):
+    model_id = model_lower.rsplit("/", 1)[-1]
+    if _O_SERIES_MODEL_RE.match(model_id):
         llm_system = "openai"
     else:
         for substr, system in MODEL_FAMILY_SYSTEMS:
