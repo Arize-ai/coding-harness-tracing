@@ -52,6 +52,10 @@ def isolate_config(tmp_path, monkeypatch):
 
     for key in [k for k in os.environ if k.startswith(_ISOLATED_ENV_PREFIXES) and k not in _ISOLATED_ENV_EXEMPT]:
         monkeypatch.delenv(key, raising=False)
+    # The Stop hook waits (up to ARIZE_STOP_SETTLE_MS) for the transcript's final
+    # assistant record. Tests never race a live transcript, so disable the wait;
+    # tests that exercise it pass ``timeout_ms`` explicitly or set the env var.
+    monkeypatch.setenv("ARIZE_STOP_SETTLE_MS", "0")
     monkeypatch.setattr("core.config.CONFIG_FILE", tmp_path / "no-such-config.json")
     env.invalidate_caches()
     yield

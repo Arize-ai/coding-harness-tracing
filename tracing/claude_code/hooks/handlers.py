@@ -33,9 +33,22 @@ from .adapter import (
     resolve_session,
     resolve_transcript_path,
 )
+from .async_subagents import (
+    agent_id_from_tool,
+    collect_parents,
+    export_async_subagent,
+    pop_parent,
+    record_parents,
+    task_notification_attrs,
+)
 from .span_renderer import render_event_graph
+from .transcript_settle import wait_for_final_assistant
 from .tool_buffer import ToolBuffer, ToolObservation
 from .transcript import parse_claude_transcript
+
+# Placeholder output used when a turn is closed without a Stop hook. It never
+# appears in the transcript, so the Stop settle wait must not look for it.
+FAILSAFE_STOP_MESSAGE = "(Turn closed by fail-safe: Stop hook did not fire)"
 
 # ---------------------------------------------------------------------------
 # Shared helper
@@ -370,7 +383,7 @@ def _handle_user_prompt_submit(input_json: dict) -> None:
     prev_trace_id = state.get("current_trace_id")
     if prev_trace_id:
         retry_input = dict(input_json)
-        retry_input.setdefault("last_assistant_message", "(Turn closed by fail-safe: Stop hook did not fire)")
+        retry_input.setdefault("last_assistant_message", FAILSAFE_STOP_MESSAGE)
         _handle_stop(retry_input)
         current_trace_id = state.get("current_trace_id")
         if current_trace_id == prev_trace_id:
@@ -652,13 +665,7 @@ def _buffer_subagent(state, input_json: dict, ended_at_ms: int) -> bool:
 
 
 def _agent_id_from_tool(event: ToolEvent) -> str:
-    if not isinstance(event.output, dict):
-        return ""
-    result = event.output.get("toolUseResult")
-    if not isinstance(result, dict):
-        return ""
-    agent_id = result.get("agentId")
-    return agent_id if isinstance(agent_id, str) else ""
+    return agent_id_from_tool(event)
 
 
 def _merge_pending_subagents(graph, descriptors: dict[str, dict]) -> dict[str, dict]:
@@ -828,6 +835,8 @@ def _handle_stop(input_json: dict) -> None:
     transcript = resolve_transcript_path(input_json, session_id)
     if transcript is not None:
         start_line = int(state.get("trace_start_line") or "0")
+        if last_msg != FAILSAFE_STOP_MESSAGE and not wait_for_final_assistant(transcript, start_line, last_msg):
+            log("transcript did not settle before Stop; final assistant record may be missing")
         scanned_output, usage, scanned_model = _scan_transcript_for_usage(transcript, start_line)
         if not output:
             output = scanned_output
@@ -874,6 +883,7 @@ def _handle_stop(input_json: dict) -> None:
             root_attrs = {
                 "trace.number": trace_count,
                 "project.name": project_name,
+                **task_notification_attrs(user_prompt),
             }
             if user_id:
                 root_attrs["user.id"] = user_id
@@ -920,6 +930,16 @@ def _handle_stop(input_json: dict) -> None:
             )
             if send_span(payload) is False:
                 return
+            record_parents(
+                state,
+                collect_parents(
+                    graph.events,
+                    trace_id=trace_id,
+                    turn_id=trace_count,
+                    span_id_overrides=span_id_overrides,
+                    exclude=set(matched_subagents),
+                ),
+            )
             _acknowledge_exported_turn(state, trace_id, matched_observations, matched_subagents)
             _periodic_gc(trace_count)
             return
@@ -939,6 +959,7 @@ def _handle_stop(input_json: dict) -> None:
         "input.value": redacted_prompt,
         "output.value": redacted_output,
         "llm.output_messages": json.dumps(output_messages),
+        **task_notification_attrs(user_prompt),
     }
     if user_id:
         attrs["user.id"] = user_id
@@ -993,6 +1014,19 @@ def _handle_subagent_start(input_json: dict) -> None:
 def _handle_subagent_stop(input_json: dict) -> None:
     """Handle subagent_stop: parse subagent transcript and send CHAIN span."""
     state = resolve_session(input_json)
+    async_parent = pop_parent(state, str(input_json.get("agent_id") or ""))
+    if async_parent is not None:
+        # The invoking turn was already exported (Claude Code runs Agent calls
+        # asynchronously); attach the subtree to that turn's Agent tool span.
+        export_async_subagent(
+            state,
+            input_json,
+            async_parent,
+            ended_at_ms=get_timestamp_ms(),
+            session_id=state.get("session_id") or "",
+            send=send_span,
+        )
+        return
     trace_id = state.get("current_trace_id")
     if trace_id is None:
         return
