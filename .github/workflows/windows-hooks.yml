@@ -1,0 +1,29 @@
+name: Windows hook reproduction
+
+on:
+  push:
+    branches: [test/dt-windows-bug]
+    paths:
+      - ".github/workflows/windows-hooks.yml"
+      - "install.bat"
+      - "core/**"
+      - "tracing/**"
+      - "tests/**"
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Verify Windows runner
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          Write-Host "OS: $($os.Caption) ($($os.Version))"
+          if (-not $IsWindows) {
+            throw "Expected a Windows runner"
+          }
