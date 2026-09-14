@@ -137,3 +137,17 @@ jobs:
           } finally {
             Pop-Location
           }
+
+      - name: Verify native hook delivery
+        shell: pwsh
+        run: |
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $windowsTests = Join-Path $env:GITHUB_WORKSPACE "tests/windows"
+            & $env:HARNESS_PYTHON -m unittest discover -s $windowsTests -p "test_hook_delivery.py" -k native -v
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } finally {
+            Pop-Location
+          }
