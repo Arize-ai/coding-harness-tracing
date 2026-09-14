@@ -123,3 +123,17 @@ jobs:
           } finally {
             Pop-Location
           }
+
+      - name: Verify generated hook registrations and executables
+        shell: pwsh
+        run: |
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $verificationScript = Join-Path $env:GITHUB_WORKSPACE "tests/windows/verify_registration.py"
+            & $env:HARNESS_PYTHON $verificationScript
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } finally {
+            Pop-Location
+          }
