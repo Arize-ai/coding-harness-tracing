@@ -204,11 +204,18 @@ def _unregister_claude_hooks() -> None:
         hooks = settings["hooks"]
         for event in list(hooks.keys()):
             event_hooks = hooks[event]
-            filtered = [
-                entry
-                for entry in event_hooks
-                if not all(h.get("command", "") in our_commands for h in entry.get("hooks", []))
-            ]
+            filtered = []
+            for entry in event_hooks:
+                entry_hooks = entry.get("hooks", [])
+                kept_hooks = [
+                    hook
+                    for hook in entry_hooks
+                    if not (hook.get("type") == "command" and hook.get("command") in our_commands)
+                ]
+                if len(kept_hooks) == len(entry_hooks):
+                    filtered.append(entry)
+                elif kept_hooks:
+                    filtered.append({**entry, "hooks": kept_hooks})
             if filtered:
                 hooks[event] = filtered
             else:

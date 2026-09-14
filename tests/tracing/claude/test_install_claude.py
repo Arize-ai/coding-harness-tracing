@@ -333,6 +333,70 @@ class TestCopyFrom:
 class TestUninstall:
     """Uninstall removes hooks and harness entry."""
 
+    @pytest.mark.parametrize("formats", ["legacy", "corrected", "both"], ids=["legacy-only", "corrected-only", "both"])
+    def test_uninstall_removes_legacy_and_corrected_registrations(self, fake_home, monkeypatch, formats):
+        """Uninstall removes either Windows command spelling."""
+        import tracing.claude_code.install as claude_install
+
+        root = PureWindowsPath(r"C:\Users\Test User\.arize\harness\venv\Scripts")
+        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        settings_file = fake_home / ".claude" / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks = {}
+        for event, entry_point in claude_install.HOOK_EVENTS.items():
+            path = root / f"{entry_point}.exe"
+            legacy = str(path)
+            corrected = f"'{path.as_posix()}'"
+            commands = [legacy] if formats == "legacy" else [corrected]
+            if formats == "both":
+                commands = [legacy, corrected]
+            hooks[event] = [{"hooks": [{"type": "command", "command": command}]} for command in commands]
+        settings_file.write_text(json.dumps({"hooks": hooks}))
+
+        claude_install._unregister_claude_hooks()
+
+        settings = json.loads(settings_file.read_text())
+        assert "hooks" not in settings
+
+    @pytest.mark.parametrize("formats", ["legacy", "corrected", "both"], ids=["legacy", "corrected", "both"])
+    def test_uninstall_filters_owned_hooks_inside_mixed_containers(self, fake_home, monkeypatch, formats):
+        """Uninstall preserves user hooks and container metadata."""
+        import tracing.claude_code.install as claude_install
+
+        root = PureWindowsPath(r"C:\Users\Test User\.arize\harness\venv\Scripts")
+        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        hooks = {}
+        for event, entry_point in claude_install.HOOK_EVENTS.items():
+            path = root / f"{entry_point}.exe"
+            owned = [str(path)] if formats == "legacy" else [f"'{path.as_posix()}'"]
+            if formats == "both":
+                owned = [str(path), f"'{path.as_posix()}'"]
+            hooks[event] = [
+                {
+                    "matcher": "preserve-me",
+                    "hooks": [
+                        *[{"type": "command", "command": command} for command in owned],
+                        {"type": "command", "command": "C:\\user-hook.exe", "meta": "keep-me"},
+                    ],
+                },
+                {"matcher": "empty", "hooks": []},
+            ]
+        settings_file = fake_home / ".claude" / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(json.dumps({"hooks": hooks, "custom": "keep-me"}))
+
+        claude_install._unregister_claude_hooks()
+
+        settings = json.loads(settings_file.read_text())
+        assert settings["custom"] == "keep-me"
+        for event in claude_install.HOOK_EVENTS:
+            entries = settings["hooks"][event]
+            assert entries[0] == {
+                "matcher": "preserve-me",
+                "hooks": [{"type": "command", "command": "C:\\user-hook.exe", "meta": "keep-me"}],
+            }
+            assert entries[1] == {"matcher": "empty", "hooks": []}
+
     def test_uninstall_removes_hooks_and_config(self, fake_home, monkeypatch):
         """Uninstall removes hooks, plugin, and harness entry from config.json."""
         import tracing.claude_code.install as claude_install
