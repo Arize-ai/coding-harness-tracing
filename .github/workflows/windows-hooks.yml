@@ -38,7 +38,13 @@ jobs:
         shell: pwsh
         run: |
           python --version
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
           python -m pip --version
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
           $bashCandidates = @(
             "C:\Program Files\Git\bin\bash.exe",
@@ -63,3 +69,57 @@ jobs:
           }
 
           "WINDOWS_GIT_BASH=$bash" >> $env:GITHUB_ENV
+
+      - name: Create isolated Python environment
+        shell: pwsh
+        run: |
+          $homePath = Join-Path $env:RUNNER_TEMP "windows-hook-home"
+          if ($homePath.Contains(" ")) {
+            throw "The isolated home path must not contain spaces: $homePath"
+          }
+          New-Item -ItemType Directory -Force -Path $homePath | Out-Null
+          $env:USERPROFILE = $homePath
+          $env:HOME = $homePath
+          $venv = Join-Path $homePath ".arize\harness\venv"
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $venvPython = Join-Path $venv "Scripts\python.exe"
+          if (-not (Test-Path $venvPython)) {
+            throw "The virtual environment Python was not created: $venvPython"
+          }
+          $env:HARNESS_PYTHON = $venvPython
+          "WINDOWS_HOOK_TEST_HOME=$homePath" >> $env:GITHUB_ENV
+          "USERPROFILE=$homePath" >> $env:GITHUB_ENV
+          "HOME=$homePath" >> $env:GITHUB_ENV
+          "HARNESS_PYTHON=$venvPython" >> $env:GITHUB_ENV
+
+      - name: Install checked out package
+        shell: pwsh
+        run: |
+          & $env:HARNESS_PYTHON -m pip install .
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Validate installed package
+        shell: pwsh
+        run: |
+          $env:USERPROFILE = $env:WINDOWS_HOOK_TEST_HOME
+          $env:HOME = $env:WINDOWS_HOOK_TEST_HOME
+          & $env:HARNESS_PYTHON -m pip check
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $code = "import pathlib, sys; import core, tracing; prefix = pathlib.Path(sys.prefix).resolve(); [(pathlib.Path(module.__file__).resolve().relative_to(prefix), print(f'{module.__name__}: {pathlib.Path(module.__file__).resolve()}')) for module in (core, tracing)]"
+            & $env:HARNESS_PYTHON -c $code
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } finally {
+            Pop-Location
+          }
