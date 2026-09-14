@@ -13,6 +13,8 @@ from typing import Optional
 from core.common import StateManager, env, generate_trace_id, get_timestamp_ms, log, redirect_stderr_to_log_file
 from core.constants import HARNESSES, STATE_BASE_DIR
 
+from .turn_context import remember_permission_mode
+
 # --- Module-level constants derived from HARNESSES ---
 _HARNESS = HARNESSES["claude-code"]
 SERVICE_NAME = _HARNESS["service_name"]  # "claude-code"
@@ -110,11 +112,12 @@ def resolve_session(input_json: dict) -> StateManager:
         lock_path=lock_path,
     )
     sm.init_state()
+    remember_permission_mode(sm, input_json)
     return sm
 
 
 def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
-    """Idempotent session initialization. No-op if session_id already in state.
+    """Initialize session identity once and retain available hook context.
 
     Sets the following state keys (matching bash lines 71-82):
     - session_id: from input_json or generate_trace_id()
@@ -124,7 +127,11 @@ def ensure_session_initialized(state: StateManager, input_json: dict) -> None:
     - tool_count: "0"
     - user_id: from env.get_user_id(SERVICE_NAME), then input_json["user_id"], then ""
     """
-    # Skip if already initialized
+    if input_json.get("cwd"):
+        state.set("session_cwd", input_json["cwd"])
+    remember_permission_mode(state, input_json)
+
+    # Skip identity initialization if already initialized
     existing = state.get("session_id")
     if existing is not None:
         return

@@ -42,9 +42,10 @@ from .async_subagents import (
     task_notification_attrs,
 )
 from .span_renderer import render_event_graph
-from .transcript_settle import wait_for_final_assistant
 from .tool_buffer import ToolBuffer, ToolObservation
 from .transcript import parse_claude_transcript
+from .transcript_settle import wait_for_final_assistant
+from .turn_context import DENIED_COUNT_KEY, collect_transcript_context, turn_context_attributes
 
 # Placeholder output used when a turn is closed without a Stop hook. It never
 # appears in the transcript, so the Stop settle wait must not look for it.
@@ -395,6 +396,7 @@ def _handle_user_prompt_submit(input_json: dict) -> None:
         log("Fail-safe: exported and closed orphaned turn")
 
     # Set up new trace
+    state.set(DENIED_COUNT_KEY, "0")
     state.increment("trace_count")
     state.set("current_trace_id", generate_trace_id())
     state.set("current_trace_span_id", generate_span_id())
@@ -460,6 +462,7 @@ class _TokenUsage:
 def _scan_transcript_for_usage(
     transcript: Path,
     start_line: int,
+    context: "dict[str, str] | None" = None,
 ) -> "tuple[str, _TokenUsage, str]":
     """Walk the transcript JSONL from *start_line* forward and return:
     (combined_text, usage, model_name)
@@ -488,6 +491,10 @@ def _scan_transcript_for_usage(
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(entry, dict):
+                continue
+            if context is not None:
+                collect_transcript_context(entry, context)
             msg = entry.get("message")
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
@@ -762,6 +769,8 @@ def _acknowledge_exported_turn(
             if data.get("current_trace_id") != expected_trace_id:
                 return False
 
+            data[DENIED_COUNT_KEY] = "0"
+
             current_observations = ToolBuffer._decode(data.get(ToolBuffer.STATE_KEY, ""))
             for observation in observations:
                 if current_observations.get(observation.tool_use_id) == observation:
@@ -832,12 +841,14 @@ def _handle_stop(input_json: dict) -> None:
     usage = _TokenUsage()
     model = ""
 
+    transcript_context: dict[str, str] = {}
+
     transcript = resolve_transcript_path(input_json, session_id)
     if transcript is not None:
         start_line = int(state.get("trace_start_line") or "0")
         if last_msg != FAILSAFE_STOP_MESSAGE and not wait_for_final_assistant(transcript, start_line, last_msg):
             log("transcript did not settle before Stop; final assistant record may be missing")
-        scanned_output, usage, scanned_model = _scan_transcript_for_usage(transcript, start_line)
+        scanned_output, usage, scanned_model = _scan_transcript_for_usage(transcript, start_line, transcript_context)
         if not output:
             output = scanned_output
         model = scanned_model
@@ -881,6 +892,7 @@ def _handle_stop(input_json: dict) -> None:
                 root_event.ended_at_ms = max(root_event.ended_at_ms or 0, *timestamp_candidates)
 
             root_attrs = {
+                **turn_context_attributes(state, input_json, transcript_context),
                 "trace.number": trace_count,
                 "project.name": project_name,
                 **task_notification_attrs(user_prompt),
@@ -950,6 +962,7 @@ def _handle_stop(input_json: dict) -> None:
     redacted_output = redact_content(env.log_prompts, output)
     output_messages = [{"message.role": "assistant", "message.content": redacted_output}]
     attrs = {
+        **turn_context_attributes(state, input_json, transcript_context),
         "session.id": session_id,
         "trace.number": trace_count,
         "project.name": project_name,
@@ -1152,6 +1165,7 @@ def _handle_stop_failure(input_json: dict) -> None:
         "llm.output_messages": json.dumps(output_messages),
         "error.type": error_type,
         "error.message": redact_content(env.log_prompts, error_details),
+        **turn_context_attributes(state, input_json),
     }
     if user_id:
         attrs["user.id"] = user_id
@@ -1263,6 +1277,8 @@ def _handle_permission_denied(input_json: dict) -> None:
     trace_id = state.get("current_trace_id")
     if trace_id is None:
         return
+
+    state.increment(DENIED_COUNT_KEY)
 
     session_id = state.get("session_id")
     permission = input_json.get("permission", "")
