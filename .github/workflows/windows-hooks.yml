@@ -1,4 +1,4 @@
-name: Windows hook reproduction
+name: Claude Code hooks (Windows)
 
 on:
   push:
