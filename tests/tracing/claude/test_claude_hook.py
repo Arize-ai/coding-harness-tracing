@@ -326,7 +326,11 @@ class TestUserPromptSubmit:
         assert state.get("trace_start_line") == "0"
 
     def test_failsafe_closes_orphan(self, mock_resolve, state, captured_spans):
-        """If current_trace_id already in state, sends fail-safe LLM span."""
+        """If current_trace_id already in state, sends a fail-safe Turn span.
+
+        No transcript means no model call was found, so the orphan is a CHAIN
+        span (an LLM span with a blank model name would pollute model views).
+        """
         state.set("current_trace_id", "old-trace-id-00000000000000000000")
         state.set("current_trace_span_id", "old-span-1234567")
         state.set("current_trace_start_time", "999000")
@@ -337,7 +341,9 @@ class TestUserPromptSubmit:
         assert len(captured_spans) == 1
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         attrs = {a["key"]: a["value"] for a in span["attributes"]}
-        assert attrs["openinference.span.kind"]["stringValue"] == "LLM"
+        assert attrs["openinference.span.kind"]["stringValue"] == "CHAIN"
+        assert attrs["turn.closed_by"]["stringValue"] == "fail-safe"
+        assert "llm.model_name" not in attrs
         assert "fail-safe" in attrs["output.value"]["stringValue"]
         # New trace should be set up
         assert state.get("current_trace_id") != "old-trace-id-00000000000000000000"

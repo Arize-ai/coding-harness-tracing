@@ -441,6 +441,10 @@ class _TokenUsage:
     cache_read: int = 0
     cache_write: int = 0
 
+    def is_empty(self) -> bool:
+        """True when the transcript scan found no tokens at all."""
+        return not (self.prompt or self.completion)
+
     def token_count_attrs(self) -> dict:
         """Return OpenInference token-count attributes for span emission.
 
@@ -818,6 +822,21 @@ def _periodic_gc(trace_count: str) -> None:
         gc_stale_state_files()
 
 
+def _closure_attrs(closed_by_failsafe: bool) -> dict:
+    """Mark turns closed by the UserPromptSubmit fail-safe instead of a Stop hook."""
+    return {"turn.closed_by": "fail-safe"} if closed_by_failsafe else {}
+
+
+def _legacy_llm_attrs(model: str, usage: _TokenUsage, redacted_output: str) -> dict:
+    """LLM attributes for the single-span legacy export."""
+    output_messages = [{"message.role": "assistant", "message.content": redacted_output}]
+    return {
+        "llm.model_name": model,
+        **usage.token_count_attrs(),
+        "llm.output_messages": json.dumps(output_messages),
+    }
+
+
 def _handle_stop(input_json: dict) -> None:
     """Handle Stop: send the LLM span for the completed turn and clean up trace state."""
     state = resolve_session(input_json)
@@ -837,6 +856,7 @@ def _handle_stop(input_json: dict) -> None:
     # didn't, so we still scan the transcript when last_assistant_message is empty.
     last_msg = input_json.get("last_assistant_message", "") or ""
     output = last_msg
+    closed_by_failsafe = last_msg == FAILSAFE_STOP_MESSAGE
 
     usage = _TokenUsage()
     model = ""
@@ -846,7 +866,7 @@ def _handle_stop(input_json: dict) -> None:
     transcript = resolve_transcript_path(input_json, session_id)
     if transcript is not None:
         start_line = int(state.get("trace_start_line") or "0")
-        if last_msg != FAILSAFE_STOP_MESSAGE and not wait_for_final_assistant(transcript, start_line, last_msg):
+        if not closed_by_failsafe and not wait_for_final_assistant(transcript, start_line, last_msg):
             log("transcript did not settle before Stop; final assistant record may be missing")
         scanned_output, usage, scanned_model = _scan_transcript_for_usage(transcript, start_line, transcript_context)
         if not output:
@@ -893,6 +913,7 @@ def _handle_stop(input_json: dict) -> None:
 
             root_attrs = {
                 **turn_context_attributes(state, input_json, transcript_context),
+                **_closure_attrs(closed_by_failsafe),
                 "trace.number": trace_count,
                 "project.name": project_name,
                 **task_notification_attrs(user_prompt),
@@ -957,21 +978,24 @@ def _handle_stop(input_json: dict) -> None:
             return
 
     # Legacy fallback for old/incomplete transcripts without stable assistant IDs.
-    # Build and send LLM span. Redact at emit time, not at state-write time.
+    # Build and send the Turn span. Redact at emit time, not at state-write time.
     redacted_prompt = redact_content(env.log_prompts, user_prompt)
     redacted_output = redact_content(env.log_prompts, output)
-    output_messages = [{"message.role": "assistant", "message.content": redacted_output}]
+    # A fail-safe closed turn without a single model call (a re-queued prompt or a
+    # task-notification burst) is a CHAIN span: an LLM span with a blank model
+    # name would pollute model breakdowns and cost views.
+    empty_turn = closed_by_failsafe and not model and usage.is_empty()
+    span_kind = "CHAIN" if empty_turn else "LLM"
     attrs = {
         **turn_context_attributes(state, input_json, transcript_context),
+        **_closure_attrs(closed_by_failsafe),
         "session.id": session_id,
         "trace.number": trace_count,
         "project.name": project_name,
-        "openinference.span.kind": "LLM",
-        "llm.model_name": model,
-        **usage.token_count_attrs(),
+        "openinference.span.kind": span_kind,
+        **({} if empty_turn else _legacy_llm_attrs(model, usage, redacted_output)),
         "input.value": redacted_prompt,
         "output.value": redacted_output,
-        "llm.output_messages": json.dumps(output_messages),
         **task_notification_attrs(user_prompt),
     }
     if user_id:
@@ -993,7 +1017,7 @@ def _handle_stop(input_json: dict) -> None:
 
     span = build_span(
         f"Turn {trace_count}",
-        "LLM",
+        span_kind,
         trace_span_id,
         trace_id,
         "",
