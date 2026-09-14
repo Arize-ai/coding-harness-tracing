@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared setup utilities for all harness setup wizards."""
+"""Shared setup utilities for the harness installers."""
 
 from __future__ import annotations
 
@@ -493,11 +493,11 @@ def dry_run() -> bool:
 def non_interactive() -> bool:
     """True when ARIZE_NONINTERACTIVE is set to a truthy value ('1','true','yes').
 
-    In this mode the setup wizards never call ``input()``/``getpass()``: every
+    In this mode the harness installers never call ``input()``/``getpass()``: every
     value is resolved from the environment (or a dotenv file, see
     ``_dotenv_values``) and a missing required value is a hard error instead of
     a prompt. Deliberately opt-in — without it, an exported ``ARIZE_API_KEY``
-    would silently stop the interactive wizard from asking its questions.
+    would silently stop the interactive installer from asking its questions.
     """
     return os.environ.get("ARIZE_NONINTERACTIVE", "").lower() in ("1", "true", "yes")
 
