@@ -57,8 +57,6 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      # Branch-scoped regression check: exercises the exact generated commands
-      # through Git Bash and verifies delivery to the local receiver.
       - name: Verify registered hooks deliver through Git Bash
         shell: pwsh
         run: |
