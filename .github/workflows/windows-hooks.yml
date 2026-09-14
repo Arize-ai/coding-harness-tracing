@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/windows-hooks.yml"
       - "install.bat"
+      - "pyproject.toml"
       - "core/**"
       - "tracing/**"
       - "tests/**"
@@ -19,6 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Set up Python 3.9
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.9"
+
       - name: Verify Windows runner
         shell: pwsh
         run: |
@@ -27,3 +33,33 @@ jobs:
           if (-not $IsWindows) {
             throw "Expected a Windows runner"
           }
+
+      - name: Verify Python and Git Bash
+        shell: pwsh
+        run: |
+          python --version
+          python -m pip --version
+
+          $bashCandidates = @(
+            "C:\Program Files\Git\bin\bash.exe",
+            "C:\Program Files\Git\usr\bin\bash.exe"
+          )
+          $bash = $bashCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $bash) {
+            throw "Could not find Git for Windows bash.exe"
+          }
+
+          & $bash --version
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $uname = (& $bash -c "uname -s").Trim()
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          Write-Host "uname -s: $uname"
+          if ($uname -notmatch "^(MINGW|MSYS)") {
+            throw "Expected Git for Windows bash, got uname -s '$uname'"
+          }
+
+          "WINDOWS_GIT_BASH=$bash" >> $env:GITHUB_ENV
