@@ -151,3 +151,19 @@ jobs:
           } finally {
             Pop-Location
           }
+
+      # Branch-scoped regression check: exercises the exact generated commands
+      # through Git Bash and verifies delivery to the local receiver.
+      - name: Verify registered hooks deliver through Git Bash
+        shell: pwsh
+        run: |
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $windowsTests = Join-Path $env:GITHUB_WORKSPACE "tests/windows"
+            & $env:HARNESS_PYTHON -m unittest discover -s $windowsTests -p "test_hook_delivery.py" -k registered -v
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } finally {
+            Pop-Location
+          }

@@ -1,4 +1,4 @@
-"""Windows integration test for native Claude hook executables."""
+"""Windows integration tests for native and registered Claude hook commands."""
 
 from __future__ import annotations
 
@@ -16,9 +16,25 @@ from pathlib import Path
 
 @unittest.skipUnless(os.name == "nt", "Windows-only integration test")
 class TestNativeClaudeHookDelivery(unittest.TestCase):
-    """Verify installed ``Scripts/*.exe`` hooks deliver OTLP/JSON."""
+    """Verify Claude hook commands deliver OTLP/JSON.
+
+    The registered path invokes Git Bash directly across Claude's command shell
+    boundary described at https://code.claude.com/docs/en/hooks#exec-form-and-shell-form;
+    it does not invoke the Claude CLI.
+    """
 
     def test_native_executables_deliver_span(self) -> None:
+        self._run_delivery("native")
+
+    def test_registered_commands_deliver_span_via_git_bash(self) -> None:
+        if not os.environ.get("WINDOWS_HOOK_TEST_HOME"):
+            self.skipTest("set WINDOWS_HOOK_TEST_HOME to opt into the registered-command test")
+        git_bash = os.environ.get("WINDOWS_GIT_BASH")
+        self.assertTrue(git_bash, "WINDOWS_GIT_BASH must be set when Windows hook tests are opted in")
+        self.assertTrue(Path(git_bash).is_file(), f"WINDOWS_GIT_BASH does not name a file: {git_bash}")
+        self._run_delivery("registered", git_bash)
+
+    def _run_delivery(self, mode: str, git_bash: str = "") -> None:
         test_home = os.environ.get("WINDOWS_HOOK_TEST_HOME")
         if not test_home:
             self.skipTest("set WINDOWS_HOOK_TEST_HOME to opt into the isolated Windows hook test")
@@ -127,9 +143,18 @@ class TestNativeClaudeHookDelivery(unittest.TestCase):
                         },
                     ),
                 ]
-                for entry_point, payload in events:
+                failures = []
+                for event, (entry_point, payload) in zip(("SessionStart", "UserPromptSubmit", "Stop"), events):
+                    if mode == "native":
+                        command = [str(venv_bin(entry_point))]
+                    else:
+                        command = [
+                            git_bash,
+                            "-c",
+                            settings["hooks"][event][0]["hooks"][0]["command"],
+                        ]
                     result = subprocess.run(
-                        [str(venv_bin(entry_point))],
+                        command,
                         input=json.dumps(payload),
                         text=True,
                         capture_output=True,
@@ -138,15 +163,13 @@ class TestNativeClaudeHookDelivery(unittest.TestCase):
                         timeout=30,
                         check=False,
                     )
-                    self.assertEqual(
-                        result.returncode,
-                        0,
-                        f"{entry_point} failed:\nstdout={result.stdout}\nstderr={result.stderr}",
-                    )
-                    print(f"{entry_point}: returncode={result.returncode}")
+                    print(f"{event}: command={command!r} returncode={result.returncode} stderr={result.stderr!r}")
+                    if result.returncode:
+                        failures.append((event, result.returncode, result.stderr))
+                print(f"received spans: {len(received)}")
+                self.assertEqual(failures, [])
 
             self.assertEqual(len(received), 1)
-            print(f"received spans: {len(received)}")
             path, payload, headers = received[0]
             self.assertEqual(path, "/v1/traces")
             self.assertEqual(headers.get("content-type"), "application/json")
