@@ -141,8 +141,26 @@ def _register_claude_hooks() -> None:
     # Register hooks
     hooks = settings.setdefault("hooks", {})
     for event, entry_point in HOOK_EVENTS.items():
-        hook_cmd = shlex.quote(venv_bin(entry_point).as_posix())
+        hook_path = venv_bin(entry_point)
+        hook_cmd = shlex.quote(hook_path.as_posix())
         event_hooks = hooks.setdefault(event, [])
+        legacy_cmd = str(hook_path)
+        if legacy_cmd != hook_cmd:
+            # Older installers wrote native paths that Bash can misinterpret.
+            # Remove only this event's exact legacy command
+            cleaned = []
+            for entry in event_hooks:
+                entry_hooks = entry.get("hooks", [])
+                kept_hooks = [
+                    hook
+                    for hook in entry_hooks
+                    if not (hook.get("type") == "command" and hook.get("command") == legacy_cmd)
+                ]
+                if len(kept_hooks) == len(entry_hooks):
+                    cleaned.append(entry)
+                elif kept_hooks:
+                    cleaned.append({**entry, "hooks": kept_hooks})
+            event_hooks[:] = cleaned
         already = any(h.get("command", "") == hook_cmd for entry in event_hooks for h in entry.get("hooks", []))
         if not already:
             event_hooks.append({"hooks": [{"type": "command", "command": hook_cmd}]})
