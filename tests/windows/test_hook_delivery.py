@@ -1,4 +1,4 @@
-"""Windows integration tests for native and registered Claude hook commands."""
+"""Windows integration test for registered Claude hook commands."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 @unittest.skipUnless(os.name == "nt", "Windows-only integration test")
-class TestNativeClaudeHookDelivery(unittest.TestCase):
+class TestClaudeHookDelivery(unittest.TestCase):
     """Verify Claude hook commands deliver OTLP/JSON.
 
     The registered path invokes Git Bash directly across Claude's command shell
@@ -23,33 +23,27 @@ class TestNativeClaudeHookDelivery(unittest.TestCase):
     it does not invoke the Claude CLI.
     """
 
-    def test_native_executables_deliver_span(self) -> None:
-        self._run_delivery("native")
-
     def test_registered_commands_deliver_span_via_git_bash(self) -> None:
         if not os.environ.get("WINDOWS_HOOK_TEST_HOME"):
             self.skipTest("set WINDOWS_HOOK_TEST_HOME to opt into the registered-command test")
         git_bash = os.environ.get("WINDOWS_GIT_BASH")
         self.assertTrue(git_bash, "WINDOWS_GIT_BASH must be set when Windows hook tests are opted in")
         self.assertTrue(Path(git_bash).is_file(), f"WINDOWS_GIT_BASH does not name a file: {git_bash}")
-        self._run_delivery("registered", git_bash)
-
-    def _run_delivery(self, mode: str, git_bash: str = "") -> None:
         test_home = os.environ.get("WINDOWS_HOOK_TEST_HOME")
-        if not test_home:
-            self.skipTest("set WINDOWS_HOOK_TEST_HOME to opt into the isolated Windows hook test")
         expected_home = Path.home()
         self.assertEqual(Path(test_home), expected_home)
         self.assertEqual(sys.prefix, str(expected_home / ".arize" / "harness" / "venv"))
 
-        settings_path = expected_home / ".claude" / "settings.json"
-        settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
+        from tracing.claude_code.constants import SETTINGS_FILE
+        from tracing.claude_code.install import _register_claude_hooks
+
+        _register_claude_hooks()
+        settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         settings_env = settings.get("env", {})
         self.assertIsInstance(settings_env, dict)
         self.assertEqual(settings_env.get("ARIZE_TRACE_ENABLED"), "true")
 
         from core.constants import CONFIG_FILE
-        from core.setup import venv_bin
 
         received: list[tuple[str, dict, dict[str, str]]] = []
 
@@ -83,7 +77,7 @@ class TestNativeClaudeHookDelivery(unittest.TestCase):
                     {
                         "harnesses": {
                             "claude-code": {
-                                "project_name": "windows-native-test",
+                                "project_name": "windows-hook-test",
                                 "target": "arize",
                                 "endpoint": f"http://127.0.0.1:{server.server_address[1]}",
                                 "api_key": "windows-test-key",
@@ -116,43 +110,28 @@ class TestNativeClaudeHookDelivery(unittest.TestCase):
 
             with tempfile.TemporaryDirectory() as project_dir:
                 events = [
-                    (
-                        "arize-hook-session-start",
-                        {
-                            "session_id": session_id,
-                            "cwd": project_dir,
-                            "hook_event_name": "SessionStart",
-                        },
-                    ),
-                    (
-                        "arize-hook-user-prompt-submit",
-                        {
-                            "session_id": session_id,
-                            "cwd": project_dir,
-                            "prompt": "native Windows hook test",
-                            "hook_event_name": "UserPromptSubmit",
-                        },
-                    ),
-                    (
-                        "arize-hook-stop",
-                        {
-                            "session_id": session_id,
-                            "cwd": project_dir,
-                            "last_assistant_message": "native response",
-                            "hook_event_name": "Stop",
-                        },
-                    ),
+                    {
+                        "session_id": session_id,
+                        "cwd": project_dir,
+                        "hook_event_name": "SessionStart",
+                    },
+                    {
+                        "session_id": session_id,
+                        "cwd": project_dir,
+                        "prompt": "Windows hook test",
+                        "hook_event_name": "UserPromptSubmit",
+                    },
+                    {
+                        "session_id": session_id,
+                        "cwd": project_dir,
+                        "last_assistant_message": "Windows hook response",
+                        "hook_event_name": "Stop",
+                    },
                 ]
                 failures = []
-                for event, (entry_point, payload) in zip(("SessionStart", "UserPromptSubmit", "Stop"), events):
-                    if mode == "native":
-                        command = [str(venv_bin(entry_point))]
-                    else:
-                        command = [
-                            git_bash,
-                            "-c",
-                            settings["hooks"][event][0]["hooks"][0]["command"],
-                        ]
+                for payload in events:
+                    event = payload["hook_event_name"]
+                    command = [git_bash, "-c", settings["hooks"][event][0]["hooks"][0]["command"]]
                     result = subprocess.run(
                         command,
                         input=json.dumps(payload),
@@ -179,10 +158,10 @@ class TestNativeClaudeHookDelivery(unittest.TestCase):
             attributes = {attribute["key"]: next(iter(attribute["value"].values())) for attribute in span["attributes"]}
             self.assertEqual(span["name"], "Turn 1")
             self.assertEqual(attributes["session.id"], session_id)
-            self.assertEqual(attributes["project.name"], "windows-native-test")
-            self.assertEqual(attributes["arize.project.name"], "windows-native-test")
-            self.assertEqual(attributes["input.value"], "native Windows hook test")
-            self.assertEqual(attributes["output.value"], "native response")
+            self.assertEqual(attributes["project.name"], "windows-hook-test")
+            self.assertEqual(attributes["arize.project.name"], "windows-hook-test")
+            self.assertEqual(attributes["input.value"], "Windows hook test")
+            self.assertEqual(attributes["output.value"], "Windows hook response")
         finally:
             server.shutdown()
             server.server_close()

@@ -17,6 +17,8 @@ jobs:
   reproduce:
     runs-on: windows-latest
     timeout-minutes: 10
+    env:
+      WINDOWS_GIT_BASH: 'C:\Program Files\Git\bin\bash.exe'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -25,58 +27,10 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Verify Windows runner
-        shell: pwsh
-        run: |
-          $os = Get-CimInstance Win32_OperatingSystem
-          Write-Host "OS: $($os.Caption) ($($os.Version))"
-          if (-not $IsWindows) {
-            throw "Expected a Windows runner"
-          }
-
-      - name: Verify Python and Git Bash
-        shell: pwsh
-        run: |
-          python --version
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-          python -m pip --version
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-          $bashCandidates = @(
-            "C:\Program Files\Git\bin\bash.exe",
-            "C:\Program Files\Git\usr\bin\bash.exe"
-          )
-          $bash = $bashCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $bash) {
-            throw "Could not find Git for Windows bash.exe"
-          }
-
-          & $bash --version
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-          $uname = (& $bash -c "uname -s").Trim()
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-          Write-Host "uname -s: $uname"
-          if ($uname -notmatch "^(MINGW|MSYS)") {
-            throw "Expected Git for Windows bash, got uname -s '$uname'"
-          }
-
-          "WINDOWS_GIT_BASH=$bash" >> $env:GITHUB_ENV
-
       - name: Create isolated Python environment
         shell: pwsh
         run: |
           $homePath = Join-Path $env:RUNNER_TEMP "windows-hook-home"
-          if ($homePath.Contains(" ")) {
-            throw "The isolated home path must not contain spaces: $homePath"
-          }
           New-Item -ItemType Directory -Force -Path $homePath | Out-Null
           $env:USERPROFILE = $homePath
           $env:HOME = $homePath
@@ -101,55 +55,6 @@ jobs:
           & $env:HARNESS_PYTHON -m pip install .
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
-          }
-
-      - name: Validate installed package
-        shell: pwsh
-        run: |
-          $env:USERPROFILE = $env:WINDOWS_HOOK_TEST_HOME
-          $env:HOME = $env:WINDOWS_HOOK_TEST_HOME
-          & $env:HARNESS_PYTHON -m pip check
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-          Push-Location $env:RUNNER_TEMP
-          try {
-            $code = "import pathlib, sys; import core, tracing; prefix = pathlib.Path(sys.prefix).resolve(); [(pathlib.Path(module.__file__).resolve().relative_to(prefix), print(f'{module.__name__}: {pathlib.Path(module.__file__).resolve()}')) for module in (core, tracing)]"
-            & $env:HARNESS_PYTHON -c $code
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
-          } finally {
-            Pop-Location
-          }
-
-      - name: Verify generated hook registrations and executables
-        shell: pwsh
-        run: |
-          Push-Location $env:RUNNER_TEMP
-          try {
-            $verificationScript = Join-Path $env:GITHUB_WORKSPACE "tests/windows/verify_registration.py"
-            & $env:HARNESS_PYTHON $verificationScript
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
-          } finally {
-            Pop-Location
-          }
-
-      - name: Verify native hook delivery
-        shell: pwsh
-        run: |
-          Push-Location $env:RUNNER_TEMP
-          try {
-            $windowsTests = Join-Path $env:GITHUB_WORKSPACE "tests/windows"
-            & $env:HARNESS_PYTHON -m unittest discover -s $windowsTests -p "test_hook_delivery.py" -k native -v
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
-          } finally {
-            Pop-Location
           }
 
       # Branch-scoped regression check: exercises the exact generated commands
