@@ -1,0 +1,72 @@
+name: Claude Code hooks (Windows)
+
+on:
+  push:
+    branches: [test/dt-windows-bug]
+    paths:
+      - ".github/workflows/windows-hooks.yml"
+      - "install.bat"
+      - "pyproject.toml"
+      - "core/**"
+      - "tracing/**"
+      - "tests/**"
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_GIT_BASH: 'C:\Program Files\Git\bin\bash.exe'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.9"
+
+      - name: Create isolated Python environment
+        shell: pwsh
+        run: |
+          $homePath = Join-Path $env:RUNNER_TEMP "windows-hook-home"
+          New-Item -ItemType Directory -Force -Path $homePath | Out-Null
+          $env:USERPROFILE = $homePath
+          $env:HOME = $homePath
+          $venv = Join-Path $homePath ".arize\harness\venv"
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $venvPython = Join-Path $venv "Scripts\python.exe"
+          if (-not (Test-Path $venvPython)) {
+            throw "The virtual environment Python was not created: $venvPython"
+          }
+          $env:HARNESS_PYTHON = $venvPython
+          "WINDOWS_HOOK_TEST_HOME=$homePath" >> $env:GITHUB_ENV
+          "USERPROFILE=$homePath" >> $env:GITHUB_ENV
+          "HOME=$homePath" >> $env:GITHUB_ENV
+          "HARNESS_PYTHON=$venvPython" >> $env:GITHUB_ENV
+
+      - name: Install checked out package
+        shell: pwsh
+        run: |
+          & $env:HARNESS_PYTHON -m pip install .
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify registered hooks deliver through Git Bash
+        shell: pwsh
+        run: |
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $windowsTests = Join-Path $env:GITHUB_WORKSPACE "tests/windows"
+            & $env:HARNESS_PYTHON -m unittest discover -s $windowsTests -p "test_hook_delivery.py" -k registered -v
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } finally {
+            Pop-Location
+          }
