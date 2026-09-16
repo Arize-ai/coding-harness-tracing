@@ -1,15 +1,11 @@
 name: Claude Code hooks (Windows)
 
 on:
+  pull_request:
+    branches: [main]
   push:
-    branches: [test/dt-windows-bug]
-    paths:
-      - ".github/workflows/windows-hooks.yml"
-      - "install.bat"
-      - "pyproject.toml"
-      - "core/**"
-      - "tracing/**"
-      - "tests/**"
+    branches: [main]
+
 permissions:
   contents: read
 
