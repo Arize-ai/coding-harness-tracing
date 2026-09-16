@@ -15,6 +15,10 @@ body:
         - copilot
         - gemini
         - kiro
+        - antigravity
+        - opencode
+        - omp
+        - devin
     validations:
       required: true
 

@@ -48,11 +48,12 @@ This repo emits OpenTelemetry / OpenInference spans from AI coding-assistant har
 
 ### New harness integrations
 
-A new harness must mirror the existing layout used by `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, and `kiro`:
+A new harness must mirror the layout of an existing directory under `tracing/` (see `CONTRIBUTING.md`):
 
 - A `tracing/<harness>/` package (with hooks, span builders, and any harness-specific helpers).
 - A `core/setup/<harness>.py` setup wizard.
 - Console-script entry points registered in `pyproject.toml` under `[project.scripts]` (hooks and a `arize-setup-<harness>` wizard).
+- `install.sh` and `install.bat` dispatch, and a `core/setup/status.py` `_REGISTRATION` line.
 
 Flag any new harness that skips one of these.
 
@@ -68,7 +69,7 @@ The repo targets `>=3.9`. CI runs on 3.9 through 3.14. Reject any 3.10+ syntax i
 
 ### No new runtime dependencies
 
-The package is intended to install with zero PyPI runtime dependencies. Anything imported from `core/` or `tracing/` must be stdlib (or already-vendored). Flag any new entry under `[project] dependencies` in `pyproject.toml`. New `[project.optional-dependencies] dev = [...]` entries are allowed but should be justified.
+The only allowed runtime PyPI dependency is `python-dotenv`, imported by the installer in `core/setup` only. Anything imported from hook code under `core/` or `tracing/` must be stdlib. Flag any new entry under `[project] dependencies` in `pyproject.toml` other than `python-dotenv`. New `[project.optional-dependencies] dev = [...]` entries are allowed but should be justified.
 
 ## Run the Gates
 
@@ -79,7 +80,9 @@ uv run pytest tests/ -m "not slow"
 uv run pre-commit run --all-files
 ```
 
-If either fails, include the failing test names / hook names and the relevant error excerpts in the findings. Do not attempt to "fix" anything in this skill — the goal is to surface issues.
+If either fails, include the failing test names / hook names and the relevant error excerpts in the findings. Do not attempt to "fix" anything in this skill. The goal is to surface issues.
+
+OpenCode plugin tests call `node --experimental-transform-types` and need Node 22 or newer. `test_run_hook_bootstraps_on_python312_without_setuptools` needs a system Python 3.12 on PATH outside the venv, not a uv-managed standalone. Note those as environment skips when they fail that way. They are not automatic blockers for an unrelated harness change.
 
 ## Summarize Findings
 
