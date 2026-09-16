@@ -81,15 +81,15 @@ Shared install, config, and OTLP code lives in `core/`. Each coding assistant li
 | Tests for one harness | `tests/tracing/<harness>/` |
 | The `install.sh` and `install.bat` command name | `install.sh` `harness_dir()` and the dispatch `case`, plus the matching loops in `install.bat` |
 
-`core/setup/<harness>.py` is a thin `arize-setup-*` wrapper. The real installer is `tracing/<harness>/install.py`.
+### Common gotchas
 
-Claude Code's CLI name is `claude`. Its config key and `HARNESS_NAME` are `claude-code`. `install.sh` accepts both spellings in `harness_dir()`, and only `claude` as an install command.
+Watch for these:
 
-Most adapters read metadata from `core.constants.HARNESSES`. Kiro and Devin keep `SERVICE_NAME` and related fields in `tracing/<harness>/constants.py` instead. Copy the pattern the nearest harness already uses.
-
-Hook processes must stay on the stdlib. `python-dotenv` is the only PyPI dependency, and only `core/setup` imports it.
-
-Python 3.9 is the floor. CI rejects 3.10-only syntax.
+- `core/setup/<harness>.py` is a thin `arize-setup-*` wrapper. The real installer is `tracing/<harness>/install.py`.
+- Most adapters read metadata from `core.constants.HARNESSES`. Kiro and Devin keep `SERVICE_NAME` and related fields in `tracing/<harness>/constants.py` instead. Copy the pattern the nearest harness already uses.
+- Claude Code's CLI name is `claude`. Its config key and `HARNESS_NAME` are `claude-code`. `install.sh` accepts both spellings in `harness_dir()`, and only `claude` as an install command.
+- Hook processes must stay on the stdlib. `python-dotenv` is the only PyPI dependency, and only `core/setup` imports it.
+- Python 3.9 is the floor. CI rejects 3.10-only syntax.
 
 ## Add a harness
 
