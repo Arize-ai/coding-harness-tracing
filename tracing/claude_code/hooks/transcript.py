@@ -41,7 +41,8 @@ def parse_claude_transcript(
     sequence = root_event.sequence + 1
 
     try:
-        lines = transcript.read_text(encoding="utf-8").splitlines()
+        with transcript.open(encoding="utf-8") as handle:
+            lines = list(handle)
     except (OSError, UnicodeError) as exc:
         graph.diagnostics = [
             GraphDiagnostic(

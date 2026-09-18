@@ -92,6 +92,36 @@ def test_hook_output_overlay_preserves_transcript_agent_correlation():
     assert agent_tool.output["toolUseResult"]["agentId"] == "agent-1"
 
 
+def test_transcript_start_line_uses_physical_jsonl_lines(tmp_path: Path):
+    separator = chr(0x2028)
+    transcript = tmp_path / "transcript.jsonl"
+    records = [
+        {"type": "user", "uuid": "u1", "message": {"role": "user", "content": "hello"}},
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "message": {"role": "assistant", "content": f"line A{separator}line B"},
+        },
+        {"type": "user", "uuid": "u2", "message": {"role": "user", "content": "again"}},
+        {"type": "assistant", "uuid": "a2", "message": {"role": "assistant", "content": "done"}},
+    ]
+    transcript.write_text("\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n")
+    root = TurnEvent(
+        event_id="turn",
+        session_id="session",
+        turn_id="1",
+        sequence=0,
+        started_at_ms=None,
+        ended_at_ms=None,
+        status=EventStatus.RUNNING,
+    )
+
+    graph = parse_claude_transcript(transcript, root, start_line=4)
+
+    assert [event.event_id for event in graph.events] == ["turn"]
+    assert graph.diagnostics == []
+
+
 def test_hook_overlay_is_first_wins_for_duplicate_tool_call_ids():
     tools = [
         ToolEvent(
