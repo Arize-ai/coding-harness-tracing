@@ -1,6 +1,6 @@
 # Harness requirements
 
-Use `CONTRIBUTING.md` and the affected harness's README/source as evidence. This repository builds spans from coding-assistant hooks and transcripts; it does not expose OpenInference instrumentor APIs such as `TraceConfig` or `suppress_tracing()` as universal requirements.
+Use `CONTRIBUTING.md` and the affected harness's README/source as evidence. Derive requirements from this repository's hook, transcript, configuration, installation, and span-export contracts.
 
 ## Check the dimensions the issue touches
 

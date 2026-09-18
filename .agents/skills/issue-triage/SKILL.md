@@ -5,7 +5,7 @@ description: Triages coding-harness-tracing issues by type, sufficiency, harness
 
 # Issue triage
 
-Make issues in `Arize-ai/coding-harness-tracing` actionable using eight stages adapted from [OpenInference's issue-triage skill](https://github.com/Arize-ai/openinference/tree/main/.agents/skills/issue-triage) ([PR #3778](https://github.com/Arize-ai/openinference/pull/3778)). This skill handles issue triage, not implementation or scheduled automation.
+Make issues in `Arize-ai/coding-harness-tracing` actionable through eight stages that classify the work, check its specification, route it to the affected harness and shared components, assess implementation requirements and effort, investigate when useful, improve readability, and identify suitable contributors. This skill handles issue triage, not implementation or scheduled automation.
 
 ## Scope and execution
 
@@ -34,7 +34,7 @@ Examples: “Preview triage for #136”; “Apply labels only to 10 issues creat
 
 ## Fetch and bound the work
 
-Load live label names and descriptions; they govern label meaning. Never assume labels from the reference repository exist here.
+Load live label names and descriptions; they govern label meaning. Never invent a label; use its exact live definition when deciding whether it applies.
 
 ```bash
 gh label list --repo Arize-ai/coding-harness-tracing --limit 300 --json name,description

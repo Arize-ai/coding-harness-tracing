@@ -30,4 +30,4 @@ Refresh labels on every run. Type, information, component, size, and gate judgme
 - Intake: `triage`, `needs information`, `needs attention`, `blocked`, `new harness`. New integrations carry `new harness`; recommend a new `c/<name>` only once its identity is clear. The triage skill manages `needs information` and the opted-in removal of `triage`; recommend maintainer-owned `blocked` and `needs attention` rather than applying them automatically.
 - Complexity: `size:S`, `size:M`, `size:L` describe implementation effort on issues, not PR line counts. Use one current size per issue.
 
-Before applying any automation gate, inspect current workflows for consumers of that exact label. Do not assume this repository has OpenInference's agent implementation workflow, Slack digest, or course schedule. Keep `triage` unless `clear_triage` was requested; check its local consumers before removal.
+Before applying any automation gate, inspect this repository's current workflows for consumers of that exact label and report the behavior it triggers. Keep `triage` unless `clear_triage` was requested; check its local consumers before removal.
