@@ -80,9 +80,7 @@ jobs:
           github_token: ${{ github.token }}
           show_full_output: 'true'
           prompt: |
-            Read .agents/skills/issue-triage/SKILL.md completely, including every
-            reference it requires for this run, and follow it as the controlling
-            issue-triage procedure.
+            /issue-triage
 
             Triage open issues on Arize-ai/coding-harness-tracing. This scheduled or
             manually dispatched run authorizes the issue writes allowed by the skill:
@@ -109,4 +107,4 @@ jobs:
             reporter's words exactly when editing a body. Read back every write and
             report verified changes in the run log.
 
-          claude_args: '--model claude-opus-4-8 --allowedTools Read,Grep,Glob,Write,"Bash(gh label list:*)","Bash(gh issue list:*)","Bash(gh issue view:*)","Bash(gh issue edit:*)","Bash(gh issue comment:*)","Bash(gh pr list:*)","Bash(gh pr view:*)"'
+          claude_args: '--model claude-opus-4-8 --allowedTools Skill,Read,Grep,Glob,Write,"Bash(gh label list:*)","Bash(gh issue list:*)","Bash(gh issue view:*)","Bash(gh issue edit:*)","Bash(gh issue comment:*)","Bash(gh pr list:*)","Bash(gh pr view:*)"'
