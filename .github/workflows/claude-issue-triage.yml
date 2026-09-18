@@ -90,6 +90,7 @@ jobs:
             triage comment per issue. Do not make any other external change.
 
             Run scope:
+              mode:         apply
               created:      ${{ inputs.created || '(none - whole backlog)' }}
               limit:        ${{ inputs.limit || '25' }}
               sort:         ${{ inputs.created && 'created-asc' || 'updated-asc' }}
@@ -108,4 +109,4 @@ jobs:
             reporter's words exactly when editing a body. Read back every write and
             report verified changes in the run log.
 
-          claude_args: '--model claude-opus-4-8 --allowedTools Read,Grep,Glob,Write,"Bash(gh label list:*)","Bash(gh issue list:*)","Bash(gh issue view:*)","Bash(gh issue edit:*)","Bash(gh issue comment:*)"'
+          claude_args: '--model claude-opus-4-8 --allowedTools Read,Grep,Glob,Write,"Bash(gh label list:*)","Bash(gh issue list:*)","Bash(gh issue view:*)","Bash(gh issue edit:*)","Bash(gh issue comment:*)","Bash(gh pr list:*)","Bash(gh pr view:*)"'
