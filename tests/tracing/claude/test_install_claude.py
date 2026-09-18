@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -166,17 +166,23 @@ class TestFreshInstall:
 class TestIdempotent:
     """Re-install is idempotent — no duplicate hooks."""
 
-    def test_double_install_no_duplicates(self, fake_home, monkeypatch):
+    @pytest.mark.parametrize("windows", [False, True], ids=["posix", "windows"])
+    def test_double_install_no_duplicates(self, fake_home, monkeypatch, windows):
         """Running install() twice does not duplicate hooks or plugins."""
         import tracing.claude_code.install as claude_install
 
         _mock_prompts(monkeypatch)
+        if windows:
+            root = PureWindowsPath(r"C:\new\harness\venv\Scripts")
+            monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
 
         claude_install.install(with_skills=False)
-        claude_install.install(with_skills=False)
-
         settings_file = fake_home / ".claude" / "settings.json"
+        first_settings = json.loads(settings_file.read_text())
+        claude_install.install(with_skills=False)
+
         settings = json.loads(settings_file.read_text())
+        assert settings == first_settings
 
         # Still exactly 1 plugin
         assert len(settings["plugins"]) == 1
@@ -184,6 +190,50 @@ class TestIdempotent:
         # Still exactly 1 hook entry per event
         for event, entries in settings["hooks"].items():
             assert len(entries) == 1, f"Event {event} has {len(entries)} entries"
+
+    @pytest.mark.parametrize("include_corrected", [False, True], ids=["legacy-only", "legacy-and-corrected"])
+    def test_reinstalling_with_old_values_ensures_correct_registrations(
+        self, fake_home, monkeypatch, include_corrected
+    ):
+        """Reinstall removes only the exact historical Windows command."""
+        import tracing.claude_code.install as claude_install
+
+        root = PureWindowsPath(r"C:\old\harness\venv\Scripts")
+        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        old_commands = {
+            event: str(root / f"{entry_point}.exe") for event, entry_point in claude_install.HOOK_EVENTS.items()
+        }
+        new_commands = {
+            event: (root / f"{entry_point}.exe").as_posix() for event, entry_point in claude_install.HOOK_EVENTS.items()
+        }
+        session_start_siblings = [
+            {"hooks": [{"type": "command", "command": old_commands["SessionStart"] + " --custom"}]},
+            {"hooks": [{"type": "command", "command": r"C:\other\arize-hook-session-start.exe"}]},
+            {"hooks": [{"type": "command", "command": "/usr/local/bin/user-hook"}]},
+        ]
+        hooks = {
+            event: [{"hooks": [{"type": "command", "command": old_commands[event]}]}]
+            for event in claude_install.HOOK_EVENTS
+        }
+        hooks["SessionStart"][0]["hooks"].extend(session_start_siblings[0]["hooks"])
+        hooks["SessionStart"].extend(session_start_siblings[1:])
+        if include_corrected:
+            hooks["SessionStart"].append({"hooks": [{"type": "command", "command": new_commands["SessionStart"]}]})
+        settings_file = fake_home / ".claude" / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(json.dumps({"hooks": hooks}))
+
+        claude_install._register_claude_hooks()
+
+        settings = json.loads(settings_file.read_text())
+        for event in claude_install.HOOK_EVENTS:
+            commands = [h["command"] for entry in settings["hooks"][event] for h in entry["hooks"]]
+            assert old_commands[event] not in commands
+            assert commands.count(new_commands[event]) == 1
+        session_commands = [h["command"] for entry in settings["hooks"]["SessionStart"] for h in entry["hooks"]]
+        assert old_commands["SessionStart"] + " --custom" in session_commands
+        assert r"C:\other\arize-hook-session-start.exe" in session_commands
+        assert "/usr/local/bin/user-hook" in session_commands
 
 
 class TestExistingEntry:
@@ -282,6 +332,70 @@ class TestCopyFrom:
 
 class TestUninstall:
     """Uninstall removes hooks and harness entry."""
+
+    @pytest.mark.parametrize("formats", ["legacy", "corrected", "both"], ids=["legacy-only", "corrected-only", "both"])
+    def test_uninstall_removes_legacy_and_corrected_registrations(self, fake_home, monkeypatch, formats):
+        """Uninstall removes either Windows command spelling."""
+        import tracing.claude_code.install as claude_install
+
+        root = PureWindowsPath(r"C:\Users\Test User\.arize\harness\venv\Scripts")
+        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        settings_file = fake_home / ".claude" / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks = {}
+        for event, entry_point in claude_install.HOOK_EVENTS.items():
+            path = root / f"{entry_point}.exe"
+            legacy = str(path)
+            corrected = f"'{path.as_posix()}'"
+            commands = [legacy] if formats == "legacy" else [corrected]
+            if formats == "both":
+                commands = [legacy, corrected]
+            hooks[event] = [{"hooks": [{"type": "command", "command": command}]} for command in commands]
+        settings_file.write_text(json.dumps({"hooks": hooks}))
+
+        claude_install._unregister_claude_hooks()
+
+        settings = json.loads(settings_file.read_text())
+        assert "hooks" not in settings
+
+    @pytest.mark.parametrize("formats", ["legacy", "corrected", "both"], ids=["legacy", "corrected", "both"])
+    def test_uninstall_filters_owned_hooks_inside_mixed_containers(self, fake_home, monkeypatch, formats):
+        """Uninstall preserves user hooks and container metadata."""
+        import tracing.claude_code.install as claude_install
+
+        root = PureWindowsPath(r"C:\Users\Test User\.arize\harness\venv\Scripts")
+        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        hooks = {}
+        for event, entry_point in claude_install.HOOK_EVENTS.items():
+            path = root / f"{entry_point}.exe"
+            owned = [str(path)] if formats == "legacy" else [f"'{path.as_posix()}'"]
+            if formats == "both":
+                owned = [str(path), f"'{path.as_posix()}'"]
+            hooks[event] = [
+                {
+                    "matcher": "preserve-me",
+                    "hooks": [
+                        *[{"type": "command", "command": command} for command in owned],
+                        {"type": "command", "command": "C:\\user-hook.exe", "meta": "keep-me"},
+                    ],
+                },
+                {"matcher": "empty", "hooks": []},
+            ]
+        settings_file = fake_home / ".claude" / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(json.dumps({"hooks": hooks, "custom": "keep-me"}))
+
+        claude_install._unregister_claude_hooks()
+
+        settings = json.loads(settings_file.read_text())
+        assert settings["custom"] == "keep-me"
+        for event in claude_install.HOOK_EVENTS:
+            entries = settings["hooks"][event]
+            assert entries[0] == {
+                "matcher": "preserve-me",
+                "hooks": [{"type": "command", "command": "C:\\user-hook.exe", "meta": "keep-me"}],
+            }
+            assert entries[1] == {"matcher": "empty", "hooks": []}
 
     def test_uninstall_removes_hooks_and_config(self, fake_home, monkeypatch):
         """Uninstall removes hooks, plugin, and harness entry from config.json."""
