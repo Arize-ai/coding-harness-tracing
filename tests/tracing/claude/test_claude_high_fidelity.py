@@ -265,7 +265,7 @@ def test_real_v2_transcript_is_exported_once_as_correlated_tree(tmp_path: Path):
     assert "parentSpanId" not in spans[0]
     assert spans[2]["parentSpanId"] == spans[1]["spanId"]
     assert spans[4]["parentSpanId"] == spans[3]["spanId"]
-    assert _attrs(spans[0])["openinference.span.kind"] == "CHAIN"
+    assert _attrs(spans[0])["openinference.span.kind"] == "AGENT"
     assert "llm.token_count.total" not in _attrs(spans[0])
     assert _attrs(spans[2])["output.value"] == "hook read output"
     assert _attrs(spans[2])["tool.call.id"] == "tool-read-1"
@@ -452,6 +452,8 @@ def test_foreground_subagent_is_buffered_and_exported_inside_main_tree(tmp_path:
     assert spans[5]["parentSpanId"] == spans[4]["spanId"]
     assert spans[6]["parentSpanId"] == spans[3]["spanId"]
     assert spans[7]["parentSpanId"] == spans[0]["spanId"]
+    assert _attrs(spans[0])["openinference.span.kind"] == "AGENT"
+    assert _attrs(spans[2])["openinference.span.kind"] == "AGENT"
     assert _attrs(spans[3])["openinference.span.kind"] == "AGENT"
     assert _attrs(spans[3])["subagent.id"] == "agent-1"
     assert _attrs(spans[3])["subagent.type"] == "synthetic-explorer"
