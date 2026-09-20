@@ -4,12 +4,12 @@ Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for
 
 ## Trace structure
 
-Each user turn is represented as a `CHAIN` with a separate `LLM` span for every model response. Tool calls are correlated by Claude's `tool_use_id` and parented to the model response that requested them. A foreground subagent is represented as an `AGENT` below its invoking tool, with its own model and tool spans.
+Each user turn is represented as an `AGENT` with a separate `LLM` span for every model response. Tool calls are correlated by Claude's `tool_use_id` and parented to the model response that requested them. A subagent invocation is represented as an `AGENT` for the invoking Agent tool call, with the foreground subagent's own model and tool spans nested below it.
 
 ```text
-Turn 1 (CHAIN)
+Turn 1 (AGENT)
 ├── LLM call 1 (LLM)
-│   └── Task (TOOL)
+│   └── Agent (AGENT)
 │       └── Subagent: Explore (AGENT)
 │           ├── LLM call 2 (LLM)
 │           │   └── Grep (TOOL)
