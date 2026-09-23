@@ -9,7 +9,7 @@ Pass `--with-skills` to also symlink the `manage-cursor-tracing` skill into the 
 
 ### Plugin install
 
-Cursor 2.5+ users can install via the Cursor marketplace instead of running `install.sh`. The plugin auto-registers every hook event and lazily bootstraps a dedicated Python venv on first hook fire into `~/.arize/harness/cursor-plugin-venv` (kept separate from the `install.sh`-managed `~/.arize/harness/venv` to avoid pip file-ownership conflicts).
+Cursor 2.5+ users can install via the Cursor marketplace instead of running `install.sh`. The plugin auto-registers every hook event and lazily bootstraps a dedicated Python venv on first hook fire into `~/.arize/harness/cursor-plugin/venv` (kept separate from the `install.sh`-managed `~/.arize/harness/venv` to avoid pip file-ownership conflicts).
 
 ```text
 /add-plugin Arize-ai/coding-harness-tracing

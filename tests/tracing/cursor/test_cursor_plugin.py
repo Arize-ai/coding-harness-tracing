@@ -181,6 +181,42 @@ class TestPyproject:
             "core.setup",
         }
 
+    def test_listed_packages_resolve_to_tracked_modules(self, parsed):
+        # The exact-set guard above only freezes a literal; it can't tell a
+        # correct list from a stale one. This asserts the real property the
+        # #41 trap is about: every declared package maps (via package-dir) to
+        # a real directory that ships at least one git-tracked .py file, so the
+        # wheel never declares a package whose only contents are gitignored.
+        packages = parsed["tool"]["setuptools"]["packages"]
+        package_dir = parsed["tool"]["setuptools"]["package-dir"]
+
+        def resolve(pkg: str) -> Path:
+            # Longest matching package-dir prefix wins, then append the rest.
+            best_key, best_root = "", "."
+            for key, root in package_dir.items():
+                if (pkg == key or pkg.startswith(key + ".")) and len(key) > len(best_key):
+                    best_key, best_root = key, root
+            rest = pkg[len(best_key) :].lstrip(".") if best_key else pkg
+            rel = rest.replace(".", "/")
+            return (PLUGIN_DIR / best_root / rel).resolve()
+
+        tracked = set(
+            subprocess.run(
+                ["git", "ls-files"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+        )
+        for pkg in packages:
+            pkg_dir = resolve(pkg)
+            assert pkg_dir.is_dir(), f"package {pkg!r} resolves to missing dir {pkg_dir}"
+            has_tracked_py = any(
+                (REPO_ROOT / rel).resolve().parent == pkg_dir and rel.endswith(".py") for rel in tracked
+            )
+            assert has_tracked_py, f"package {pkg!r} ({pkg_dir}) ships no git-tracked .py file"
+
 
 # --- core symlink ---
 
@@ -221,14 +257,24 @@ class TestRunHook:
     def test_uses_dedicated_venv_path(self):
         # Must be plugin-dedicated, NOT the shared bare harness/venv used by
         # install.sh — otherwise a marketplace install would clobber an
-        # install.sh-managed venv (and vice versa).
+        # install.sh-managed venv (and vice versa). The venv lives in its own
+        # subdir so the reinstall marker (derived as <venv-parent>/.pyproject.sha256
+        # by the shared bootstrap) is isolated too.
         text = RUN_HOOK.read_text()
-        assert "cursor-plugin-venv" in text
+        assert "cursor-plugin/venv" in text
+        assert "harness/venv" not in text, "must not collide with the install.sh-managed venv"
 
     def test_resolves_plugin_root_from_script(self):
         # Cursor exposes no plugin-root env var; the script must derive its
         # own location.
         assert "dirname" in RUN_HOOK.read_text()
+
+    def test_delegates_to_shared_bootstrap(self):
+        # run-hook is a thin wrapper; the bootstrap logic lives in the shared
+        # core/scripts/bootstrap-venv reached via the plugin's core symlink.
+        text = RUN_HOOK.read_text()
+        assert "core/scripts/bootstrap-venv" in text
+        assert (REPO_ROOT / "core" / "scripts" / "bootstrap-venv").is_file()
 
     def test_does_not_reference_claude_plugin_vars(self):
         text = RUN_HOOK.read_text()
