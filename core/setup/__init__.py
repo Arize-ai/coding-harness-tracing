@@ -343,12 +343,17 @@ def _try_copy_from(target: str, existing_harnesses: dict | None) -> dict | None:
 
 def prompt_project_name(harness_name: str, target: str, config: dict, user_id: str = "") -> str:
     """Prompt for the install project name using backend and identity defaults."""
-    if target == "arize":
-        default = _env("ARIZE_PROJECT_NAME")
-    elif target == "phoenix":
-        default = _env("PHOENIX_PROJECT") or _env("PHOENIX_PROJECT_NAME")
-    else:
-        default = ""
+    project_keys = {
+        "arize": ("ARIZE_PROJECT_NAME",),
+        "phoenix": ("PHOENIX_PROJECT", "PHOENIX_PROJECT_NAME"),
+    }.get(target, ())
+    default = ""
+    source = "default"
+    for key in project_keys:
+        default = _dotenv_only(key)
+        if default:
+            source = _source_of(key, include_env=False)
+            break
 
     harnesses = config.get("harnesses") if isinstance(config, dict) else None
     entry = harnesses.get(harness_name) if isinstance(harnesses, dict) else None
@@ -356,15 +361,21 @@ def prompt_project_name(harness_name: str, target: str, config: dict, user_id: s
         saved_project = entry.get("project_name")
         if isinstance(saved_project, str) and saved_project.strip():
             default = saved_project
+            source = "saved project"
 
     if not default and target == "arize":
-        configured_user_id = ""
-        if isinstance(entry, dict) and entry.get("user_id"):
-            configured_user_id = str(entry["user_id"]).strip()
-        if not configured_user_id and isinstance(config, dict) and config.get("user_id"):
-            configured_user_id = str(config["user_id"]).strip()
-        identity = user_id.strip() or _env("ARIZE_USER_ID") or configured_user_id
-        email = identity if re.fullmatch(r"[^@\s]+@[^@\s]+", identity) else ""
+        identities = (
+            user_id,
+            _env("ARIZE_USER_ID"),
+            entry.get("user_id") if isinstance(entry, dict) else "",
+            config.get("user_id") if isinstance(config, dict) else "",
+        )
+        email = ""
+        for identity in identities:
+            candidate = str(identity or "").strip()
+            if re.fullmatch(r"[^@\s]+@[^@\s]+", candidate):
+                email = candidate
+                break
         if not email:
             try:
                 result = subprocess.run(
@@ -391,7 +402,7 @@ def prompt_project_name(harness_name: str, target: str, config: dict, user_id: s
 
     default = default or harness_name
     if non_interactive():
-        info(f"Project name: {default}")
+        info(f"Project name: {default} (from {source})")
         return default
 
     print("")

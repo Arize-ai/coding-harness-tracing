@@ -1057,6 +1057,21 @@ class TestDotenvResolution:
         assert prompt_project_name("codex", "phoenix", {}) == "primary"
         assert f"Project name: primary (from {path})" in capsys.readouterr().out
 
+    @pytest.mark.parametrize(
+        ("target", "project_key", "expected"),
+        [
+            ("phoenix", "ARIZE_PROJECT_NAME", "codex"),
+            ("arize", "PHOENIX_PROJECT", "harness/dev@example.com"),
+            ("arize", "PHOENIX_PROJECT_NAME", "harness/dev@example.com"),
+        ],
+    )
+    def test_other_backend_project_file_is_ignored(self, tmp_path, monkeypatch, capsys, target, project_key, expected):
+        from core.setup import prompt_project_name
+
+        _named_env(tmp_path, monkeypatch, f"{project_key}=other-backend\n")
+        assert prompt_project_name("codex", target, {}, "dev@example.com") == expected
+        assert f"Project name: {expected} (from default)" in capsys.readouterr().out
+
     def test_inline_comment_stripped(self, tmp_path, monkeypatch):
         """`KEY=value # note` must not yield a value with the comment attached."""
         from core.setup import prompt_backend
