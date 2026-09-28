@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -693,17 +693,18 @@ class TestLegacyOtelCleanup:
 
         assert config_path.read_text() == ""
 
-    def test_round_trip_through_real_v1_writer(self, tmp_path):
-        """Writing with the v1 writer and then cleaning up restores the original bytes."""
+    def test_v1_fixture_cleanup_restores_existing_config(self, tmp_path):
+        """Removing the old writer's block restores preceding config bytes."""
         config_path = tmp_path / "config.toml"
         original = '[general]\nname = "x"\n'
-        config_path.write_text(original)
-
-        from core.setup.codex import _update_toml_otel_section
+        config_path.write_text(
+            original
+            + "\n# Arize shared collector — captures Codex events for rich span trees\n"
+            + "[otel]\n[otel.exporter.otlp-http]\n"
+            + 'endpoint = "http://127.0.0.1:4318/v1/logs"\nprotocol = "json"\n'
+        )
         from tracing.codex.install_legacy import _strip_v1_otel_block
 
-        _update_toml_otel_section(config_path, 4318)
-        assert config_path.read_text() != original
         _strip_v1_otel_block(config_path)
 
         assert config_path.read_text() == original
@@ -869,9 +870,9 @@ class TestLegacyOtelCleanup:
         # The real table is gone.
         assert content.count("[otel.exporter.otlp-http]") == 1
         assert "http://127.0.0.1:4318/v1/logs" not in content
-        # And the file is valid TOML again.
-        tomllib = pytest.importorskip("tomllib")
-        tomllib.loads(content)
+        # And the file is valid TOML again. Use the project's parser helper so
+        # this check also runs on Python 3.9 and 3.10, where tomllib is absent.
+        codex_toml._toml_load_strict(config_path)
 
     def test_trailing_comment_before_next_table_is_preserved(self, tmp_path):
         """A comment that belongs to the table *after* the removed one must
@@ -1129,31 +1130,6 @@ class TestWriteEnvFile:
         p = tmp_path / "env.sh"
         codex_install._write_env_file(p)
         assert not p.exists()
-
-
-# ---------------------------------------------------------------------------
-# core/setup/codex.py delegation tests
-# ---------------------------------------------------------------------------
-
-
-class TestCoreSetupDelegation:
-    """Test that core/setup/codex.py delegates to tracing.codex/install.py."""
-
-    def test_install_delegates(self, fake_home, mock_prompts):
-        import core.setup.codex as setup_codex
-
-        mock_mod = MagicMock()
-        with patch.object(setup_codex, "_install_mod", mock_mod):
-            setup_codex.install(with_skills=True)
-            mock_mod.install.assert_called_once_with(with_skills=True)
-
-    def test_uninstall_delegates(self, fake_home):
-        import core.setup.codex as setup_codex
-
-        mock_mod = MagicMock()
-        with patch.object(setup_codex, "_install_mod", mock_mod):
-            setup_codex.uninstall()
-            mock_mod.uninstall.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -51,8 +51,8 @@ This repo emits OpenTelemetry / OpenInference spans from AI coding-assistant har
 A new harness must mirror the layout of an existing directory under `tracing/` (see `CONTRIBUTING.md`):
 
 - A `tracing/<harness>/` package (with hooks, span builders, and any harness-specific helpers).
-- A `core/setup/<harness>.py` setup wizard.
-- Console-script entry points registered in `pyproject.toml` under `[project.scripts]` (hooks and a `arize-setup-<harness>` wizard).
+- A `tracing/<harness>/install.py` installer that handles harness-specific install and uninstall behavior, using shared helpers from `core/setup/` where appropriate.
+- `arize-hook-*` console-script entry points in `pyproject.toml` `[project.scripts]` for hooks invoked through those commands.
 - `install.sh` and `install.bat` dispatch, and a `core/setup/status.py` `_REGISTRATION` line.
 
 Flag any new harness that skips one of these.

@@ -23,7 +23,7 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 
 class TestCopilotEntryPoints:
-    """Verify all 7 Copilot entry points (6 hooks + 1 setup) in pyproject.toml."""
+    """Verify all 6 Copilot hook entry points in pyproject.toml."""
 
     @pytest.fixture(autouse=True)
     def _load_pyproject(self):
@@ -46,9 +46,6 @@ class TestCopilotEntryPoints:
 
     def test_subagent_stop_entry_point(self):
         assert 'arize-hook-copilot-subagent-stop = "tracing.copilot.hooks.handlers:subagent_stop"' in self.text
-
-    def test_setup_entry_point(self):
-        assert 'arize-setup-copilot = "core.setup.copilot:main"' in self.text
 
     def test_exactly_6_hook_entry_points(self):
         """There should be exactly 6 copilot hook entry points."""

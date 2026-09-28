@@ -866,49 +866,6 @@ class TestHandlersImportable:
 
 
 # ---------------------------------------------------------------------------
-# Setup wizard delegation
-# ---------------------------------------------------------------------------
-
-
-class TestSetupGeminiModule:
-    """core/setup/gemini.py delegates to tracing.gemini/install.py."""
-
-    def test_setup_module_importable(self):
-        from core.setup.gemini import install, main, uninstall
-
-        assert callable(install)
-        assert callable(uninstall)
-        assert callable(main)
-
-    def test_setup_install_delegates(self, cwd_tmp, monkeypatch):
-        """core.setup.gemini.install() should call tracing.gemini.install.install()."""
-        import core.setup.gemini as setup_gemini
-
-        called = []
-        monkeypatch.setattr(_install, "install", lambda: called.append("install"))
-        setup_gemini.install()
-        assert called == ["install"]
-
-    def test_setup_uninstall_delegates(self, cwd_tmp, monkeypatch):
-        """core.setup.gemini.uninstall() should call tracing.gemini.install.uninstall()."""
-        import core.setup.gemini as setup_gemini
-
-        called = []
-        monkeypatch.setattr(_install, "uninstall", lambda: called.append("uninstall"))
-        setup_gemini.uninstall()
-        assert called == ["uninstall"]
-
-    def test_setup_main_delegates_to_install(self, cwd_tmp, monkeypatch):
-        """core.setup.gemini.main() should call tracing.gemini.install.install()."""
-        import core.setup.gemini as setup_gemini
-
-        called = []
-        monkeypatch.setattr(_install, "install", lambda: called.append("install"))
-        setup_gemini.main()
-        assert called == ["install"]
-
-
-# ---------------------------------------------------------------------------
 # Missing tests from task spec
 # ---------------------------------------------------------------------------
 

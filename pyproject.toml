@@ -72,17 +72,6 @@ arize-hook-opencode = "tracing.opencode.hooks.handlers:main"
 arize-hook-omp = "tracing.omp.hooks.handlers:main"
 # Devin hook
 arize-hook-devin = "tracing.devin.hooks.handlers:main"
-# Setup wizards
-arize-setup-claude = "core.setup.claude:main"
-arize-setup-codex = "core.setup.codex:main"
-arize-setup-copilot = "core.setup.copilot:main"
-arize-setup-cursor = "core.setup.cursor:main"
-arize-setup-gemini = "core.setup.gemini:main"
-arize-setup-kiro = "core.setup.kiro:main"
-arize-setup-antigravity = "core.setup.antigravity:main"
-arize-setup-opencode = "core.setup.opencode:main"
-arize-setup-omp = "core.setup.omp:main"
-arize-setup-devin = "core.setup.devin:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

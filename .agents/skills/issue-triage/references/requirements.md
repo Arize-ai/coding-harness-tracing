@@ -8,7 +8,7 @@ Use `CONTRIBUTING.md` and the affected harness's README/source as evidence. Deri
 - **Span correctness:** identify expected OpenInference span kind, model identity, token usage, errors, timestamps, parent relationships, and session/user attributes. Specify only what the harness exposes; do not fabricate missing provider/model data. Check duplicate delivery, partial transcripts, tool correlation, or subagent boundaries when relevant.
 - **Hook reliability:** tracing failures should not disrupt the assistant. Consider process boundaries, concurrent state updates, partial writes, shutdown behavior, and Windows encoding where the affected path needs them.
 - **Compatibility:** Python 3.9 floor; hook runtime uses the standard library. `python-dotenv` is the installer-only dependency. Match the actual assistant event schema and supported OS/install path.
-- **Installation:** new harnesses need the adapter/handlers/installer, setup wrapper, console entry points, shell and batch routing, status registration, tests, mypy hook, and README entry specified in `CONTRIBUTING.md`. Shared installer changes need consideration of existing user configuration.
+- **Installation:** new harnesses need the adapter/handlers and `tracing/<harness>/install.py`, hook console entry points when used, shell and batch routing, status registration, tests, mypy hook, and README entry specified in `CONTRIBUTING.md`. Shared installer changes need consideration of existing user configuration.
 - **Verification:** identify offline fixtures and focused tests demonstrating expected spans or registration behavior. Distinguish tests possible with synthetic payloads from validation requiring a licensed assistant, credentials, live backend, or particular OS.
 
 ## Checklist for additions
