@@ -257,7 +257,7 @@ def _strip_v1_otel_block(path: Path) -> None:
             del lines[0]
     elif start < len(lines) and lines[start - 1].strip() == "" and lines[start].strip() == "":
         del lines[start]
-    path.write_text("".join(lines))
+    path.write_text("".join(lines), encoding="utf-8")
     info(f"Removed legacy [otel.exporter.otlp-http] block from {path}")
 
 
