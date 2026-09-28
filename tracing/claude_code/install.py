@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 
 from core.config import load_config
@@ -140,8 +141,26 @@ def _register_claude_hooks() -> None:
     # Register hooks
     hooks = settings.setdefault("hooks", {})
     for event, entry_point in HOOK_EVENTS.items():
-        hook_cmd = str(venv_bin(entry_point))
+        hook_path = venv_bin(entry_point)
+        hook_cmd = shlex.quote(hook_path.as_posix())
         event_hooks = hooks.setdefault(event, [])
+        legacy_cmd = str(hook_path)
+        if legacy_cmd != hook_cmd:
+            # Older installers wrote native paths that Bash can misinterpret.
+            # Remove only this event's exact legacy command
+            cleaned = []
+            for entry in event_hooks:
+                entry_hooks = entry.get("hooks", [])
+                kept_hooks = [
+                    hook
+                    for hook in entry_hooks
+                    if not (hook.get("type") == "command" and hook.get("command") == legacy_cmd)
+                ]
+                if len(kept_hooks) == len(entry_hooks):
+                    cleaned.append(entry)
+                elif kept_hooks:
+                    cleaned.append({**entry, "hooks": kept_hooks})
+            event_hooks[:] = cleaned
         already = any(h.get("command", "") == hook_cmd for entry in event_hooks for h in entry.get("hooks", []))
         if not already:
             event_hooks.append({"hooks": [{"type": "command", "command": hook_cmd}]})
@@ -181,14 +200,22 @@ def _unregister_claude_hooks() -> None:
     # Remove our hook entries
     if "hooks" in settings:
         our_commands = {str(venv_bin(ep)) for ep in HOOK_EVENTS.values()}
+        our_commands.update(shlex.quote(venv_bin(ep).as_posix()) for ep in HOOK_EVENTS.values())
         hooks = settings["hooks"]
         for event in list(hooks.keys()):
             event_hooks = hooks[event]
-            filtered = [
-                entry
-                for entry in event_hooks
-                if not all(h.get("command", "") in our_commands for h in entry.get("hooks", []))
-            ]
+            filtered = []
+            for entry in event_hooks:
+                entry_hooks = entry.get("hooks", [])
+                kept_hooks = [
+                    hook
+                    for hook in entry_hooks
+                    if not (hook.get("type") == "command" and hook.get("command") in our_commands)
+                ]
+                if len(kept_hooks) == len(entry_hooks):
+                    filtered.append(entry)
+                elif kept_hooks:
+                    filtered.append({**entry, "hooks": kept_hooks})
             if filtered:
                 hooks[event] = filtered
             else:

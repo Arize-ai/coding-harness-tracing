@@ -1101,6 +1101,7 @@ class TestSendSpan:
         resource_attrs = _pb_attrs(_pb_decode(rs[1][0])[1])
         assert resource_attrs[b"openinference.project.name"][1][0] == b"my-project"
         assert resource_attrs[b"service.name"][1][0] == b"test-service"
+        assert b"arize.project.type" not in resource_attrs
         span = _pb_decode(_pb_decode(rs[2][0])[2][0])
         assert span[5][0] == b"test-span"
 
@@ -1222,6 +1223,11 @@ class TestSendSpan:
         span_attrs = body["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
         project_names = [a["value"]["stringValue"] for a in span_attrs if a["key"] == "arize.project.name"]
         assert "proj" in project_names
+        resource_attrs = body["resourceSpans"][0]["resource"]["attributes"]
+        project_types = [a["value"]["stringValue"] for a in resource_attrs if a["key"] == "arize.project.type"]
+        assert project_types == ["harness"]
+        span_types = [a["value"]["stringValue"] for a in span_attrs if a["key"] == "arize.project.type"]
+        assert span_types == []
 
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
