@@ -790,10 +790,9 @@ class TestLegacyOtelCleanup:
         # The real table is gone.
         assert content.count("[otel.exporter.otlp-http]") == 1
         assert "http://127.0.0.1:4318/v1/logs" not in content
-        # And the file is valid TOML again.
-        import tomllib
-
-        tomllib.loads(content)
+        # And the file is valid TOML again. Use the project's parser helper so
+        # this check also runs on Python 3.9 and 3.10, where tomllib is absent.
+        codex_toml._toml_load_strict(config_path)
 
     def test_trailing_comment_before_next_table_is_preserved(self, tmp_path):
         """A comment that belongs to the table *after* the removed one must
