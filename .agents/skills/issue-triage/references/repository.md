@@ -4,8 +4,8 @@ Read the current `README.md`, `CONTRIBUTING.md`, issue templates in `.github/ISS
 
 | Evidence | Starting point |
 | --- | --- |
-| Claude / Claude Code / `claude-code` | `tracing/claude_code/`; tests under `tests/tracing/claude/`; setup wrapper `core/setup/claude.py` |
-| Codex, Cursor, Copilot, Gemini, Kiro, Antigravity, OpenCode, omp, Devin | Corresponding lowercase directory under `tracing/`, `tests/tracing/`, and `core/setup/` |
+| Claude / Claude Code / `claude-code` | `tracing/claude_code/`; tests under `tests/tracing/claude/`; installer `tracing/claude_code/install.py` |
+| Codex, Cursor, Copilot, Gemini, Kiro, Antigravity, OpenCode, omp, Devin | Corresponding directory under `tracing/` and tests under `tests/tracing/`; installer at `tracing/<harness>/install.py` |
 | Hook events, span builders, transcript parsing, session state | Relevant `tracing/<harness>/hooks/` and its tests |
 | Hook registration or marketplace install | `tracing/<harness>/install.py`, plugin metadata if present, relevant harness README |
 | Shared configuration or backend selection | `core/config.py`, `core/setup/`, `tests/core/` |

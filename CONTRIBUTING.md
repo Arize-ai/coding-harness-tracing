@@ -85,7 +85,7 @@ Shared install, config, and OTLP code lives in `core/`. Each coding assistant li
 
 Watch for these:
 
-- `core/setup/<harness>.py` is a thin `arize-setup-*` wrapper. The real installer is `tracing/<harness>/install.py`.
+- `tracing/<harness>/install.py` owns that harness's install and uninstall flow. Shared installer helpers live in `core/setup/`.
 - Most adapters read metadata from `core.constants.HARNESSES`. Kiro and Devin keep `SERVICE_NAME` and related fields in `tracing/<harness>/constants.py` instead. Copy the pattern the nearest harness already uses.
 - Claude Code's CLI name is `claude`. Its config key and `HARNESS_NAME` are `claude-code`. `install.sh` accepts both spellings in `harness_dir()`, and only `claude` as an install command.
 - Hook processes must stay on the stdlib. `python-dotenv` is the only PyPI dependency, and only `core/setup` imports it.
@@ -100,8 +100,8 @@ Copy `tracing/opencode/` if the assistant loads an in-process TypeScript or Java
 A new harness needs all of the following or CI fails:
 
 1. `tracing/<harness>/` with `constants.py` (`HARNESS_NAME`), `install.py`, and `hooks/` (`adapter.py`, `handlers.py`).
-2. `core/setup/<harness>.py` pointing at `tracing.<harness>.install`.
-3. `arize-hook-*` and `arize-setup-<harness>` entries in `pyproject.toml` `[project.scripts]`.
+2. `install.py` implements the harness install and uninstall behavior using shared helpers from `core/setup/` where appropriate.
+3. `arize-hook-*` entries in `pyproject.toml` `[project.scripts]` for any hooks invoked by console script.
 4. A `harness_dir()` mapping, a dispatch name, and a usage line in `install.sh`, plus the same names in `install.bat`.
 5. One line in `core/setup/status.py` `_REGISTRATION`.
 6. Tests under `tests/tracing/<harness>/`.
@@ -111,7 +111,7 @@ A new harness needs all of the following or CI fails:
 After you wire it in, run:
 
 ```bash
-uv run pytest tests/core/test_status.py tests/core/test_wire_entry_points.py tests/core/test_shell_router.py tests/core/test_bat_router.py tests/core/test_contributor_docs.py tests/tracing/<harness>/
+uv run pytest tests/core/test_status.py tests/core/test_wire_entry_points.py tests/core/test_shell_router.py tests/core/test_bat_router.py tests/tracing/<harness>/
 ```
 
 ## Review your change before the PR
