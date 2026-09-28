@@ -16,7 +16,7 @@ from pathlib import Path
 from core.config import get_value, load_config, save_config, set_value
 from core.setup import err, info, print_color, prompt_backend, prompt_project_name, prompt_user_id, write_config
 from tracing.codex import install as _install_mod
-from tracing.codex._toml import _toml_load_strict
+from tracing.codex._toml import ARIZE_OTEL_COMMENT, _toml_load_strict
 from tracing.codex.constants import get_codex_home
 
 
@@ -89,7 +89,7 @@ def _update_toml_otel_section(toml_path: Path, collector_port: int) -> None:
 
     # Append new section
     lines.append("")
-    lines.append("# Arize shared collector — captures Codex events for rich span trees")
+    lines.append(ARIZE_OTEL_COMMENT)
     lines.append("[otel]")
     lines.append("[otel.exporter.otlp-http]")
     lines.append(f'endpoint = "http://127.0.0.1:{collector_port}/v1/logs"')
