@@ -52,13 +52,13 @@ Prompts depend on the backend:
 
 If you've already configured another harness against the same backend, the installer offers a **copy-from** menu so you can reuse those credentials instead of re-entering them.
 
-#### 3. Project name
-
-The project (in Arize/Phoenix) that spans for this harness are grouped under. Defaults to the harness name (e.g. `claude-code`, `codex` etc).
-
-#### 4. User ID (optional)
+#### 3. User ID (optional)
 
 A free-form identifier attached to every span as `user.id`. Useful when multiple teammates share the same backend. Leave blank to skip.
+
+#### 4. Project name
+
+The project that groups spans for this harness. Arize AX defaults to `harness/<email>`, using the install user ID when it is an email address, then `git user.email`. If neither value contains an email address, the default is the harness name and the installer prints commands that set an email. Phoenix defaults to the harness name. Press Enter to accept the default or type another project name. Reinstalling keeps the saved project name unless you provide a backend-specific project environment variable or type a replacement.
 
 #### 5. Content logging
 
@@ -95,7 +95,8 @@ ARIZE_ENV_FILE=~/.arize/onboarding.env ./install.sh claude --non-interactive
 | `ARIZE_API_KEY` + `ARIZE_SPACE_ID` | — | Arize AX credentials. Both required for the Arize backend. |
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | `http://localhost:6006` | Phoenix endpoint and optional API key. |
 | `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. When both are present, or an Arize key appears with only a Phoenix endpoint, the install stops and asks you to set this rather than guess — guessing would discard one backend's credentials. |
-| `ARIZE_PROJECT_NAME` | harness name | Project spans are grouped under. **Read from the dotenv file only** — an environment value is ignored here, since an installed harness exports its own project name into every session and inheriting it would name this harness's project after a different one. |
+| `ARIZE_PROJECT_NAME` | `harness/<email>` | Arize AX project. The installer uses this value before a saved project or generated default. |
+| `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | harness name | Phoenix project. `PHOENIX_PROJECT` wins when both variables are set. |
 | `ARIZE_USER_ID` | — | Optional `user.id` on every span. |
 | `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
 | `ARIZE_LOG_PROMPTS` | `false` | Set `true` to capture prompt text. |
@@ -116,7 +117,7 @@ The API key is never echoed — the installer reports only that it found one, an
 [arize] Backend: Arize AX at otlp.arize.com:443 (from default)
 [arize]   space ID: my-space (from /path/to/.env)
 [arize]   API key: found (from /path/to/.env)
-[arize] Project name: codex (from default)
+[arize] Project name: harness/dev@example.com
 ```
 
 An API key on its own is rejected as ambiguous, since both backends use one.

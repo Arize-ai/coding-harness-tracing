@@ -86,7 +86,7 @@ def _mock_prompts(monkeypatch, backend=None):
         "prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(claude_install, "prompt_project_name", lambda default: default)
+    monkeypatch.setattr(claude_install, "prompt_project_name", lambda name, target, config, user_id="": name)
     monkeypatch.setattr(claude_install, "prompt_user_id", lambda: "")
     monkeypatch.setattr(
         claude_install, "prompt_content_logging", lambda: {"prompts": True, "tool_details": True, "tool_content": True}
@@ -258,7 +258,9 @@ class TestExistingEntry:
         config_file.write_text(json.dumps({"harnesses": {"claude-code": original_entry}}, indent=2))
 
         # Mock prompt_project_name to return a new name
-        monkeypatch.setattr(claude_install, "prompt_project_name", lambda default: "new-project-name")
+        monkeypatch.setattr(
+            claude_install, "prompt_project_name", lambda name, target, config, user_id="": "new-project-name"
+        )
 
         claude_install.install(with_skills=False)
 
@@ -304,7 +306,7 @@ class TestCopyFrom:
             "prompt_backend",
             lambda existing_harnesses=None: ("arize", copied_creds),
         )
-        monkeypatch.setattr(claude_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(claude_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(claude_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(
             claude_install,

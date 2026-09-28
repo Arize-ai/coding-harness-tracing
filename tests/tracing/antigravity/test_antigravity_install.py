@@ -57,7 +57,7 @@ def _mock_prompts(monkeypatch, backend=None):
         "prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
+    monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
     monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
     monkeypatch.setattr(
         _install,
