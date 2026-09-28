@@ -66,7 +66,7 @@ def test_ax_project_default_is_persisted_and_reinstall_is_preserved(
     for name in side_effects:
         monkeypatch.setattr(module, name, lambda *args, **kwargs: None)
     monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
-    monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+    monkeypatch.setenv("ARIZE_PROJECT_NAME", "inherited-project")
     monkeypatch.delenv("ARIZE_USER_ID", raising=False)
 
     module.install(**install_kwargs)
