@@ -53,3 +53,13 @@ run/
 wheel.json
 docs/superpowers/*
 .serena/*
+
+# Auto-added by github-engineer
+*.pyc
+*.pyd
+*.obj
+*.so
+*.whl
+nem_stats.c
+*.exp
+*.lib
