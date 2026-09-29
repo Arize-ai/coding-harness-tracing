@@ -223,16 +223,17 @@ def install(with_skills: bool = False) -> None:
     ensure_shared_runtime()
     config = load_config(str(CONFIG_FILE))
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-    project_name = prompt_project_name("codex")
 
-    if existing_entry:
+    if isinstance(existing_entry, dict) and "target" in existing_entry:
         info(f"Reusing existing backend: {existing_entry.get('target')}")
+        project_name = prompt_project_name(HARNESS_NAME, existing_entry["target"], config)
         merge_harness_entry(HARNESS_NAME, project_name)
         user_id = get_value(config, "user_id") or ""
     else:
         existing_harnesses = config.get("harnesses", {}) if config else {}
         target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
         user_id = prompt_user_id()
+        project_name = prompt_project_name(HARNESS_NAME, target, config, user_id)
         if not dry_run():
             write_config(
                 target=target,

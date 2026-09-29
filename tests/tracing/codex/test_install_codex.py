@@ -67,7 +67,7 @@ def _stub_logging_prompts(monkeypatch):
 @pytest.fixture()
 def mock_prompts(monkeypatch):
     """Mock interactive prompts to return phoenix defaults."""
-    monkeypatch.setattr(codex_install, "prompt_project_name", lambda default: default)
+    monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
     monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
     monkeypatch.setattr(
         codex_install,
@@ -78,7 +78,7 @@ def mock_prompts(monkeypatch):
 
 def _mock_prompts_arize(monkeypatch):
     """Mock interactive prompts to return arize defaults."""
-    monkeypatch.setattr(codex_install, "prompt_project_name", lambda default: default)
+    monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
     monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
     monkeypatch.setattr(
         codex_install,
@@ -315,7 +315,7 @@ class TestInstall:
             )
         )
 
-        monkeypatch.setattr(codex_install, "prompt_project_name", lambda default: "new-name")
+        monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": "new-name")
         monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
 
         codex_install.install()
@@ -326,6 +326,37 @@ class TestInstall:
         assert entry["target"] == "arize"
         assert entry["api_key"] == "ak-existing"
         assert entry["space_id"] == "S123"
+
+    def test_reinstall_preserves_saved_project_with_new_identity(self, fake_home, monkeypatch):
+        from core.setup import prompt_project_name
+
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "user_id": "new@example.com",
+                    "harnesses": {
+                        "codex": {
+                            "project_name": "saved-codex-project",
+                            "target": "arize",
+                            "endpoint": "otlp.arize.com:443",
+                            "api_key": "ak-existing",
+                            "space_id": "S123",
+                        },
+                        "cursor": {"project_name": "keep-cursor", "target": "phoenix"},
+                    },
+                }
+            )
+        )
+        monkeypatch.setattr(codex_install, "prompt_project_name", prompt_project_name)
+        monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
+        monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+
+        codex_install.install()
+
+        config = json.loads(config_file.read_text())
+        assert config["harnesses"]["codex"]["project_name"] == "saved-codex-project"
+        assert config["harnesses"]["cursor"] == {"project_name": "keep-cursor", "target": "phoenix"}
 
     def test_install_offers_copy_from_existing_arize_harness(self, fake_home, monkeypatch):
         config_file = fake_home / ".arize" / "harness" / "config.json"
@@ -359,7 +390,7 @@ class TestInstall:
                 },
             )
 
-        monkeypatch.setattr(codex_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(codex_install, "prompt_backend", fake_prompt_backend)
 
@@ -389,7 +420,7 @@ class TestInstall:
         assert "hooks" not in data
 
     def test_install_with_user_id(self, fake_home, monkeypatch):
-        monkeypatch.setattr(codex_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "test-user")
         monkeypatch.setattr(
             codex_install,

@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import sys
 from getpass import getpass
 from pathlib import Path
@@ -340,21 +341,69 @@ def _try_copy_from(target: str, existing_harnesses: dict | None) -> dict | None:
     return None
 
 
-def prompt_project_name(default: str) -> str:
-    """Prompt for project name. Returns default if blank."""
+def prompt_project_name(harness_name: str, target: str, config: dict, user_id: str = "") -> str:
+    """Prompt for the install project name using backend and identity defaults."""
+    project_keys = {
+        "arize": ("ARIZE_PROJECT_NAME",),
+        "phoenix": ("PHOENIX_PROJECT", "PHOENIX_PROJECT_NAME"),
+    }.get(target, ())
+    default = ""
+    source = "default"
+    for key in project_keys:
+        default = _dotenv_only(key)
+        if default:
+            source = _source_of(key, include_env=False)
+            break
+
+    harnesses = config.get("harnesses") if isinstance(config, dict) else None
+    entry = harnesses.get(harness_name) if isinstance(harnesses, dict) else None
+    if not default and isinstance(entry, dict):
+        saved_project = entry.get("project_name")
+        if isinstance(saved_project, str) and saved_project.strip():
+            default = saved_project
+            source = "saved project"
+
+    if not default and target == "arize":
+        identities = (
+            user_id,
+            _env("ARIZE_USER_ID"),
+            entry.get("user_id") if isinstance(entry, dict) else "",
+            config.get("user_id") if isinstance(config, dict) else "",
+        )
+        email = ""
+        for identity in identities:
+            candidate = str(identity or "").strip()
+            if re.fullmatch(r"[^@\s]+@[^@\s]+", candidate):
+                email = candidate
+                break
+        if not email:
+            try:
+                result = subprocess.run(
+                    ["git", "config", "--get", "user.email"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=False,
+                )
+                candidate = result.stdout.strip() if result.returncode == 0 else ""
+                if re.fullmatch(r"[^@\s]+@[^@\s]+", candidate):
+                    email = candidate
+            except (OSError, subprocess.SubprocessError):
+                pass
+        if email:
+            default = f"harness/{email}"
+        else:
+            default = harness_name
+            info(
+                "Could not find an email for the Arize project default. "
+                "Set ARIZE_USER_ID to your email address or run "
+                "git config --global user.email you@example.com."
+            )
+
+    default = default or harness_name
     if non_interactive():
-        # Deliberately not _env(): the ambient ARIZE_PROJECT_NAME belongs to
-        # whichever harness is already installed and exports it into this
-        # session. Inheriting it would name *this* harness's project after a
-        # different one and collide their spans. Only an explicit dotenv entry
-        # or the harness default may set it.
-        name = _dotenv_only("ARIZE_PROJECT_NAME") or default
-        # "default" rather than "harness default": on a re-install the caller
-        # passes the stored project name as the default, so naming the harness
-        # would be wrong.
-        source = _source_of("ARIZE_PROJECT_NAME", fallback="default", include_env=False)
-        info(f"Project name: {name} (from {source})")
-        return name
+        info(f"Project name: {default} (from {source})")
+        return default
 
     print("")
     name = input(f"Project name [{default}]: ").strip()
@@ -516,6 +565,8 @@ _DOTENV_KEYS = (
     "ARIZE_LOG_TOOL_CONTENT",
     "PHOENIX_ENDPOINT",
     "PHOENIX_API_KEY",
+    "PHOENIX_PROJECT",
+    "PHOENIX_PROJECT_NAME",
 )
 
 _dotenv_cache: Optional[dict] = None

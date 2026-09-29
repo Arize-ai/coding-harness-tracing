@@ -3,9 +3,10 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -36,6 +37,8 @@ _RESOLVED_ENV_KEYS = (
     "ARIZE_KIRO_SET_DEFAULT",
     "PHOENIX_ENDPOINT",
     "PHOENIX_API_KEY",
+    "PHOENIX_PROJECT",
+    "PHOENIX_PROJECT_NAME",
 )
 
 
@@ -228,21 +231,21 @@ class TestPromptProjectName:
         from core.setup import prompt_project_name
 
         with patch("builtins.input", return_value=""):
-            result = prompt_project_name("codex")
+            result = prompt_project_name("codex", "phoenix", {})
         assert result == "codex"
 
     def test_returns_custom_name(self):
         from core.setup import prompt_project_name
 
         with patch("builtins.input", return_value="my-project"):
-            result = prompt_project_name("codex")
+            result = prompt_project_name("codex", "phoenix", {})
         assert result == "my-project"
 
     def test_strips_whitespace(self):
         from core.setup import prompt_project_name
 
         with patch("builtins.input", return_value="  spaced  "):
-            result = prompt_project_name("codex")
+            result = prompt_project_name("codex", "phoenix", {})
         assert result == "spaced"
 
 
@@ -547,37 +550,184 @@ class TestNonInteractive:
 
         assert "datadog" in capsys.readouterr().err
 
-    def test_project_name_defaults(self):
+    def test_project_name_uses_ax_user_email_as_default(self, monkeypatch):
+        from core.setup import prompt_project_name
+
+        monkeypatch.delenv("ARIZE_NONINTERACTIVE")
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "inherited-project")
+        with patch("subprocess.run") as run:
+            with patch("builtins.input", return_value="") as read:
+                assert prompt_project_name("claude-code", "arize", {}, "dev@example.com") == "harness/dev@example.com"
+
+        read.assert_called_once_with("Project name [harness/dev@example.com]: ")
+        run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("target", "project_key", "fresh_project"),
+        [
+            ("arize", "ARIZE_PROJECT_NAME", "harness/dev@example.com"),
+            ("phoenix", "PHOENIX_PROJECT", "codex"),
+            ("phoenix", "PHOENIX_PROJECT_NAME", "codex"),
+        ],
+    )
+    @pytest.mark.parametrize("saved_project", ["", "saved-project"])
+    @pytest.mark.parametrize("interactive", [False, True])
+    def test_process_project_is_ignored(
+        self, monkeypatch, capsys, target, project_key, fresh_project, saved_project, interactive
+    ):
+        from core.setup import prompt_project_name
+
+        monkeypatch.setenv(project_key, "inherited-project")
+        config = {"harnesses": {"codex": {"project_name": saved_project}}}
+        expected = saved_project or fresh_project
+        if interactive:
+            monkeypatch.delenv("ARIZE_NONINTERACTIVE")
+        with patch("builtins.input", return_value="") as read:
+            with patch("subprocess.run") as run:
+                assert prompt_project_name("codex", target, config, "dev@example.com") == expected
+        run.assert_not_called()
+        if interactive:
+            read.assert_called_once_with(f"Project name [{expected}]: ")
+        else:
+            read.assert_not_called()
+            source = "saved project" if saved_project else "default"
+            assert f"Project name: {expected} (from {source})" in capsys.readouterr().out
+
+    def test_project_name_saved_project_wins_identity_and_git(self):
+        from core.setup import prompt_project_name
+
+        config = {"harnesses": {"codex": {"project_name": "saved"}}}
+
+        with patch("subprocess.run") as run:
+            with self._no_prompts():
+                assert prompt_project_name("codex", "arize", config, "new@example.com") == "saved"
+
+        run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("config", "expected"),
+        [
+            (
+                {"harnesses": {"codex": {"user_id": "harness@example.com"}}, "user_id": "global@example.com"},
+                "harness/harness@example.com",
+            ),
+            ({"user_id": "global@example.com"}, "harness/global@example.com"),
+        ],
+    )
+    def test_project_name_uses_configured_email(self, config, expected):
         from core.setup import prompt_project_name
 
         with self._no_prompts():
-            assert prompt_project_name("claude-code") == "claude-code"
+            assert prompt_project_name("codex", "arize", config) == expected
 
-    def test_project_name_ignores_ambient_env(self, monkeypatch):
-        """ARIZE_PROJECT_NAME in the environment belongs to another harness.
-
-        An installed harness exports it into every session; inheriting it would
-        name this harness's project after a different one and collide spans.
-        """
+    def test_non_email_identity_falls_back_to_git(self):
         from core.setup import prompt_project_name
 
-        monkeypatch.setenv("ARIZE_PROJECT_NAME", "claude-code")
+        completed = MagicMock(returncode=0, stdout="git@example.com\n")
+        with patch("subprocess.run", return_value=completed):
+            with self._no_prompts():
+                assert prompt_project_name("codex", "arize", {"user_id": "user-123"}) == "harness/git@example.com"
 
-        with self._no_prompts():
-            assert prompt_project_name("codex") == "codex"
-
-    def test_project_name_source_label_does_not_credit_env(self, monkeypatch, capsys):
-        """The label must not name a source that was never consulted."""
+    @pytest.mark.parametrize(
+        ("user_id", "env_user_id", "harness_user_id", "global_user_id", "expected"),
+        [
+            (
+                "typed@example.com",
+                "env@example.com",
+                "harness@example.com",
+                "global@example.com",
+                "harness/typed@example.com",
+            ),
+            ("employee-123", "env@example.com", "harness@example.com", "global@example.com", "harness/env@example.com"),
+            ("", "employee-123", "harness@example.com", "global@example.com", "harness/harness@example.com"),
+            ("", "employee-123", "harness-123", "global@example.com", "harness/global@example.com"),
+        ],
+    )
+    def test_first_email_identity_skips_non_email_candidates(
+        self, monkeypatch, user_id, env_user_id, harness_user_id, global_user_id, expected
+    ):
         from core.setup import prompt_project_name
 
-        monkeypatch.setenv("ARIZE_PROJECT_NAME", "claude-code")
+        monkeypatch.setenv("ARIZE_USER_ID", env_user_id)
+        config = {"harnesses": {"codex": {"user_id": harness_user_id}}, "user_id": global_user_id}
+        with patch("subprocess.run") as run:
+            with self._no_prompts():
+                assert prompt_project_name("codex", "arize", config, user_id) == expected
+        run.assert_not_called()
 
+    def test_all_non_email_identities_fall_back_to_git(self, monkeypatch, capsys):
+        from core.setup import prompt_project_name
+
+        monkeypatch.setenv("ARIZE_USER_ID", "env-user")
+        config = {"harnesses": {"codex": {"user_id": "harness-user"}}, "user_id": "global-user"}
+        completed = MagicMock(returncode=0, stdout="git@example.com\n")
+        with patch("subprocess.run", return_value=completed):
+            with self._no_prompts():
+                assert prompt_project_name("codex", "arize", config, "typed-user") == "harness/git@example.com"
+        assert "Project name: harness/git@example.com (from default)" in capsys.readouterr().out
+
+    def test_typed_project_replaces_dotenv_default(self, tmp_path, monkeypatch):
+        from core.setup import prompt_project_name
+
+        monkeypatch.delenv("ARIZE_NONINTERACTIVE")
+        _named_env(tmp_path, monkeypatch, "ARIZE_PROJECT_NAME=file-project\n")
+        with patch("builtins.input", return_value="typed-project"):
+            assert prompt_project_name("codex", "arize", {}) == "typed-project"
+
+    def test_wrong_backend_project_environment_is_ignored(self, monkeypatch):
+        from core.setup import prompt_project_name
+
+        monkeypatch.setenv("PHOENIX_PROJECT", "phoenix-project")
         with self._no_prompts():
-            prompt_project_name("codex")
+            assert prompt_project_name("codex", "arize", {}, "ax@example.com") == "harness/ax@example.com"
+
+        monkeypatch.delenv("PHOENIX_PROJECT")
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "ax-project")
+        with self._no_prompts():
+            assert prompt_project_name("codex", "phoenix", {}) == "codex"
+
+    def test_saved_project_is_preserved_exactly(self):
+        from core.setup import prompt_project_name
+
+        config = {"harnesses": {"codex": {"project_name": " codex "}}}
+        with self._no_prompts():
+            assert prompt_project_name("codex", "arize", config, "new@example.com") == " codex "
+
+    def test_missing_email_uses_harness_and_prints_action(self, capsys):
+        from core.setup import prompt_project_name
+
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            with self._no_prompts():
+                assert prompt_project_name("codex", "arize", {}) == "codex"
 
         out = capsys.readouterr().out
-        assert "(from default)" in out
-        assert "ARIZE_PROJECT_NAME" not in out
+        assert "git config --global user.email you@example.com" in out
+        assert "Project name: codex (from default)" in out
+
+    @pytest.mark.parametrize(
+        "git_result",
+        [
+            MagicMock(returncode=1, stdout="git@example.com\n"),
+            MagicMock(returncode=0, stdout="not-an-email\n"),
+            subprocess.TimeoutExpired(["git"], 2),
+        ],
+    )
+    def test_unusable_git_email_uses_harness(self, git_result):
+        from core.setup import prompt_project_name
+
+        effect = git_result if isinstance(git_result, BaseException) else None
+        result = None if effect else git_result
+        with patch("subprocess.run", return_value=result, side_effect=effect):
+            with self._no_prompts():
+                assert prompt_project_name("codex", "arize", {}) == "codex"
+
+    def test_phoenix_default_does_not_query_git(self):
+        from core.setup import prompt_project_name
+
+        with patch("subprocess.run") as run:
+            with self._no_prompts():
+                assert prompt_project_name("codex", "phoenix", {}) == "codex"
+        run.assert_not_called()
 
     def test_user_id_blank_by_default(self):
         from core.setup import prompt_user_id
@@ -789,7 +939,7 @@ class TestDotenvResolution:
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
             _, creds = prompt_backend()
-            project = prompt_project_name("fallback")
+            project = prompt_project_name("fallback", "arize", {})
 
         assert creds["api_key"] == "fresh-key"
         assert creds["space_id"] == "intended-space"
@@ -824,7 +974,7 @@ class TestDotenvResolution:
 
         with patch("builtins.input", side_effect=AssertionError("prompted")):
             _, creds = prompt_backend()
-            project = prompt_project_name("fallback")
+            project = prompt_project_name("fallback", "arize", {})
 
         assert creds["api_key"] == "quoted-key"
         assert creds["space_id"] == "single-quoted"
@@ -884,14 +1034,43 @@ class TestDotenvResolution:
         with pytest.raises(SystemExit):
             _dotenv_values()
 
-    def test_project_name_read_from_file(self, tmp_path, monkeypatch):
-        """The file may set the project name; only the environment is ignored."""
+    @pytest.mark.parametrize(
+        ("target", "project_key"),
+        [("arize", "ARIZE_PROJECT_NAME"), ("phoenix", "PHOENIX_PROJECT"), ("phoenix", "PHOENIX_PROJECT_NAME")],
+    )
+    def test_project_name_file_beats_process_and_saved(self, tmp_path, monkeypatch, capsys, target, project_key):
         from core.setup import prompt_project_name
 
-        _named_env(tmp_path, monkeypatch, "ARIZE_PROJECT_NAME=from-file\n")
-
+        path = _named_env(tmp_path, monkeypatch, f"{project_key}=from-file\n")
+        monkeypatch.setenv(project_key, "inherited-project")
+        config = {"harnesses": {"codex": {"project_name": "saved-project"}}}
         with patch("builtins.input", side_effect=AssertionError("prompted")):
-            assert prompt_project_name("codex") == "from-file"
+            with patch("subprocess.run") as run:
+                assert prompt_project_name("codex", target, config) == "from-file"
+        run.assert_not_called()
+        assert f"Project name: from-file (from {path})" in capsys.readouterr().out
+
+    def test_phoenix_primary_project_wins_file_alias(self, tmp_path, monkeypatch, capsys):
+        from core.setup import prompt_project_name
+
+        path = _named_env(tmp_path, monkeypatch, "PHOENIX_PROJECT=primary\nPHOENIX_PROJECT_NAME=alias\n")
+        assert prompt_project_name("codex", "phoenix", {}) == "primary"
+        assert f"Project name: primary (from {path})" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("target", "project_key", "expected"),
+        [
+            ("phoenix", "ARIZE_PROJECT_NAME", "codex"),
+            ("arize", "PHOENIX_PROJECT", "harness/dev@example.com"),
+            ("arize", "PHOENIX_PROJECT_NAME", "harness/dev@example.com"),
+        ],
+    )
+    def test_other_backend_project_file_is_ignored(self, tmp_path, monkeypatch, capsys, target, project_key, expected):
+        from core.setup import prompt_project_name
+
+        _named_env(tmp_path, monkeypatch, f"{project_key}=other-backend\n")
+        assert prompt_project_name("codex", target, {}, "dev@example.com") == expected
+        assert f"Project name: {expected} (from default)" in capsys.readouterr().out
 
     def test_inline_comment_stripped(self, tmp_path, monkeypatch):
         """`KEY=value # note` must not yield a value with the comment attached."""

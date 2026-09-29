@@ -98,7 +98,7 @@ def _mock_prompts(monkeypatch, backend=None):
         "prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(cursor_install, "prompt_project_name", lambda default: default)
+    monkeypatch.setattr(cursor_install, "prompt_project_name", lambda name, target, config, user_id="": name)
     monkeypatch.setattr(cursor_install, "prompt_user_id", lambda: "")
     monkeypatch.setattr(
         cursor_install,
@@ -212,7 +212,7 @@ class TestCopyFrom:
             return ARIZE_BACKEND
 
         monkeypatch.setattr(cursor_install, "prompt_backend", fake_prompt_backend)
-        monkeypatch.setattr(cursor_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(cursor_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(cursor_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(
             cursor_install,
@@ -264,7 +264,7 @@ class TestExistingEntry:
             return PHOENIX_BACKEND
 
         monkeypatch.setattr(cursor_install, "prompt_backend", fail_prompt_backend)
-        monkeypatch.setattr(cursor_install, "prompt_project_name", lambda default: "my-cursor")
+        monkeypatch.setattr(cursor_install, "prompt_project_name", lambda name, target, config, user_id="": "my-cursor")
         monkeypatch.setattr(cursor_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(
             cursor_install,
