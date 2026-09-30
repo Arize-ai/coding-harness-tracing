@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import IO, Optional
+from typing import IO, Any, Dict, Optional
 
 from core.otlp_proto import otlp_json_to_protobuf
 
@@ -531,6 +531,7 @@ def resolve_backend(span_dict: dict) -> dict:
             "endpoint": endpoint,
             "api_key": env.phoenix_api_key or harness_cfg.get("api_key", ""),
             "project_name": project_name,
+            "headers": _string_headers(harness_cfg.get("headers")),
         }
 
     if target == "arize":
@@ -559,6 +560,35 @@ def resolve_backend(span_dict: dict) -> dict:
 
     error(f"Unknown target '{target}' for harness '{service_name}'. " f"Expected 'arize' or 'phoenix'.")
     return {"target": "none", "project_name": project_name}
+
+
+def _string_headers(raw: Any) -> Dict[str, str]:
+    """Copy a config headers object, keeping only string keys and values."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): value for key, value in raw.items() if isinstance(key, str) and isinstance(value, str)}
+
+
+def _phoenix_request_headers(api_key: str, extra: Dict[str, str]) -> Dict[str, str]:
+    """Build HTTP headers for a Phoenix request.
+
+    An api_key becomes ``Authorization: Bearer <api_key>`` unless ``extra``
+    already sets Authorization (for example ``Basic ...``). Extra headers are
+    copied as-is. Content-Type stays protobuf and cannot be overridden.
+    """
+    if not isinstance(extra, dict):
+        extra = {}
+    headers = {"Content-Type": "application/x-protobuf"}
+    has_authorization = any(str(key).lower() == "authorization" for key in extra)
+    if api_key and not has_authorization:
+        headers["Authorization"] = f"Bearer {api_key}"
+    for key, value in extra.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        if key.lower() == "content-type":
+            continue
+        headers[key] = value
+    return headers
 
 
 # OTLP resource attribute Arize ingest maps to models.project_type.
@@ -683,9 +713,7 @@ def send_span(span_dict: dict) -> bool:
             # Phoenix's OTLP HTTP endpoint only accepts binary protobuf.
             payload = _inject_openinference_project_resource_attr(span_dict, project_name=project)
             body = otlp_json_to_protobuf(payload)
-            headers = {"Content-Type": "application/x-protobuf"}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
+            headers = _phoenix_request_headers(api_key, backend.get("headers") or {})
             return _post_otlp(url, body, headers, "Phoenix")
         elif target == "arize":
             project = backend["project_name"]
