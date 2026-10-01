@@ -1,13 +1,17 @@
-# Codex Tracing
+# Codex CLI Tracing
 
-Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for OpenAI Codex CLI and desktop. Spans are exported to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix).
+Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for the OpenAI Codex CLI. Spans are exported to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix).
 
 ## Setup
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers an `agent-turn-complete` notification command in `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`). The notification reads the completed turn from Codex's rollout file to export prompt, assistant, token-usage, and tool spans.
-
-An existing notification command is preserved through `--previous-notify` chaining. For a recognized desktop callback, the desktop command stays outermost so Codex can retain its registration. Reinstall is idempotent; uninstall restores the preceding callback. Unsupported desktop chain shapes are rejected before the installer changes the configuration.
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers the hook entries plus the `notify` token-usage backstop in `~/.codex/config.toml`. After installing, approve the hooks via Codex's `/hooks` command (one time per user account).
 
 Pass `--with-skills` to also symlink the `manage-codex-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Codex tracing configuration.
+
+### Existing notification commands
+
+If `notify` already contains a command, the installer preserves it using `--previous-notify` chaining. Recognized Codex desktop callbacks remain outermost. Reinstall keeps a single Arize callback; uninstall restores the previous command.
+
+The rollout reader also recognizes user prompts stored as `response_item` messages. When content provenance is available, it excludes injected repository instructions and environment content.
 
 ### Remote setup
 
@@ -53,22 +57,14 @@ cd coding-harness-tracing
 Install:
 
 ```bash
-ARIZE_SOURCE_DIR="$PWD" bash ./install.sh codex
+./install.sh codex
 ```
 
 Uninstall:
 
 ```bash
-ARIZE_SOURCE_DIR="$PWD" bash ./install.sh uninstall codex
+./install.sh uninstall codex
 ```
-
-To update from the same checkout:
-
-```bash
-ARIZE_SOURCE_DIR="$PWD" bash ./install.sh update
-```
-
-`ARIZE_SOURCE_DIR` makes the shell installer build this checkout instead of fetching upstream. Use it when testing a branch or local patch.
 
 **Windows (PowerShell)**
 
@@ -84,28 +80,32 @@ Uninstall:
 install.bat uninstall codex
 ```
 
-## Default settings
+## Default Settings
 
-- Harness key and project name: `codex`.
-- Phoenix endpoint: `http://localhost:6006`; Arize AX endpoint: `otlp.arize.com:443`.
-- Notification config: `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`).
-- Environment overrides: `~/.codex/arize-env.sh`.
-- State directory: `~/.arize/harness/state/codex/`.
-- Log file: `~/.arize/harness/logs/codex.log`.
+| Setting | Default |
+|---------|---------|
+| Harness key | `codex` |
+| Project name | `codex` |
+| Phoenix endpoint | `http://localhost:6006` |
+| Arize AX endpoint | `otlp.arize.com:443` |
+| Hook config file | `~/.codex/config.toml` |
+| Hook events handled | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop` (via real Codex hooks); `agent-turn-complete` (via `notify`) for token usage |
+| Env override file | `~/.codex/arize-env.sh` |
+| State directory | `~/.arize/harness/state/codex/` (state files + tool span JSONLs) |
+| Log file | `~/.arize/harness/logs/codex.log` |
 
-User prompts can come from legacy `user_message` events or newer user `response_item` messages. When content provenance is available, only `user.text` content is included, excluding injected repository instructions and environment context. Existing prompt-logging controls still apply.
+## Trust prompt
+
+Codex requires explicit user trust for non-managed hooks before they fire. After install, run:
+
+1. `codex` (start a session)
+2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
+
+Without this one-time approval, hooks won't fire and traces will be limited to the `notify`-based fallback (single LLM span per turn, no tool spans).
 
 ## Verifying tracing
 
-From the source checkout, check the installed registration without changing it:
-
-```bash
-~/.arize/harness/venv/bin/python -I scripts/check-desktop-notify.py
-```
-
-The checker reports chain validity and whether the hook executable exists. It does not print API keys or prove trace delivery. `-I` ensures the check imports the installed package instead of the checkout.
-
-Then complete a Codex desktop turn or run a CLI command:
+Run any Codex command:
 
 ```bash
 codex exec "explain what this file does" path/to/file.py
@@ -121,8 +121,8 @@ Errors are always logged. For routine hook activity, add `export ARIZE_VERBOSE=t
 
 ## Troubleshooting
 
-**No spans appear.** Check the notification registration with the command above, then inspect `~/.arize/harness/logs/codex.log` for backend/auth errors. Confirm the turn completed and its rollout file is available. Restart Codex after changing environment overrides.
+**Hooks not firing.** Run `codex` → `/hooks` and confirm the `arize-hook-codex-*` entries are listed and trusted. If they aren't listed at all, re-run the installer.
 
-**Unsupported notification chain.** Inspect your existing `notify` command before changing it. The installer refuses unrecognized desktop wrapper arguments rather than replacing them.
+**No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded. Check `~/.arize/harness/logs/codex.log` for backend/auth errors. Confirm the hooks are trusted via `/hooks`.
 
-**Disable temporarily.** Set `ARIZE_TRACE_ENABLED=false` in `~/.codex/arize-env.sh` and restart Codex. For full uninstall from a checkout, run `ARIZE_SOURCE_DIR="$PWD" bash ./install.sh uninstall codex`.
+**Disable temporarily.** Untrust the entries via `codex` → `/hooks`, or set `ARIZE_TRACE_ENABLED=false` in `~/.codex/arize-env.sh` and restart Codex. Full uninstall: `./install.sh uninstall codex`.

@@ -20,8 +20,6 @@ VENV_DIR="${INSTALL_DIR}/venv"
 # repo. Lets a caller that already ships the wheels install with no network at
 # all — and with no remote code execution for a permission layer to object to.
 WHEEL_DIR="${ARIZE_WHEEL_DIR:-}"
-# Local checkout to build and install instead of fetching upstream.
-SOURCE_DIR="${ARIZE_SOURCE_DIR:-}"
 
 # -- Terminal helpers --------------------------------------------------------
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -110,15 +108,6 @@ install_repo_tarball() {
 }
 
 install_repo() {
-    if [[ -n "$SOURCE_DIR" ]]; then
-        [[ -f "$SOURCE_DIR/pyproject.toml" && -f "$SOURCE_DIR/tracing/codex/install.py" ]] || {
-            err "ARIZE_SOURCE_DIR must point to a coding-harness-tracing checkout"; return 1;
-        }
-        [[ -z "$WHEEL_DIR" ]] || { err "Choose ARIZE_SOURCE_DIR or ARIZE_WHEEL_DIR"; return 1; }
-        info "Using local source: $SOURCE_DIR"
-        mkdir -p "$INSTALL_DIR"
-        return 0
-    fi
     # Wheel mode fetches nothing. The wheel carries every module the harness
     # needs, so there is no source tree to place — but install.sh itself has to
     # land in INSTALL_DIR, because `status`, `update` and `uninstall` are all
@@ -134,14 +123,17 @@ install_repo() {
     install_repo_tarball
 }
 
-# Run local/wheel installs from site-packages, never a stale source tree in cwd.
+# Invoke a harness's install.py. Repo mode runs the file from the source tree;
+# wheel mode has no source tree, so it runs the same code as a module. Both
+# resolve `core.*` from site-packages either way — the package is pip-installed,
+# never on sys.path by accident — so these are equivalent, not a fallback.
 run_harness_py() {
     local key="$1" vp="$2"; shift 2
     local dir; dir=$(harness_dir "$key") || return 1
-    if [[ -z "$SOURCE_DIR" && -f "${INSTALL_DIR}/${dir}/install.py" ]]; then
+    if [[ -f "${INSTALL_DIR}/${dir}/install.py" ]]; then
         run_with_tty "$vp" "${INSTALL_DIR}/${dir}/install.py" "$@"
     else
-        run_with_tty "$vp" -I -m "${dir//\//.}.install" "$@"
+        run_with_tty "$vp" -m "${dir//\//.}.install" "$@"
     fi
 }
 
@@ -195,9 +187,7 @@ PYEOF
 # twice, differing only by -U, and a flag added to one would have missed the other.
 pip_install_harness() {
     local pip="$1"; shift
-    if [[ -n "$SOURCE_DIR" ]]; then
-        "$pip" install --quiet "$@" "$SOURCE_DIR" || { err "Local package installation failed"; return 1; }
-    elif [[ -n "$WHEEL_DIR" ]]; then
+    if [[ -n "$WHEEL_DIR" ]]; then
         # --no-index so a missing wheel fails loudly instead of quietly reaching
         # PyPI, which would defeat the point of installing offline.
         "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
@@ -262,7 +252,7 @@ install_harness() {
     setup_venv "$python_cmd"
     local vp; vp=$(venv_python) || { err "Venv python not found after setup"; exit 1; }
     info "Migrating legacy config.yaml to config.json (if present)..."
-    "$vp" -I -m core.config migrate || true
+    "$vp" -m core.config migrate || true
     if [[ "$skills" == true ]]; then
         run_harness_py "$cmd" "$vp" install --with-skills
     else
@@ -295,7 +285,6 @@ Commands:
   uninstall             Full wipe: venv + repo + shared config
 
 Flags:
-  ARIZE_SOURCE_DIR      Environment variable: build from a local checkout
   --with-skills         Symlink harness skills into .agents/skills/
   --branch NAME         Install from a specific git branch (default: main)
   --wheel-dir DIR       Install from local wheels in DIR instead of downloading
@@ -402,7 +391,7 @@ main() {
             ;;
         status)
             local vp; vp=$(venv_python) || { err "Venv not found — nothing installed"; exit 1; }
-            "$vp" -I -m core.setup.status $status_args
+            "$vp" -m core.setup.status $status_args
             ;;
         update)
             header "Updating coding-harness-tracing"
@@ -414,15 +403,13 @@ main() {
             # A wheel install has no repo to pull and no newer wheel to hand us.
             # Silently converting it to a network install would change how it was
             # installed behind the user's back, so refuse and say who can update.
-            if [[ -z "$SOURCE_DIR" && -z "$WHEEL_DIR" && ! -d "${INSTALL_DIR}/.git" && ! -f "${INSTALL_DIR}/pyproject.toml" ]]; then
+            if [[ -z "$WHEEL_DIR" && ! -d "${INSTALL_DIR}/.git" && ! -f "${INSTALL_DIR}/pyproject.toml" ]]; then
                 err "This looks like an offline install with no source tree to update."
                 err "Re-run the installer that created it (for npx evals, update that), or"
                 err "pass --wheel-dir <dir> with a newer wheel."
                 exit 1
             fi
-            if [[ -n "$SOURCE_DIR" ]]; then
-                install_repo
-            elif [[ -n "$WHEEL_DIR" ]]; then
+            if [[ -n "$WHEEL_DIR" ]]; then
                 info "Updating from local wheels in ${WHEEL_DIR}..."
             elif [[ -d "${INSTALL_DIR}/.git" ]]; then
                 info "Pulling latest changes..."
@@ -434,7 +421,7 @@ main() {
             pip_install_harness "$pip" -U || exit 1
             local vp; vp=$(venv_python) || { err "venv python not found"; exit 1; }
             info "Migrating legacy config.yaml to config.json (if present)..."
-            "$vp" -I -m core.config migrate || true
+            "$vp" -m core.config migrate || true
             local harnesses
             harnesses=$("$vp" -c 'from core.setup import list_installed_harnesses as L; print("\n".join(L()))' 2>/dev/null) || true
             if [[ -n "$harnesses" ]]; then
