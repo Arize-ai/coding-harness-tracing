@@ -71,6 +71,75 @@ def _attrs_of_span(span):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("with_metadata", [True, False])
+def test_modern_response_item_user_prompt(tmp_path, with_metadata):
+    instructions = _resp(
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "repository instructions"}],
+            "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["agents_md.instructions"]},
+        }
+    )
+    prompt = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "run the example"}],
+    }
+    if with_metadata:
+        prompt["internal_chat_message_metadata_passthrough"] = {"content_item_kinds": ["user.text"]}
+    path = _write_rollout(
+        tmp_path,
+        "modern-session",
+        _evt({"type": "task_started", "turn_id": "t1"}),
+        instructions,
+        _resp(prompt),
+        _evt({"type": "task_complete", "last_agent_message": "done"}),
+        _evt({"type": "task_started", "turn_id": "t2"}),
+        _resp({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "next prompt"}]}),
+    )
+    assert _extract_turn_from_rollout(path, "t1")["user_prompt"] == "run the example"
+    assert _extract_turn_from_rollout(path, "t2")["user_prompt"] == "next prompt"
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"content": 42},
+        {"content": "not a content array"},
+        {"internal_chat_message_metadata_passthrough": "invalid"},
+        {"internal_chat_message_metadata_passthrough": []},
+        {"internal_chat_message_metadata_passthrough": {"content_item_kinds": 42}},
+        {"internal_chat_message_metadata_passthrough": {"content_item_kinds": "user.text"}},
+    ],
+)
+def test_malformed_prompt_does_not_discard_later_turn_records(tmp_path, invalid):
+    prompt = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ignored"}]}
+    prompt.update(invalid)
+    path = _write_rollout(
+        tmp_path,
+        "malformed-session",
+        _evt({"type": "task_started", "turn_id": "t1"}),
+        _resp(prompt),
+        _resp({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "valid prompt"}]}),
+        _evt({"type": "task_complete", "last_agent_message": "done"}),
+    )
+    turn = _extract_turn_from_rollout(path, "t1")
+    assert turn["user_prompt"] == "valid prompt"
+    assert turn["assistant_output"] == "done"
+
+
+def test_legacy_user_message_is_authoritative(tmp_path):
+    path = _write_rollout(
+        tmp_path,
+        "mixed-session",
+        _evt({"type": "task_started", "turn_id": "t1"}),
+        _resp({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "response copy"}]}),
+        _evt({"type": "user_message", "message": "authoritative prompt"}),
+    )
+    assert _extract_turn_from_rollout(path, "t1")["user_prompt"] == "authoritative prompt"
+
+
 class TestIsoToMs:
     def test_valid_iso_with_Z(self):
         assert _iso_to_ms("2026-05-20T23:42:45.649Z") > 0
