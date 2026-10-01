@@ -1025,8 +1025,8 @@ class TestTomlApplyRemove:
         p.write_text('notify = ["/usr/bin/other-hook"]\n')
         self._apply(p)
         data = codex_toml._toml_load_strict(p)
-        assert "/usr/bin/other-hook" in data["notify"]
-        assert "/venv/bin/notify" in data["notify"]
+        assert data["notify"][:2] == ["/venv/bin/notify", "--previous-notify"]
+        assert json.loads(data["notify"][2]) == ["/usr/bin/other-hook"]
 
     def test_apply_preserves_unrelated_sections(self, tmp_path):
         p = tmp_path / "config.toml"

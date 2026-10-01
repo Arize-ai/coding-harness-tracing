@@ -453,7 +453,7 @@ class TestWheelDirParsing:
 
     def test_harness_py_falls_back_to_module(self):
         """A wheel install has no source tree, so install.py runs as a module."""
-        assert 'run_with_tty "$vp" -m "${dir//\\//.}.install"' in self.text
+        assert 'run_with_tty "$vp" -I -m "${dir//\\//.}.install"' in self.text
 
 
 class TestWheelDirBehaviour:
