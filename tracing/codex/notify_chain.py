@@ -49,7 +49,8 @@ def remove_notify(value: object, hook: str, depth: int = 0) -> list[str]:
         return remove_notify(_previous(command), hook, depth + 1)
     # Strip the executable appended by old installers before parsing an
     # existing desktop wrapper that may already have --previous-notify.
-    command = [part for part in command if part != hook]
+    if command[-1] == hook:
+        command = command[:-1]
     if _desktop(command) and len(command) > 2 and command[2] == PREVIOUS:
         previous = remove_notify(_previous(command), hook, depth + 1)
         return command[:2] + ([PREVIOUS, json.dumps(previous)] if previous else [])

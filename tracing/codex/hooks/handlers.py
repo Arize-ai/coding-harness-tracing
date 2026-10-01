@@ -34,8 +34,8 @@ from core.common import (
 from core.common import send_span as send_span_to_backend
 from core.constants import MODEL_FAMILY_SYSTEMS
 from tracing.codex.constants import get_codex_home
-from tracing.codex.notify_chain import run_previous
 from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
+from tracing.codex.notify_chain import run_previous
 
 # Root of Codex's per-session rollout transcripts.
 _CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
@@ -214,10 +214,17 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                 # Exclude injected AGENTS.md/environment content using the
                 # per-content provenance supplied by Codex.
                 if outer == "response_item" and ptype == "message" and payload.get("role") == "user":
-                    metadata = payload.get("internal_chat_message_metadata_passthrough") or {}
+                    metadata = payload.get("internal_chat_message_metadata_passthrough")
+                    if metadata is None:
+                        metadata = {}
+                    if not isinstance(metadata, dict):
+                        continue
                     kinds = metadata.get("content_item_kinds")
+                    content = payload.get("content")
+                    if not isinstance(content, list) or (kinds is not None and not isinstance(kinds, list)):
+                        continue
                     parts = []
-                    for index, part in enumerate(payload.get("content") or []):
+                    for index, part in enumerate(content):
                         if not isinstance(part, dict) or part.get("type") != "input_text":
                             continue
                         if kinds is not None and (index >= len(kinds) or kinds[index] != "user.text"):

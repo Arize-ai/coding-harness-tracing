@@ -1028,6 +1028,15 @@ class TestTomlApplyRemove:
         assert data["notify"][:2] == ["/venv/bin/notify", "--previous-notify"]
         assert json.loads(data["notify"][2]) == ["/usr/bin/other-hook"]
 
+    def test_reinstall_and_uninstall_preserve_hook_path_in_foreign_arguments(self, tmp_path):
+        p = tmp_path / "config.toml"
+        previous = ["/usr/bin/other-hook", "--label", "/venv/bin/notify", "--verbose"]
+        codex_toml._toml_write({"notify": previous}, p)
+        self._apply(p)
+        self._apply(p)
+        codex_install._codex_toml_remove(p, "/venv/bin/notify")
+        assert codex_toml._toml_load_strict(p)["notify"] == previous
+
     def test_apply_preserves_unrelated_sections(self, tmp_path):
         p = tmp_path / "config.toml"
         p.write_text('[model]\nname = "gpt-4"\n')

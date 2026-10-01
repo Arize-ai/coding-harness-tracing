@@ -12,7 +12,7 @@ INSTALLERS = (
     (
         "tracing.codex.install",
         "codex",
-        ("cleanup_legacy_install", "_toml_load_strict", "_write_env_file", "_codex_toml_apply"),
+        ("cleanup_legacy_install", "_write_env_file", "_codex_toml_apply"),
         {},
     ),
     ("tracing.copilot.install", "copilot", ("_install_hooks",), {}),

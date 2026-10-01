@@ -102,6 +102,33 @@ def test_modern_response_item_user_prompt(tmp_path, with_metadata):
     assert _extract_turn_from_rollout(path, "t2")["user_prompt"] == "next prompt"
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"content": 42},
+        {"content": "not a content array"},
+        {"internal_chat_message_metadata_passthrough": "invalid"},
+        {"internal_chat_message_metadata_passthrough": []},
+        {"internal_chat_message_metadata_passthrough": {"content_item_kinds": 42}},
+        {"internal_chat_message_metadata_passthrough": {"content_item_kinds": "user.text"}},
+    ],
+)
+def test_malformed_prompt_does_not_discard_later_turn_records(tmp_path, invalid):
+    prompt = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ignored"}]}
+    prompt.update(invalid)
+    path = _write_rollout(
+        tmp_path,
+        "malformed-session",
+        _evt({"type": "task_started", "turn_id": "t1"}),
+        _resp(prompt),
+        _resp({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "valid prompt"}]}),
+        _evt({"type": "task_complete", "last_agent_message": "done"}),
+    )
+    turn = _extract_turn_from_rollout(path, "t1")
+    assert turn["user_prompt"] == "valid prompt"
+    assert turn["assistant_output"] == "done"
+
+
 def test_legacy_user_message_is_authoritative(tmp_path):
     path = _write_rollout(
         tmp_path,
