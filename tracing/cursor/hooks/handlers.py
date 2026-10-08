@@ -7,6 +7,7 @@ Input contract: JSON on stdin, all 15 events (IDE + CLI) routed here.
 stdout: MUST print permissive JSON response, even on error.
 stderr: redirected to ARIZE_LOG_FILE before dispatch.
 """
+import hashlib
 import json
 import os
 import sys
@@ -16,7 +17,16 @@ from core.common import send_span as _send_span_to_backend
 from tracing.cursor.hooks.adapter import (
     SCOPE_NAME,
     SERVICE_NAME,
+    active_turn_add_response,
+    active_turn_add_thought_hash,
+    active_turn_clear,
+    active_turn_clear_if_matches,
+    active_turn_get,
+    active_turn_record_alias,
+    active_turn_save,
+    active_turn_update,
     check_requirements,
+    conversation_cleanup,
     gen_root_span_get,
     gen_root_span_save,
     sanitize,
@@ -24,7 +34,15 @@ from tracing.cursor.hooks.adapter import (
     state_cleanup_generation,
     state_pop,
     state_push,
+    terminal_nogen_claim,
+    terminal_nogen_clear,
+    terminal_turn_claim,
+    terminal_turn_is_marked,
+    terminal_turn_mark,
+    terminal_turn_mark_many,
     trace_id_from_generation,
+    truncate_attr,
+    turn_matches_generation,
 )
 
 # ---------------------------------------------------------------------------
@@ -122,10 +140,8 @@ def _event_name(input_json: dict) -> str:
 def _is_cursor_ide_hook_payload(input_json: dict) -> bool:
     """Return True when the stdin JSON looks like Cursor IDE (vs CLI) hook payloads.
 
-    IDE emits ``hook_event_name``; CLI emits ``hookEventName`` — same split as ``_event_name``.
-    Root CHAIN timing: IDE keeps the original deferred span (sent at afterAgentResponse with
-    full turn duration and output on CHAIN). CLI sends the root at beforeSubmitPrompt so
-    strict OTLP backends see the parent before tool spans.
+    IDE emits ``hook_event_name``; CLI emits ``hookEventName``. The lifecycle is
+    now identical for both payload forms. This helper remains for compatibility.
 
     If neither key is set, default to IDE so existing payloads without a discriminator keep
     the original semantics.
@@ -148,6 +164,245 @@ def _trace_id_from_event(gen_id: str, conversation_id: str) -> str:
     if conversation_id:
         return trace_id_from_generation(conversation_id)
     return ""
+
+
+def _turn_state_key(conversation_id: str, gen_id: str) -> str:
+    """Storage key for one turn's active-turn/terminal state.
+
+    Cursor normally supplies conversation_id, which is shared across a
+    conversation's turns (enabling next-prompt/sessionEnd fallback closure).
+    Some CLI flows can omit it entirely; without a key to store under, the
+    turn's state would simply never be persisted. Falling back to a
+    generation-id-derived key still lets it be stored and later resolved by
+    `stop` (keyed on the same generation id), so its root is eventually
+    emitted instead of silently dropped. The "__gen__:" prefix keeps this
+    synthetic key namespace-distinct from any real conversation_id.
+    """
+    if conversation_id:
+        return conversation_id
+    if gen_id:
+        return f"__gen__:{gen_id}"
+    return ""
+
+
+def _resolve_turn_readonly(conversation_id: str, gen_id: str, trace_id: str, now_ms: int):
+    """Resolve an event to its active conversation turn, or its direct
+    generation root when no active turn exists — without mutating state.
+
+    An active prompt turn always takes priority over a merely-saved
+    generation root (e.g. sessionStart's CLI fallback root, or a stale root
+    left over from a turn that's no longer active): a saved root only wins
+    when there is no active turn to prefer, or when it happens to be that
+    active turn's own root anyway. Using the saved root instead of a
+    mismatched active turn would attach new events to whatever a leftover
+    root points at rather than the turn that's actually in progress.
+    """
+    turn_key = _turn_state_key(conversation_id, gen_id)
+    active = active_turn_get(turn_key)
+    if active and active.get("root_span_id") and active.get("trace_id"):
+        if gen_id and not turn_matches_generation(active, gen_id) and terminal_turn_is_marked(turn_key, gen_id):
+            direct_parent = gen_root_span_get(gen_id)
+            return trace_id, direct_parent, gen_id, None
+        return (
+            active["trace_id"],
+            active["root_span_id"],
+            active.get("generation_id", gen_id),
+            active,
+        )
+    direct_parent = gen_root_span_get(gen_id)
+    if direct_parent:
+        return trace_id, direct_parent, gen_id, None
+    return trace_id, "", gen_id, None
+
+
+def _resolve_turn(
+    conversation_id: str,
+    gen_id: str,
+    trace_id: str,
+    now_ms: int,
+    touch: bool = True,
+):
+    """`_resolve_turn_readonly`, plus recording this generation id as a known
+    alias of the resolved turn and bumping its activity timestamp.
+
+    Every handler EXCEPT `stop` calls this: a mismatched incoming generation
+    id for an in-progress turn is legitimately treated as a newly observed
+    alias of it (Cursor rotates generation ids for sub-events mid-turn).
+    `stop` must NOT do this via this path — recording the alias and then
+    immediately checking membership against it would make every stop
+    trivially "match" by construction, defeating strict matching entirely.
+    `stop` calls `_resolve_turn_readonly` directly, and separately checks
+    membership against the alias set *as it stood before this event*.
+    """
+    turn_key = _turn_state_key(conversation_id, gen_id)
+    resolved_trace, parent, canonical_gen, active = _resolve_turn_readonly(
+        conversation_id, gen_id, trace_id, now_ms
+    )
+    if active:
+        if gen_id and not turn_matches_generation(active, gen_id):
+            alias_time = now_ms if touch else int(active.get("last_activity_ms") or now_ms)
+            updated = active_turn_record_alias(
+                turn_key, gen_id, alias_time, active.get("root_span_id", "")
+            )
+            if updated:
+                active = updated
+                resolved_trace = active.get("trace_id", resolved_trace)
+                parent = active.get("root_span_id", parent)
+                canonical_gen = active.get("generation_id", canonical_gen)
+        elif touch:
+            active_turn_update(turn_key, {"last_activity_ms": now_ms})
+    return resolved_trace, parent, canonical_gen, active
+
+
+def _token_attrs(input_json: dict) -> dict:
+    """Build one turn's OpenInference token attributes from a stop payload."""
+    raw_input = input_json.get("input_tokens")
+    prompt_tokens = _to_int(raw_input if raw_input is not None else input_json.get("inputTokens"))
+    raw_output = input_json.get("output_tokens")
+    completion_tokens = _to_int(raw_output if raw_output is not None else input_json.get("outputTokens"))
+    raw_read = input_json.get("cache_read_tokens")
+    cache_read = _to_int(raw_read if raw_read is not None else input_json.get("cacheReadTokens"))
+    raw_write = input_json.get("cache_write_tokens")
+    cache_write = _to_int(raw_write if raw_write is not None else input_json.get("cacheWriteTokens"))
+
+    attrs = {}
+    prompt_total = None
+    if prompt_tokens is not None:
+        prompt_total = prompt_tokens + (cache_read or 0) + (cache_write or 0)
+        attrs["llm.token_count.prompt"] = prompt_total
+    if completion_tokens is not None:
+        attrs["llm.token_count.completion"] = completion_tokens
+    if cache_read is not None:
+        attrs["llm.token_count.prompt_details.cache_read"] = cache_read
+    if cache_write is not None:
+        attrs["llm.token_count.prompt_details.cache_write"] = cache_write
+    if prompt_total is not None and completion_tokens is not None:
+        attrs["llm.token_count.total"] = prompt_total + completion_tokens
+    model = _jq_str(input_json, "model", "model_name")
+    if model:
+        attrs["llm.model_name"] = model
+    return attrs
+
+
+def _response_text(turn: dict) -> str:
+    """Join a turn's response fragments in observation order, bounded in size.
+
+    Fragment count is already bounded on write (``active_turn_add_response``);
+    this also bounds the joined result so the final attribute value can't
+    grow unbounded even when many fragments are each near the per-fragment
+    limit.
+    """
+    responses = turn.get("responses")
+    if not isinstance(responses, list):
+        return ""
+    joined = "\n".join(str(item.get("text", "")) for item in responses if isinstance(item, dict))
+    return truncate_attr(joined)
+
+
+def _emit_closed_turn(turn: dict, end_ms: int, token_attrs: "dict | None" = None) -> None:
+    """Emit one deferred root and, when present, one turn-level LLM span."""
+    trace_id = turn.get("trace_id", "")
+    root_span_id = turn.get("root_span_id", "")
+    conversation_id = turn.get("conversation_id", "")
+    start_ms = int(turn.get("start_ms") or end_ms)
+    output = _response_text(turn)
+    prompt = redact_content(env.log_prompts, str(turn.get("prompt", "")))
+    user_id = turn.get("user_id", "")
+    model = turn.get("model", "")
+
+    root_attrs = {
+        "openinference.span.kind": "CHAIN",
+        "input.value": prompt,
+        "output.value": output,
+        "session.id": conversation_id,
+    }
+    if conversation_id:
+        root_attrs["cursor.conversation.id"] = conversation_id
+    if user_id:
+        root_attrs["user.id"] = user_id
+    if model:
+        root_attrs["llm.model_name"] = model
+    send_span(
+        build_span(
+            "User Prompt",
+            "CHAIN",
+            root_span_id,
+            trace_id,
+            "",
+            start_ms,
+            end_ms,
+            root_attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
+    )
+
+    responses = turn.get("responses")
+    if not isinstance(responses, list):
+        responses = []
+    if responses or token_attrs or prompt:
+        llm_start_ms = min(
+            (int(item.get("start_ms") or start_ms) for item in responses if isinstance(item, dict)),
+            default=start_ms,
+        )
+        final_response_ms = max(
+            (int(item.get("observed_ms") or start_ms) for item in responses if isinstance(item, dict)),
+            default=end_ms,
+        )
+        attrs = {
+            "openinference.span.kind": "LLM",
+            "input.value": prompt,
+            "output.value": output,
+            "session.id": conversation_id,
+            "cursor.llm.usage.scope": "turn",
+            "cursor.llm.timing.scope": "turn",
+        }
+        if conversation_id:
+            attrs["cursor.conversation.id"] = conversation_id
+        if user_id:
+            attrs["user.id"] = user_id
+        if model:
+            attrs["llm.model_name"] = model
+        if token_attrs:
+            attrs.update(token_attrs)
+        send_span(
+            build_span(
+                "Agent Response",
+                "LLM",
+                turn.get("llm_span_id") or span_id_16(),
+                trace_id,
+                root_span_id,
+                llm_start_ms,
+                final_response_ms,
+                attrs,
+                SERVICE_NAME,
+                SCOPE_NAME,
+            )
+        )
+
+
+def _flush_active_turn(conversation_id: str, end_ms: int) -> "dict | None":
+    """Claim and emit a pending turn without stop token data.
+
+    Marks every generation id this turn is known by — its canonical id plus
+    every alias observed during its lifetime — terminal, not just the
+    canonical one. Otherwise a later event still carrying one of those
+    aliases (the turn is closing via fallback precisely because its own
+    `stop` never arrived) would not be recognized as belonging to an
+    already-closed turn.
+    """
+    turn = active_turn_clear(conversation_id)
+    if not turn:
+        return None
+    canonical_gen = str(turn.get("generation_id", ""))
+    aliases = turn.get("generation_aliases") or []
+    terminal_turn_mark_many(conversation_id, [canonical_gen, *aliases])
+    _emit_closed_turn(turn, end_ms)
+    if canonical_gen:
+        state_cleanup_generation(canonical_gen)
+    for alias in aliases:
+        state_cleanup_generation(alias)
+    return turn
 
 
 # ---------------------------------------------------------------------------
@@ -198,144 +453,105 @@ def _dispatch(event: str, input_json: dict) -> None:
 
 
 def _handle_before_submit_prompt(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """Root CHAIN for the turn.
+    """Start one deferred root for the new turn.
 
-    * **IDE** (``hook_event_name``): deferred until afterAgentResponse — original CHAIN span
-      with full duration and output on the root.
-    * **CLI** (``hookEventName`` only): sent here so tool spans that fire before
-      afterAgentResponse parent to an existing span on strict OTLP backends.
+    Normally keyed by conversation_id, which is shared across a
+    conversation's turns and lets next-prompt fallback closure flush a
+    previous pending turn. When conversation_id is absent, the turn is
+    instead keyed by its own generation id (see `_turn_state_key`) so it is
+    still persisted and its root still eventually emitted via `stop` — but
+    there is then no shared key to flush an *earlier* pending turn against,
+    so next-prompt fallback simply doesn't apply in that fallback mode; each
+    such turn is independent and must close via its own `stop`.
     """
+    turn_key = _turn_state_key(conversation_id, gen_id)
+    if conversation_id:
+        _flush_active_turn(conversation_id, now_ms)
+        if not gen_id:
+            # Reset only the generation-less dedup sentinel for this new
+            # turn — never the durable, bounded per-generation marker list,
+            # which must keep remembering prior real generations' claims.
+            terminal_nogen_clear(conversation_id)
+
     sid = span_id_16()
-    gen_root_span_save(gen_id, sid)
+    if not trace_id:
+        trace_id = trace_id_from_generation(gen_id or sid)
+    if gen_id:
+        gen_root_span_save(gen_id, sid)
 
     prompt = _jq_str(input_json, "prompt", "input", "text")
     model = _jq_str(input_json, "model", "model_name")
-    deferred_root = _is_cursor_ide_hook_payload(input_json)
-
-    state_push(
-        f"root_{sanitize(gen_id)}",
-        {
-            "span_id": sid,
-            "trace_id": trace_id,
-            "conversation_id": conversation_id,
-            "start_ms": now_ms,
-            "prompt": prompt,
-            "model": model,
-            "deferred_root": deferred_root,
-        },
-    )
-
-    if deferred_root:
-        log(f"beforeSubmitPrompt: deferred root span {sid} (trace={trace_id})")
-        return
-
-    user_id = _resolve_user_id(input_json)
-
-    root_attrs = {
-        "openinference.span.kind": "CHAIN",
-        "input.value": redact_content(env.log_prompts, prompt),
-        "session.id": conversation_id,
+    turn = {
+        "generation_id": gen_id,
+        "trace_id": trace_id,
+        "root_span_id": sid,
+        "llm_span_id": span_id_16(),
+        "conversation_id": conversation_id,
+        "start_ms": now_ms,
+        "last_activity_ms": now_ms,
+        "prompt": prompt,
+        "model": model,
+        "user_id": _resolve_user_id(input_json),
+        "thought_hashes": [],
+        "responses": [],
+        "generation_aliases": [],
     }
-    if conversation_id:
-        root_attrs["cursor.conversation.id"] = conversation_id
-    if user_id:
-        root_attrs["user.id"] = user_id
-    if model:
-        root_attrs["llm.model_name"] = model
-
-    root_span = build_span(
-        "User Prompt",
-        "CHAIN",
-        sid,
-        trace_id,
-        "",
-        now_ms,
-        now_ms,
-        root_attrs,
-        SERVICE_NAME,
-        SCOPE_NAME,
-    )
-    send_span(root_span)
-    log(f"beforeSubmitPrompt: root span {sid} (trace={trace_id})")
+    if not turn_key:
+        # No conversation_id and no generation_id: nothing to key this
+        # turn's state by at all, so there is no later event that could ever
+        # resolve back to it. Emit it now rather than losing it silently.
+        error("beforeSubmitPrompt: no conversation_id or generation_id available; closing turn immediately")
+        _emit_closed_turn(turn, now_ms)
+        return
+    if not active_turn_save(turn_key, turn):
+        # Persisting the deferred turn failed (disk error, permissions, ...).
+        # There is nowhere to defer afterAgentResponse/stop data to, so close
+        # the turn now through the same closure path a later stop/sessionEnd/
+        # next-prompt would use — not a separate "send immediately" branch —
+        # rather than silently dropping the turn.
+        error(f"beforeSubmitPrompt: active_turn_save failed for key={turn_key}; closing turn immediately")
+        _emit_closed_turn(turn, now_ms)
+        if gen_id:
+            state_cleanup_generation(gen_id)
+        terminal_turn_mark(turn_key, gen_id)
+        return
+    log(f"beforeSubmitPrompt: deferred root span {sid} (trace={trace_id}, key={turn_key})")
 
 
 def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """Defers LLM span until stop (so per-turn tokens land on it). IDE also sends deferred User Prompt CHAIN."""
-    sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
-
-    # "text" is the documented field; fall back to "response"/"output" for compat
-    response = _jq_str(input_json, "text", "response", "output")
-    # "model" is a base field on all hook events
+    """Append response text to the canonical turn for one later LLM span."""
+    resolved_trace, parent, _, turn = _resolve_turn(
+        conversation_id, gen_id, trace_id, now_ms, touch=False
+    )
+    response = redact_content(
+        env.log_prompts,
+        _jq_str(input_json, "text", "response", "output"),
+    )
     model = _jq_str(input_json, "model", "model_name")
-
-    safe_gen = sanitize(gen_id) if gen_id else ""
-    root_state = state_pop(f"root_{safe_gen}") if safe_gen else None
-    prompt = root_state.get("prompt", "") if root_state else ""
-    deferred_root = root_state.get("deferred_root", True) if root_state else True
-
-    # Redact prompt and model response unless opted in via ARIZE_LOG_PROMPTS.
-    prompt = redact_content(env.log_prompts, prompt)
-    response = redact_content(env.log_prompts, response)
-
+    # Cursor may not have resolved a user identity yet at beforeSubmitPrompt
+    # time (e.g. config/email lookup lagging session start); copy in a later
+    # identity afterAgentResponse supplies so the closed turn reflects it.
     user_id = _resolve_user_id(input_json)
-
-    # IDE: send User Prompt CHAIN first (parent before LLM for strict backends), full I/O + duration.
-    if root_state and deferred_root:
-        root_conv_id = root_state.get("conversation_id", conversation_id)
-        root_attrs = {
-            "openinference.span.kind": "CHAIN",
-            "input.value": prompt,
-            "output.value": response,
-            "session.id": root_conv_id,
-        }
-        if root_conv_id:
-            root_attrs["cursor.conversation.id"] = root_conv_id
-        if user_id:
-            root_attrs["user.id"] = user_id
-        root_model = model or root_state.get("model", "")
-        if root_model:
-            root_attrs["llm.model_name"] = root_model
-
-        root_span = build_span(
-            "User Prompt",
-            "CHAIN",
-            root_state["span_id"],
-            root_state.get("trace_id", trace_id),
-            "",
-            root_state.get("start_ms", now_ms),
+    if turn:
+        updated = active_turn_add_response(
+            _turn_state_key(conversation_id, gen_id),
+            response,
             now_ms,
-            root_attrs,
-            SERVICE_NAME,
-            SCOPE_NAME,
+            model,
+            user_id,
+            turn.get("root_span_id", ""),
         )
-        send_span(root_span)
-        log(f"afterAgentResponse: sent deferred root span {root_state['span_id']}")
+        if updated:
+            log("afterAgentResponse: appended response to active turn")
+            return
+        log("afterAgentResponse: active turn closed before response append")
 
-    llm_entry = {
-        "span_id": sid,
-        "parent": parent,
-        "trace_id": trace_id,
-        "input": prompt,
-        "output": response,
-        "model": model,
-        "conversation_id": conversation_id,
-        "user_id": user_id,
-        "start_ms": now_ms,
-    }
-
-    if gen_id:
-        # Defer LLM span to stop; tokens (only available at stop) attach there.
-        state_push(f"llm_{sanitize(gen_id)}", llm_entry)
-        log(f"afterAgentResponse: deferred LLM span {sid}")
-        return
-
-    # Fallback: no gen_id means we have no key to stash under — send inline.
     attrs = {
         "openinference.span.kind": "LLM",
-        "input.value": prompt,
         "output.value": response,
         "session.id": conversation_id,
+        "cursor.llm.usage.scope": "turn",
+        "cursor.llm.timing.scope": "turn",
     }
     if conversation_id:
         attrs["cursor.conversation.id"] = conversation_id
@@ -343,35 +559,46 @@ def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, 
         attrs["user.id"] = user_id
     if model:
         attrs["llm.model_name"] = model
-
-    span = build_span(
-        "Agent Response",
-        "LLM",
-        sid,
-        trace_id,
-        parent,
-        now_ms,
-        now_ms,
-        attrs,
-        SERVICE_NAME,
-        SCOPE_NAME,
+    send_span(
+        build_span(
+            "Agent Response",
+            "LLM",
+            span_id_16(),
+            resolved_trace,
+            parent,
+            now_ms,
+            now_ms,
+            attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
     )
-    send_span(span)
-    log(f"afterAgentResponse: child span {sid} (no gen_id, sent inline)")
+    log("afterAgentResponse: sent standalone point span")
 
 
 def _handle_after_agent_thought(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """CHAIN span for thinking. Replaces bash lines 138-158."""
+    """Emit one point CHAIN span for each exact thought within a turn."""
+    resolved_trace, parent, _, turn = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
+    raw_thought = _jq_str(input_json, "thought", "thinking", "text")
+    thought = redact_content(env.log_prompts, raw_thought)
+    normalized = raw_thought.replace("\r\n", "\n").strip()
+    salt = str(turn.get("root_span_id", "")) if turn else ""
+    thought_hash = hashlib.sha256(f"{salt}\0{thought}\0{normalized}".encode()).hexdigest()
+    if turn and not active_turn_add_thought_hash(
+        _turn_state_key(conversation_id, gen_id),
+        thought_hash,
+        now_ms,
+        turn.get("root_span_id", ""),
+    ):
+        log("afterAgentThought: skipped exact duplicate")
+        return
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
-
-    thought = _jq_str(input_json, "thought", "thinking", "text")
 
     user_id = _resolve_user_id(input_json)
 
     attrs = {
         "openinference.span.kind": "CHAIN",
-        "output.value": redact_content(env.log_prompts, thought),
+        "output.value": thought,
         "session.id": conversation_id,
     }
     if conversation_id:
@@ -383,7 +610,7 @@ def _handle_after_agent_thought(input_json, conversation_id, gen_id, trace_id, n
         "Agent Thinking",
         "CHAIN",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         now_ms,
         now_ms,
@@ -397,30 +624,31 @@ def _handle_after_agent_thought(input_json, conversation_id, gen_id, trace_id, n
 
 def _handle_before_shell_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
     """State push only, no span. Replaces bash lines 163-179."""
-    if not gen_id:
+    resolved_trace, _, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
+    if not canonical_gen:
         return
 
     command = _jq_str(input_json, "command", "shell_command")
     cwd = _jq_str(input_json, "cwd", "working_directory")
 
     state_push(
-        f"shell_{sanitize(gen_id)}",
+        f"shell_{sanitize(canonical_gen)}",
         {
             "command": command,
             "cwd": cwd,
             "start_ms": str(now_ms),
-            "trace_id": trace_id,
+            "trace_id": resolved_trace,
             "conversation_id": conversation_id,
         },
     )
-    log(f"beforeShellExecution: pushed state for gen={gen_id}")
+    log(f"beforeShellExecution: pushed state for gen={canonical_gen}")
 
 
 def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
     """Merge with before state, create TOOL span. Replaces bash lines 184-232."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
-    popped = state_pop(f"shell_{sanitize(gen_id)}") if gen_id else None
+    resolved_trace, parent, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
+    popped = state_pop(f"shell_{sanitize(canonical_gen)}") if canonical_gen else None
 
     if popped:
         start_ms = popped.get("start_ms", "")
@@ -440,6 +668,15 @@ def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id,
 
     command = redact_content(env.log_tool_details, command)
     output = redact_content(env.log_tool_content, output)
+
+    parsed_exit_code = _to_int(exit_code)
+    status_code = 0
+    status_message = ""
+    if parsed_exit_code == 0:
+        status_code = 1
+    elif parsed_exit_code is not None:
+        status_code = 2
+        status_message = truncate_attr(output, 1024)
 
     user_id = _resolve_user_id(input_json)
 
@@ -461,13 +698,15 @@ def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id,
         "Shell",
         "TOOL",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         start_ms,
         now_ms,
         attrs,
         SERVICE_NAME,
         SCOPE_NAME,
+        status_code=status_code,
+        status_message=status_message,
     )
     send_span(span)
     log(f"afterShellExecution: span {sid} (merged)")
@@ -475,7 +714,8 @@ def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id,
 
 def _handle_before_mcp_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
     """State push only, no span. Replaces bash lines 237-257."""
-    if not gen_id:
+    resolved_trace, _, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
+    if not canonical_gen:
         return
 
     tool_name = _jq_str(input_json, "tool_name", "toolName", "name")
@@ -484,25 +724,25 @@ def _handle_before_mcp_execution(input_json, conversation_id, gen_id, trace_id, 
     mcp_cmd = _jq_str(input_json, "command")
 
     state_push(
-        f"mcp_{sanitize(gen_id)}",
+        f"mcp_{sanitize(canonical_gen)}",
         {
             "tool_name": tool_name,
             "tool_input": redact_content(env.log_tool_content, tool_input),
             "url": redact_content(env.log_tool_details, mcp_url),
             "command": redact_content(env.log_tool_details, mcp_cmd),
             "start_ms": str(now_ms),
-            "trace_id": trace_id,
+            "trace_id": resolved_trace,
             "conversation_id": conversation_id,
         },
     )
-    log(f"beforeMCPExecution: pushed state for gen={gen_id}")
+    log(f"beforeMCPExecution: pushed state for gen={canonical_gen}")
 
 
 def _handle_after_mcp_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
     """Merge with before state, create TOOL span. Replaces bash lines 262-312."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
-    popped = state_pop(f"mcp_{sanitize(gen_id)}") if gen_id else None
+    resolved_trace, parent, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
+    popped = state_pop(f"mcp_{sanitize(canonical_gen)}") if canonical_gen else None
 
     if popped:
         start_ms = popped.get("start_ms", "")
@@ -540,7 +780,7 @@ def _handle_after_mcp_execution(input_json, conversation_id, gen_id, trace_id, n
         f"MCP: {tool_name}",
         "TOOL",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         start_ms,
         now_ms,
@@ -555,7 +795,7 @@ def _handle_after_mcp_execution(input_json, conversation_id, gen_id, trace_id, n
 def _handle_before_read_file(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for file read. Replaces bash lines 317-339."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    resolved_trace, parent, _, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
 
@@ -576,7 +816,7 @@ def _handle_before_read_file(input_json, conversation_id, gen_id, trace_id, now_
         "Read File",
         "TOOL",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         now_ms,
         now_ms,
@@ -591,7 +831,7 @@ def _handle_before_read_file(input_json, conversation_id, gen_id, trace_id, now_
 def _handle_after_file_edit(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for file edit. Replaces bash lines 344-371."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    resolved_trace, parent, _, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
     edits = redact_content(env.log_tool_content, _jq_str(input_json, "edits", "changes", "diff"))
@@ -614,7 +854,7 @@ def _handle_after_file_edit(input_json, conversation_id, gen_id, trace_id, now_m
         "File Edit",
         "TOOL",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         now_ms,
         now_ms,
@@ -629,7 +869,7 @@ def _handle_after_file_edit(input_json, conversation_id, gen_id, trace_id, now_m
 def _handle_before_tab_file_read(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for tab file read. Replaces bash lines 376-398."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    resolved_trace, parent, _, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
 
@@ -650,7 +890,7 @@ def _handle_before_tab_file_read(input_json, conversation_id, gen_id, trace_id, 
         "Tab Read File",
         "TOOL",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         now_ms,
         now_ms,
@@ -665,7 +905,7 @@ def _handle_before_tab_file_read(input_json, conversation_id, gen_id, trace_id, 
 def _handle_after_tab_file_edit(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for tab file edit. Replaces bash lines 403-430."""
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    resolved_trace, parent, _, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
 
     file_path = redact_content(env.log_tool_details, _jq_str(input_json, "file_path", "filePath", "path"))
     edits = redact_content(env.log_tool_content, _jq_str(input_json, "edits", "changes", "diff"))
@@ -688,7 +928,7 @@ def _handle_after_tab_file_edit(input_json, conversation_id, gen_id, trace_id, n
         "Tab File Edit",
         "TOOL",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         now_ms,
         now_ms,
@@ -701,102 +941,104 @@ def _handle_after_tab_file_edit(input_json, conversation_id, gen_id, trace_id, n
 
 
 def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """Flush deferred LLM span(s) with per-turn tokens, then send Agent Stop CHAIN + cleanup."""
-    sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
+    """Close the turn this stop actually resolves to, and emit its terminal
+    point span.
 
-    status = _jq_str(input_json, "status", "reason")
-    loop_count = _jq_str(input_json, "loop_count", "loopCount", "iterations")
+    Only clears the active turn when the incoming generation id is empty, or
+    matches that turn's canonical id or one of its *previously* recorded
+    aliases — never whatever turn happens to be active, and never an alias
+    this very event would be the first to establish (that would make every
+    mismatched stop trivially match). A mismatched generation stays
+    standalone: resolution still (unchanged) picks its parent/trace through
+    the active turn when one exists, so a stray standalone span can still
+    land in that trace, but it is never allowed to close the turn.
+    """
+    turn_key = _turn_state_key(conversation_id, gen_id)
+    resolved_trace, parent, canonical_gen, active = _resolve_turn_readonly(
+        conversation_id, gen_id, trace_id, now_ms
+    )
 
-    user_id = _resolve_user_id(input_json)
+    if active:
+        active_has_generation = bool(active.get("generation_id") or active.get("generation_aliases"))
+        if gen_id and not turn_matches_generation(active, gen_id):
+            log(
+                f"stop: ignored generation {gen_id!r} because it does not match "
+                "the active turn's canonical generation or observed aliases"
+            )
+            return
+        elif not gen_id and active_has_generation:
+            log("stop: ignored generation-less terminal event for a generated active turn")
+            return
 
-    # Token counts from stop payload
-    # Use explicit None checks — 0 is a valid token count but falsy with ``or``
-    _inp_tok = input_json.get("input_tokens")
-    prompt_tokens = _to_int(_inp_tok if _inp_tok is not None else input_json.get("inputTokens"))
-    _out_tok = input_json.get("output_tokens")
-    completion_tokens = _to_int(_out_tok if _out_tok is not None else input_json.get("outputTokens"))
-    _cr_tok = input_json.get("cache_read_tokens")
-    cache_read = _to_int(_cr_tok if _cr_tok is not None else input_json.get("cacheReadTokens"))
-    _cw_tok = input_json.get("cache_write_tokens")
-    cache_write = _to_int(_cw_tok if _cw_tok is not None else input_json.get("cacheWriteTokens"))
-    model = _jq_str(input_json, "model")
-    _dur = input_json.get("duration_ms")
-    duration_ms = _to_int(_dur if _dur is not None else input_json.get("durationMs"))
+    terminal_generation = gen_id or (canonical_gen if active else "")
+    if terminal_generation:
+        if not terminal_turn_claim(turn_key, terminal_generation):
+            log(f"stop: skipped duplicate terminal event for gen={gen_id}")
+            return
+    elif not terminal_nogen_claim(turn_key):
+        log("stop: skipped duplicate no-generation terminal event")
+        return
 
-    # OpenInference: ``prompt`` is the total prompt. Cursor's ``input_tokens`` is
-    # the uncached remainder (mirrors Anthropic), so the cache buckets are added
-    # back in to form the total; they are also reported via ``prompt_details.*``
-    # subsets so a cost model prices cache reads (~0.1x) and writes (~1.25x) at
-    # their own rates instead of the full input rate.
-    token_attrs = {}
-    prompt_total = None
-    if prompt_tokens is not None:
-        prompt_total = prompt_tokens + (cache_read or 0) + (cache_write or 0)
-        token_attrs["llm.token_count.prompt"] = prompt_total
-    if completion_tokens is not None:
-        token_attrs["llm.token_count.completion"] = completion_tokens
-    if cache_read is not None:
-        token_attrs["llm.token_count.prompt_details.cache_read"] = cache_read
-    if cache_write is not None:
-        token_attrs["llm.token_count.prompt_details.cache_write"] = cache_write
-    if prompt_total is not None and completion_tokens is not None:
-        token_attrs["llm.token_count.total"] = prompt_total + completion_tokens
-    if model:
-        token_attrs["llm.model_name"] = model
+    turn = None
+    if active:
+        turn = active_turn_clear_if_matches(
+            turn_key,
+            root_span_id=active.get("root_span_id", ""),
+            generation_id=active.get("generation_id", ""),
+        )
+        if turn is None:
+            log(f"stop: active turn was closed concurrently for gen={gen_id}")
+            return
 
-    # Drain deferred LLM stack for this generation (LIFO: first pop = most recent).
-    llm_entries = []
-    if gen_id:
-        llm_key = f"llm_{sanitize(gen_id)}"
-        while True:
-            entry = state_pop(llm_key)
-            if entry is None:
-                break
-            llm_entries.append(entry)
-
-    # Flush deferred LLM span(s) before Agent Stop so strict OTLP backends see parent first.
-    for idx, entry in enumerate(llm_entries):
-        entry_conv_id = entry.get("conversation_id")
+    token_attrs = _token_attrs(input_json)
+    has_token_counts = any(key.startswith("llm.token_count.") for key in token_attrs)
+    emitted_llm_span = False
+    if turn:
+        resolved_trace = turn.get("trace_id", resolved_trace)
+        parent = turn.get("root_span_id", parent)
+        _emit_closed_turn(turn, now_ms, token_attrs)
+        emitted_llm_span = True
+    elif has_token_counts:
         llm_attrs = {
             "openinference.span.kind": "LLM",
-            "input.value": entry.get("input", ""),
-            "output.value": entry.get("output", ""),
+            "session.id": conversation_id,
+            "cursor.llm.usage.scope": "turn",
+            "cursor.llm.timing.scope": "turn",
+            **token_attrs,
         }
-        if entry_conv_id:
-            llm_attrs["session.id"] = entry_conv_id
-            llm_attrs["cursor.conversation.id"] = entry_conv_id
-        entry_user = entry.get("user_id")
-        if entry_user:
-            llm_attrs["user.id"] = entry_user
-        entry_model = entry.get("model", "")
-        if entry_model:
-            llm_attrs["llm.model_name"] = entry_model
-        # Tokens are cumulative per turn — attribute only to the most recent LLM span.
-        if idx == 0:
-            llm_attrs.update(token_attrs)
-
-        llm_start = int(entry.get("start_ms") or now_ms)
-        llm_span = build_span(
-            "Agent Response",
-            "LLM",
-            entry.get("span_id", ""),
-            entry.get("trace_id", trace_id),
-            entry.get("parent", ""),
-            llm_start,
-            llm_start,
-            llm_attrs,
-            SERVICE_NAME,
-            SCOPE_NAME,
+        if conversation_id:
+            llm_attrs["cursor.conversation.id"] = conversation_id
+        standalone_user_id = _resolve_user_id(input_json)
+        if standalone_user_id:
+            llm_attrs["user.id"] = standalone_user_id
+        send_span(
+            build_span(
+                "Agent Response",
+                "LLM",
+                span_id_16(),
+                resolved_trace,
+                parent,
+                now_ms,
+                now_ms,
+                llm_attrs,
+                SERVICE_NAME,
+                SCOPE_NAME,
+            )
         )
-        send_span(llm_span)
+        emitted_llm_span = True
 
+    sid = span_id_16()
+    status = _jq_str(input_json, "status", "reason")
+    loop_count = _jq_str(input_json, "loop_count", "loopCount", "iterations")
+    duration_raw = input_json.get("duration_ms")
+    duration_ms = _to_int(duration_raw if duration_raw is not None else input_json.get("durationMs"))
     attrs = {
         "openinference.span.kind": "CHAIN",
         "session.id": conversation_id,
     }
     if conversation_id:
         attrs["cursor.conversation.id"] = conversation_id
+    user_id = _resolve_user_id(input_json)
     if user_id:
         attrs["user.id"] = user_id
     if status:
@@ -805,34 +1047,62 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
         attrs["cursor.stop.loop_count"] = loop_count
     if duration_ms is not None:
         attrs["cursor.stop.duration_ms"] = duration_ms
-    if model and not llm_entries:
-        attrs["llm.model_name"] = model
+    # No turn and no token counts means nothing else carries the model name
+    # for this stop — keep it on the standalone Agent Stop span rather than
+    # losing it.
+    if not emitted_llm_span and "llm.model_name" in token_attrs:
+        attrs["llm.model_name"] = token_attrs["llm.model_name"]
 
-    # Fallback (no afterAgentResponse, e.g. CLI): keep token attrs on Agent Stop.
-    if not llm_entries:
-        attrs.update(token_attrs)
-
-    span = build_span(
-        "Agent Stop",
-        "CHAIN",
-        sid,
-        trace_id,
-        parent,
-        now_ms,
-        now_ms,
-        attrs,
-        SERVICE_NAME,
-        SCOPE_NAME,
+    # If no turn state exists, retain a useful standalone terminal span.
+    send_span(
+        build_span(
+            "Agent Stop",
+            "CHAIN",
+            sid,
+            resolved_trace,
+            parent,
+            now_ms,
+            now_ms,
+            attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
     )
-    send_span(span)
 
-    if gen_id:
+    # Clean up only the turn actually closed here (its own canonical id plus
+    # every alias it accumulated) — never `canonical_gen` from `_resolve_turn`
+    # when that was merely a mismatched active turn's identity this stop did
+    # NOT close; deleting that turn's gen_root/state out from under it would
+    # disconnect its still-in-progress spans from their parent.
+    closed_gen = turn.get("generation_id", "") if turn else ""
+    aliases = (turn.get("generation_aliases") if turn else None) or []
+    if closed_gen:
+        state_cleanup_generation(closed_gen)
+    for alias in aliases:
+        state_cleanup_generation(alias)
+    if gen_id and gen_id != closed_gen and gen_id not in aliases:
+        # The raw incoming id's own root/stack state is always safe to clean
+        # up — it is keyed by exactly that id regardless of which turn (if
+        # any) this stop actually closed.
         state_cleanup_generation(gen_id)
-    log(f"stop: span {sid}, cleaned up gen={gen_id}")
+    if turn:
+        terminal_turn_mark_many(turn_key, [closed_gen, *aliases, gen_id])
+    log(f"stop: span {sid}, cleaned up gen={closed_gen or gen_id}")
 
 
 def _handle_session_start(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """CHAIN span for Cursor CLI sessionStart event."""
+    """CHAIN span for Cursor CLI sessionStart event.
+
+    Also saves this span as the gen_root for ``gen_id`` when present. Pure
+    CLI flows can omit ``beforeSubmitPrompt`` entirely (no "turn" concept),
+    so without this, shell/stop/other CLI spans that carry the same
+    generation_id as sessionStart would resolve no parent at all and become
+    disconnected trace roots instead of children of the session.
+    """
+    if _is_cursor_ide_hook_payload(input_json):
+        log("sessionStart: skipped standalone IDE session trace")
+        return
+
     sid = span_id_16()
 
     attrs = {
@@ -871,27 +1141,21 @@ def _handle_session_start(input_json, conversation_id, gen_id, trace_id, now_ms)
 
 
 def _handle_session_end(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """CHAIN span for Cursor CLI sessionEnd event — closes the session.
-
-    Reuses tokens/duration from the payload when present.  Always cleans up
-    the gen_id keyed root span if one was saved by sessionStart.
-    """
+    """Flush a pending turn, then emit one point span for the CLI session end."""
+    turn_key = _turn_state_key(conversation_id, gen_id)
+    _flush_active_turn(turn_key, now_ms)
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id)
-
-    _dur = input_json.get("duration_ms")
-    duration_ms = _to_int(_dur if _dur is not None else input_json.get("durationMs"))
+    duration_raw = input_json.get("duration_ms")
+    duration_ms = _to_int(duration_raw if duration_raw is not None else input_json.get("durationMs"))
     final_status = _jq_str(input_json, "final_status", "finalStatus", "status")
     reason = _jq_str(input_json, "reason")
-
-    user_id = _resolve_user_id(input_json)
-
     attrs = {
         "openinference.span.kind": "CHAIN",
         "session.id": conversation_id,
     }
     if conversation_id:
         attrs["cursor.conversation.id"] = conversation_id
+    user_id = _resolve_user_id(input_json)
     if user_id:
         attrs["user.id"] = user_id
     if duration_ms is not None:
@@ -901,46 +1165,48 @@ def _handle_session_end(input_json, conversation_id, gen_id, trace_id, now_ms):
     if reason:
         attrs["cursor.session.reason"] = reason
 
-    # Token fields can also appear on sessionEnd. Same OpenInference convention
-    # as _handle_stop: ``prompt`` is the total (uncached input + cache buckets),
-    # cache split reported via ``prompt_details.*`` subsets.
-    _inp_tok = input_json.get("input_tokens")
-    prompt_tokens = _to_int(_inp_tok if _inp_tok is not None else input_json.get("inputTokens"))
-    _out_tok = input_json.get("output_tokens")
-    completion_tokens = _to_int(_out_tok if _out_tok is not None else input_json.get("outputTokens"))
-    _cr_tok = input_json.get("cache_read_tokens")
-    cache_read = _to_int(_cr_tok if _cr_tok is not None else input_json.get("cacheReadTokens"))
-    _cw_tok = input_json.get("cache_write_tokens")
-    cache_write = _to_int(_cw_tok if _cw_tok is not None else input_json.get("cacheWriteTokens"))
+    raw_input = input_json.get("input_tokens")
+    input_tokens = _to_int(raw_input if raw_input is not None else input_json.get("inputTokens"))
+    raw_output = input_json.get("output_tokens")
+    output_tokens = _to_int(raw_output if raw_output is not None else input_json.get("outputTokens"))
+    raw_read = input_json.get("cache_read_tokens")
+    cache_read = _to_int(raw_read if raw_read is not None else input_json.get("cacheReadTokens"))
+    raw_write = input_json.get("cache_write_tokens")
+    cache_write = _to_int(raw_write if raw_write is not None else input_json.get("cacheWriteTokens"))
     prompt_total = None
-    if prompt_tokens is not None:
-        prompt_total = prompt_tokens + (cache_read or 0) + (cache_write or 0)
-        attrs["llm.token_count.prompt"] = prompt_total
-    if completion_tokens is not None:
-        attrs["llm.token_count.completion"] = completion_tokens
+    if input_tokens is not None:
+        attrs["cursor.session.token_count.input"] = input_tokens
+        prompt_total = input_tokens + (cache_read or 0) + (cache_write or 0)
+        attrs["cursor.session.token_count.prompt"] = prompt_total
+    if output_tokens is not None:
+        attrs["cursor.session.token_count.output"] = output_tokens
     if cache_read is not None:
-        attrs["llm.token_count.prompt_details.cache_read"] = cache_read
+        attrs["cursor.session.token_count.cache_read"] = cache_read
     if cache_write is not None:
-        attrs["llm.token_count.prompt_details.cache_write"] = cache_write
-    if prompt_total is not None and completion_tokens is not None:
-        attrs["llm.token_count.total"] = prompt_total + completion_tokens
+        attrs["cursor.session.token_count.cache_write"] = cache_write
+    if prompt_total is not None and output_tokens is not None:
+        attrs["cursor.session.token_count.total"] = prompt_total + output_tokens
 
-    span = build_span(
-        "Session End",
-        "CHAIN",
-        sid,
-        trace_id,
-        parent,
-        now_ms,
-        now_ms,
-        attrs,
-        SERVICE_NAME,
-        SCOPE_NAME,
+    send_span(
+        build_span(
+            "Session End",
+            "CHAIN",
+            sid,
+            trace_id,
+            "",
+            now_ms,
+            now_ms,
+            attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+        )
     )
-    send_span(span)
-
     if gen_id:
         state_cleanup_generation(gen_id)
+    # The conversation itself is over: make sure no active turn lingers.
+    # Terminal-marker history and lock files are deliberately left alone —
+    # see `conversation_cleanup`'s docstring for why.
+    conversation_cleanup(conversation_id)
     log(f"sessionEnd: span {sid}, cleaned up gen={gen_id}")
 
 
@@ -979,7 +1245,7 @@ def _handle_post_tool_use(input_json, conversation_id, gen_id, trace_id, now_ms)
         return
 
     sid = span_id_16()
-    parent = gen_root_span_get(gen_id) if gen_id else ""
+    resolved_trace, parent, _, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
 
     tool_input = _jq_str(input_json, "tool_input", "toolInput", "input", "arguments", "args")
     output = _jq_str(input_json, "result", "output", "response", "stdout")
@@ -1010,7 +1276,7 @@ def _handle_post_tool_use(input_json, conversation_id, gen_id, trace_id, now_ms)
         span_name,
         "TOOL",
         sid,
-        trace_id,
+        resolved_trace,
         parent,
         now_ms,
         now_ms,

@@ -207,12 +207,12 @@ Cursor IDE fires 15 hook events. Here's what each one traces:
 
 | Event | Span Name | Kind | Description |
 |-------|-----------|------|-------------|
-| `sessionStart` | Session Start | CHAIN | Root span for the conversation; captures session metadata |
-| `beforeSubmitPrompt` | User Prompt | CHAIN | Root span for the turn; captures prompt text, model, attachments |
-| `afterAgentResponse` | Agent Response | LLM | LLM response text and model name; span is deferred and sent at end-of-turn (on `stop`) so it can carry per-turn token usage |
-| `afterAgentThought` | Agent Thinking | CHAIN | Agent thinking/reasoning text |
+| `sessionStart` | Session Start | CHAIN | CLI fallback parent with session metadata; suppressed for IDE sessions |
+| `beforeSubmitPrompt` | User Prompt | CHAIN | Starts the deferred root for one turn; `stop` closes it |
+| `afterAgentResponse` | Agent Response | LLM | Adds response text to one turn-level LLM span, which `stop` emits with token usage |
+| `afterAgentThought` | Agent Thinking | CHAIN | Point span for unique, exact thinking text within the turn |
 | `beforeShellExecution` | (state push) | -- | Saves command and start time to disk state |
-| `afterShellExecution` | Shell | TOOL | Merged span with command input and output |
+| `afterShellExecution` | Shell | TOOL | Merged command span; numeric exit codes set `OK` or `ERROR`, while missing or invalid codes stay `UNSET` |
 | `beforeMCPExecution` | (state push) | -- | Saves tool name, input, and start time |
 | `afterMCPExecution` | MCP: {tool} | TOOL | Merged span with tool input and result |
 | `beforeReadFile` | Read File | TOOL | File path being read |
@@ -220,8 +220,8 @@ Cursor IDE fires 15 hook events. Here's what each one traces:
 | `beforeTabFileRead` | Tab Read File | TOOL | Tab file read (file path) |
 | `afterTabFileEdit` | Tab File Edit | TOOL | Tab file edit (path and edits) |
 | `postToolUse` | Tool: {name} | TOOL | Generic tool span; postToolUse is suppressed for tools with a dedicated handler (Shell, Read, File Edit, Tab ops, MCP) to avoid duplicate spans |
-| `stop` | Agent Stop | CHAIN | Per-turn stop event with status / loop_count / duration metadata; per-turn token counts are attached to the deferred `Agent Response` (LLM) span when it is sent at end-of-turn |
-| `sessionEnd` | Session End | CHAIN | End-of-session span with duration and final status |
+| `stop` | Agent Stop | CHAIN | Zero-duration turn terminal; closes the root once and supplies token totals to the LLM span |
+| `sessionEnd` | Session End | CHAIN | End-of-session point span; closes a pending turn and keeps only `cursor.*` session totals |
 
 Shell and MCP events use a disk-backed state stack to merge before/after context into single spans with both input and output.
 
@@ -244,9 +244,12 @@ Full Cursor CLI assistant and thinking coverage requires parsing --output-format
 
 ### What We Capture
 
-- **`sessionStart`** produces a `Session Start` CHAIN span that acts as the root for the conversation.
-- **`sessionEnd`** produces a `Session End` CHAIN span with `cursor.session.duration_ms`, `cursor.session.final_status`, `cursor.session.reason`, and end-of-session token counts when available.
-- **`stop`** produces an `Agent Stop` CHAIN span carrying per-turn status / loop_count / duration metadata. On the Cursor IDE, per-turn token usage is attached to the `Agent Response` (LLM) span instead: that span is deferred from `afterAgentResponse` and sent at end-of-turn when `stop` fires, populated from the `stop` payload with `llm.token_count.prompt` (the total prompt — Cursor's `input_tokens` is the uncached remainder, so cache reads/writes are added back in), `llm.token_count.completion`, the OpenInference cache subsets `llm.token_count.prompt_details.cache_read` / `llm.token_count.prompt_details.cache_write`, `llm.token_count.total`, and `llm.model_name`. Cursor CLI does not emit `afterAgentResponse`, so there is no LLM span to attach to; for the CLI path, token counts remain on the `Agent Stop` / `Session End` CHAIN span as before.
+- **`sessionStart`** is suppressed for IDE sessions because user turns provide the useful roots. For CLI sessions, it produces a fallback CHAIN parent with session metadata because CLI can omit `beforeSubmitPrompt`.
+- **`beforeSubmitPrompt`** starts one deferred `User Prompt` root for each turn. All turn spans share its trace ID and use it as their parent. The `stop` event closes the root. A `sessionEnd` event or the next prompt closes a pending root once. If persisting the deferred turn fails, the turn is closed immediately through the same closure path `stop`/`sessionEnd`/next-prompt use, rather than being silently dropped.
+- **`afterAgentResponse`** adds response fragments to one `Agent Response` LLM span. The span keeps text in observation order and bounded in count. Its inferred interval starts after the preceding observed turn activity and ends at the final response. The `cursor.llm.usage.scope` and `cursor.llm.timing.scope` attributes identify this turn scope. A user identity supplied here is copied into the turn.
+- **`stop`** produces a zero-duration `Agent Stop` CHAIN span. Its token totals occur once on the turn LLM span; when neither a turn nor token counts exist, `llm.model_name` still lands on the `Agent Stop` span rather than being dropped. The prompt total includes the uncached input plus cache-read and cache-write tokens. Zero token values remain present. Duplicate/stale `stop` delivery is rejected by a durable, bounded per-generation terminal marker (not a single "latest generation" marker), so a late `stop` for an old generation cannot resolve to and close the currently active turn.
+- **`sessionEnd`** produces a `Session End` CHAIN point span. Useful session totals remain under `cursor.session.token_count.*`. The span has no OpenInference token totals. It removes active state and retains bounded terminal history so late duplicate stops remain suppressed.
+- **`afterShellExecution`** keeps `shell.exit_code` as a string. Numeric zero maps to `OK`, and a numeric nonzero value maps to `ERROR`. Missing or invalid values map to `UNSET`. Output text never determines failure when Cursor omits the code.
 - **`postToolUse`** produces a generic `Tool: <name>` span ONLY for tools without a dedicated handler. Shell, file read/edit, tab file ops, and MCP execution are handled by their dedicated `before*`/`after*` events; the generic postToolUse is suppressed for these to avoid duplicate spans.
 
 Every span includes `cursor.conversation.id` as a span attribute. Since `sessionStart` and per-turn activity use different `trace_id` values, `cursor.conversation.id` is the recommended cross-trace join key in Arize. To gather all activity for a Cursor session regardless of trace, filter spans by `attributes.cursor.conversation.id = "<id>"`.
