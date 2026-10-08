@@ -105,6 +105,26 @@ install.bat uninstall cursor
 | State directory | `~/.arize/harness/state/cursor/` |
 | Log file | `~/.arize/harness/logs/cursor.log` |
 
+## Trace topology
+
+Each user turn creates one `User Prompt` CHAIN root. The IDE and CLI both defer this root until `stop`.
+
+Thinking, tool, response, and stop spans use the root trace ID and parent span ID. If Cursor changes a generation ID, the active conversation supplies the canonical IDs.
+
+The root starts at `beforeSubmitPrompt` and ends at `stop`. A `sessionEnd` event or the next prompt closes a pending root once.
+
+Cursor IDE suppresses the standalone `Session Start` trace because user turns provide the useful roots. Cursor CLI can omit `beforeSubmitPrompt` entirely. In that case, `sessionStart` supplies a fallback parent for CLI spans.
+
+Duplicate or late-arriving `stop` events are rejected by a per-conversation, per-generation terminal marker. That marker list is durable and bounded (not a single "latest generation" value), so a stale `stop` for an old, already-closed generation is still recognized and rejected even after several newer turns have completed — it cannot resolve to, and close, the turn that is currently active.
+
+Each turn has one `Agent Response` LLM span. Multiple response fragments remain in order within that span. Its inferred interval starts after the preceding observed turn activity and ends at the final response event. The `cursor.llm.usage.scope` and `cursor.llm.timing.scope` attributes both use `turn`.
+
+Token totals from `stop` occur once on the turn LLM span. Session totals use only `cursor.session.token_count.*` attributes. They do not duplicate OpenInference LLM totals.
+
+Shell spans use the numeric exit code for status. Zero maps to `OK`, and nonzero maps to `ERROR`. Missing or invalid codes map to `UNSET`. The `shell.exit_code` attribute remains a string. Cursor output does not determine status when Cursor omits an exit code.
+
+Point events, such as thinking and stop, keep zero duration when Cursor provides no interval.
+
 ## Verifying tracing
 
 Use Cursor (IDE or `agent` CLI) as normal. The hooks fire on agent activity within the workspace that contains `.cursor/hooks.json`.
