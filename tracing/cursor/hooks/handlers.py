@@ -35,7 +35,6 @@ from tracing.cursor.hooks.adapter import (
     state_pop,
     state_push,
     terminal_nogen_claim,
-    terminal_nogen_clear,
     terminal_turn_claim,
     terminal_turn_is_marked,
     terminal_turn_mark,
@@ -467,11 +466,6 @@ def _handle_before_submit_prompt(input_json, conversation_id, gen_id, trace_id, 
     turn_key = _turn_state_key(conversation_id, gen_id)
     if conversation_id:
         _flush_active_turn(conversation_id, now_ms)
-        if not gen_id:
-            # Reset only the generation-less dedup sentinel for this new
-            # turn — never the durable, bounded per-generation marker list,
-            # which must keep remembering prior real generations' claims.
-            terminal_nogen_clear(conversation_id)
 
     sid = span_id_16()
     if not trace_id:
