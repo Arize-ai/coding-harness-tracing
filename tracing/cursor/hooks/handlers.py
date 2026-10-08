@@ -35,7 +35,8 @@ from tracing.cursor.hooks.adapter import (
     state_pop,
     state_push,
     terminal_nogen_claim,
-    terminal_turn_claim,
+    terminal_nogen_clear,
+    terminal_turn_claim_many,
     terminal_turn_is_marked,
     terminal_turn_mark,
     terminal_turn_mark_many,
@@ -234,15 +235,11 @@ def _resolve_turn(
     membership against the alias set *as it stood before this event*.
     """
     turn_key = _turn_state_key(conversation_id, gen_id)
-    resolved_trace, parent, canonical_gen, active = _resolve_turn_readonly(
-        conversation_id, gen_id, trace_id, now_ms
-    )
+    resolved_trace, parent, canonical_gen, active = _resolve_turn_readonly(conversation_id, gen_id, trace_id, now_ms)
     if active:
         if gen_id and not turn_matches_generation(active, gen_id):
             alias_time = now_ms if touch else int(active.get("last_activity_ms") or now_ms)
-            updated = active_turn_record_alias(
-                turn_key, gen_id, alias_time, active.get("root_span_id", "")
-            )
+            updated = active_turn_record_alias(turn_key, gen_id, alias_time, active.get("root_span_id", ""))
             if updated:
                 active = updated
                 resolved_trace = active.get("trace_id", resolved_trace)
@@ -466,6 +463,8 @@ def _handle_before_submit_prompt(input_json, conversation_id, gen_id, trace_id, 
     turn_key = _turn_state_key(conversation_id, gen_id)
     if conversation_id:
         _flush_active_turn(conversation_id, now_ms)
+        if not gen_id:
+            terminal_nogen_clear(conversation_id)
 
     sid = span_id_16()
     if not trace_id:
@@ -514,9 +513,7 @@ def _handle_before_submit_prompt(input_json, conversation_id, gen_id, trace_id, 
 
 def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, now_ms):
     """Append response text to the canonical turn for one later LLM span."""
-    resolved_trace, parent, _, turn = _resolve_turn(
-        conversation_id, gen_id, trace_id, now_ms, touch=False
-    )
+    resolved_trace, parent, _, turn = _resolve_turn(conversation_id, gen_id, trace_id, now_ms, touch=False)
     response = redact_content(
         env.log_prompts,
         _jq_str(input_json, "text", "response", "output"),
@@ -539,6 +536,27 @@ def _handle_after_agent_response(input_json, conversation_id, gen_id, trace_id, 
             log("afterAgentResponse: appended response to active turn")
             return
         log("afterAgentResponse: active turn closed before response append")
+
+    if gen_id:
+        turn_key = _turn_state_key(conversation_id, gen_id)
+        if terminal_turn_is_marked(turn_key, gen_id):
+            log("afterAgentResponse: ignored response for a terminal generation")
+            return
+        state_push(
+            f"orphan_llm_{sanitize(gen_id)}",
+            {
+                "span_id": span_id_16(),
+                "trace_id": resolved_trace,
+                "parent": parent,
+                "output": response,
+                "model": model,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "observed_ms": now_ms,
+            },
+        )
+        log("afterAgentResponse: deferred standalone response until stop")
+        return
 
     attrs = {
         "openinference.span.kind": "LLM",
@@ -948,9 +966,7 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
     land in that trace, but it is never allowed to close the turn.
     """
     turn_key = _turn_state_key(conversation_id, gen_id)
-    resolved_trace, parent, canonical_gen, active = _resolve_turn_readonly(
-        conversation_id, gen_id, trace_id, now_ms
-    )
+    resolved_trace, parent, canonical_gen, active = _resolve_turn_readonly(conversation_id, gen_id, trace_id, now_ms)
 
     if active:
         active_has_generation = bool(active.get("generation_id") or active.get("generation_aliases"))
@@ -964,9 +980,18 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
             log("stop: ignored generation-less terminal event for a generated active turn")
             return
 
-    terminal_generation = gen_id or (canonical_gen if active else "")
-    if terminal_generation:
-        if not terminal_turn_claim(turn_key, terminal_generation):
+    terminal_generations = []
+    if active:
+        terminal_generations = [
+            active.get("generation_id", ""),
+            *((active.get("generation_aliases") or [])),
+            gen_id,
+        ]
+    elif gen_id or canonical_gen:
+        terminal_generations = [gen_id, canonical_gen]
+
+    if any(terminal_generations):
+        if not terminal_turn_claim_many(turn_key, terminal_generations):
             log(f"stop: skipped duplicate terminal event for gen={gen_id}")
             return
     elif not terminal_nogen_claim(turn_key):
@@ -986,11 +1011,56 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
 
     token_attrs = _token_attrs(input_json)
     has_token_counts = any(key.startswith("llm.token_count.") for key in token_attrs)
+    orphan_entries = []
+    if not turn and gen_id:
+        key = f"orphan_llm_{sanitize(gen_id)}"
+        while True:
+            entry = state_pop(key)
+            if entry is None:
+                break
+            orphan_entries.append(entry)
+        orphan_entries.reverse()
     emitted_llm_span = False
     if turn:
         resolved_trace = turn.get("trace_id", resolved_trace)
         parent = turn.get("root_span_id", parent)
         _emit_closed_turn(turn, now_ms, token_attrs)
+        emitted_llm_span = True
+    elif orphan_entries:
+        first = orphan_entries[0]
+        latest = orphan_entries[-1]
+        output = "\n".join(str(entry.get("output", "")) for entry in orphan_entries)
+        orphan_conversation_id = latest.get("conversation_id") or first.get("conversation_id") or conversation_id
+        llm_attrs = {
+            "openinference.span.kind": "LLM",
+            "output.value": truncate_attr(output),
+            "session.id": orphan_conversation_id,
+            "cursor.llm.usage.scope": "turn",
+            "cursor.llm.timing.scope": "turn",
+            **token_attrs,
+        }
+        if conversation_id:
+            llm_attrs["cursor.conversation.id"] = conversation_id
+        user_id = next((entry.get("user_id", "") for entry in reversed(orphan_entries) if entry.get("user_id")), "")
+        if user_id:
+            llm_attrs["user.id"] = user_id
+        model = next((entry.get("model", "") for entry in reversed(orphan_entries) if entry.get("model")), "")
+        if model and "llm.model_name" not in llm_attrs:
+            llm_attrs["llm.model_name"] = model
+        send_span(
+            build_span(
+                "Agent Response",
+                "LLM",
+                first.get("span_id") or span_id_16(),
+                first.get("trace_id", resolved_trace),
+                first.get("parent", parent),
+                int(first.get("observed_ms") or now_ms),
+                now_ms,
+                llm_attrs,
+                SERVICE_NAME,
+                SCOPE_NAME,
+            )
+        )
         emitted_llm_span = True
     elif has_token_counts:
         llm_attrs = {

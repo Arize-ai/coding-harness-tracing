@@ -358,30 +358,16 @@ def _merge_terminal_markers(existing, candidates: list) -> list:
     return merged[-MAX_TERMINAL_MARKERS:]
 
 
-def terminal_turn_claim(
-    conversation_id: str,
-    generation_id: str,
-    alternate_generation_id: str = "",
-) -> bool:
-    """Atomically claim terminal delivery for all known generation aliases.
-
-    Claims accumulate in a bounded, durable list (``MAX_TERMINAL_MARKERS``)
-    rather than being replaced by only the latest generation's markers. A
-    single-latest marker would let a stale, out-of-order ``stop`` for an
-    older generation slip through once a newer turn has claimed its own
-    terminal event — and that stale claim can resolve (via the active-turn
-    fallback) to the *current* turn, closing it prematurely. Keeping prior
-    generations' markers around (up to the bound) means that stale claim is
-    still recognized as already-delivered and rejected.
-    """
+def terminal_turn_claim_many(conversation_id: str, generation_ids) -> bool:
+    """Atomically claim all generation aliases for one terminal event."""
     if not conversation_id:
         return True
-    path, lock_path = _terminal_paths(conversation_id)
-    candidates = [value for value in dict.fromkeys((generation_id, alternate_generation_id)) if value]
+    candidates = [value for value in dict.fromkeys(generation_ids) if value]
     if not candidates:
         return True
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
+        path, lock_path = _terminal_paths(conversation_id)
         with FileLock(lock_path):
             raw = path.read_text().strip() if path.exists() else "[]"
             try:
@@ -390,13 +376,21 @@ def terminal_turn_claim(
                 existing = [raw] if raw else []
             if isinstance(existing, list) and any(value in existing for value in candidates):
                 return False
-            merged = _merge_terminal_markers(existing, candidates)
             tmp = path.with_suffix(f".tmp.{os.getpid()}")
-            tmp.write_text(json.dumps(merged))
+            tmp.write_text(json.dumps(_merge_terminal_markers(existing, candidates)))
             tmp.replace(path)
             return True
     except OSError:
         return True
+
+
+def terminal_turn_claim(
+    conversation_id: str,
+    generation_id: str,
+    alternate_generation_id: str = "",
+) -> bool:
+    """Atomically claim terminal delivery for known generation aliases."""
+    return terminal_turn_claim_many(conversation_id, (generation_id, alternate_generation_id))
 
 
 def terminal_turn_mark_many(conversation_id: str, generation_ids) -> None:
@@ -502,7 +496,9 @@ def terminal_nogen_clear(conversation_id: str) -> None:
     if not conversation_id:
         return
     try:
-        _terminal_nogen_path(conversation_id).unlink(missing_ok=True)
+        _, lock_path = _terminal_paths(conversation_id)
+        with FileLock(lock_path):
+            _terminal_nogen_path(conversation_id).unlink(missing_ok=True)
     except OSError:
         return
 

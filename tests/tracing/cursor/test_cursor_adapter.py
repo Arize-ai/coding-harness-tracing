@@ -382,6 +382,12 @@ class TestActiveTurnState:
         assert adapter.terminal_turn_claim("conv-1", "canonical-gen") is False
         assert adapter.terminal_turn_claim("conv-1", "event-gen") is False
 
+    def test_terminal_claim_many_claims_all_aliases_atomically(self):
+        assert adapter.terminal_turn_claim_many("conv-1", ["canonical", "alias-1", "alias-2"]) is True
+        assert adapter.terminal_turn_claim_many("conv-1", ["alias-2", "new-alias"]) is False
+        assert adapter.terminal_turn_claim("conv-1", "canonical") is False
+        assert adapter.terminal_turn_claim("conv-1", "alias-1") is False
+
     def test_terminal_claim_is_durable_across_many_generations(self):
         """A claim for an old generation must still be recognized as a
         duplicate even after several newer generations have since claimed

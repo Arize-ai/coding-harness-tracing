@@ -442,9 +442,7 @@ class TestTurnLifecycle:
             _dispatch("stop", {"conversation_id": "conv-1", "generation_id": "gen-2"})
         assert len(_spans_by_name(captured_spans)["User Prompt"]) == 2
 
-    def test_after_agent_response_copies_later_user_identity_into_turn(
-        self, captured_spans, monkeypatch
-    ):
+    def test_after_agent_response_copies_later_user_identity_into_turn(self, captured_spans, monkeypatch):
         """A user identity that only becomes available at afterAgentResponse
         time (e.g. resolved after beforeSubmitPrompt ran) must still end up
         on the closed turn's spans."""
@@ -663,9 +661,7 @@ class TestHandleAfterShellExecution:
         ("exit_code", "expected_status"),
         [("0", 1), ("1", 2), ("-2", 2), (None, 0), ("invalid", 0)],
     )
-    def test_exit_code_maps_to_otlp_status(
-        self, captured_spans, monkeypatch, exit_code, expected_status
-    ):
+    def test_exit_code_maps_to_otlp_status(self, captured_spans, monkeypatch, exit_code, expected_status):
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
         payload = {
             "conversation_id": "c1",
@@ -750,6 +746,38 @@ class TestHandleStop:
         cleanup.assert_not_called()
         assert len(captured_spans) == 1
 
+    def test_response_without_prompt_is_deferred_and_receives_stop_tokens(self, captured_spans, monkeypatch):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=1000):
+            _dispatch(
+                "afterAgentResponse",
+                {
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                    "response": "final response",
+                    "model": "model-1",
+                },
+            )
+        assert captured_spans == []
+
+        with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=2000):
+            _dispatch(
+                "stop",
+                {
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                },
+            )
+
+        spans = _spans_by_name(captured_spans)
+        assert len(spans["Agent Response"]) == 1
+        llm_attrs = _attrs(spans["Agent Response"][0])
+        assert llm_attrs["output.value"]["stringValue"] == "final response"
+        assert llm_attrs["llm.token_count.total"]["intValue"] == 12
+        assert llm_attrs["llm.model_name"]["stringValue"] == "model-1"
+
     def test_standalone_stop_routes_tokens_to_llm_span(self, captured_spans, monkeypatch):
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
         with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=1000):
@@ -771,9 +799,7 @@ class TestHandleStop:
         assert llm_attrs["llm.token_count.completion"]["intValue"] == 2
         assert not any(key.startswith("llm.token_count.") for key in _attrs(spans["Agent Stop"][0]))
 
-    def test_standalone_stop_with_model_but_no_tokens_keeps_model_on_agent_stop(
-        self, captured_spans, monkeypatch
-    ):
+    def test_standalone_stop_with_model_but_no_tokens_keeps_model_on_agent_stop(self, captured_spans, monkeypatch):
         """No active turn and no token fields: llm.model_name must still land
         somewhere — on the standalone Agent Stop CHAIN span — instead of
         being silently dropped."""
@@ -1477,6 +1503,7 @@ class TestHandleSessionStart:
             _dispatch(
                 "sessionStart",
                 {
+                    "hookEventName": "sessionStart",
                     "conversation_id": "conv-sess",
                     "generation_id": "gen-sess",
                     "cwd": "/Users/alice/code/myrepo",
@@ -1492,6 +1519,25 @@ class TestHandleSessionStart:
         assert attrs["session.id"]["stringValue"] == "conv-sess"
         assert attrs["cursor.session.cwd"]["stringValue"] == "/Users/alice/code/myrepo"
 
+    def test_ide_session_start_skips_standalone_span(self, captured_spans, monkeypatch):
+        """IDE sessionStart is suppressed because each user turn supplies a root."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_save") as save_mock,
+        ):
+            _dispatch(
+                "sessionStart",
+                {
+                    "hook_event_name": "sessionStart",
+                    "conversation_id": "conv-sess",
+                    "generation_id": "gen-sess",
+                },
+            )
+
+        save_mock.assert_not_called()
+        assert captured_spans == []
+
     def test_session_start_no_gen_id_skips_save(self, captured_spans, monkeypatch):
         """Without gen_id, gen_root_span_save is not called."""
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
@@ -1502,6 +1548,7 @@ class TestHandleSessionStart:
             _dispatch(
                 "sessionStart",
                 {
+                    "hookEventName": "sessionStart",
                     "conversation_id": "conv-sess",
                     "cwd": "/tmp",
                 },
@@ -1517,6 +1564,7 @@ class TestHandleSessionStart:
             _dispatch(
                 "sessionStart",
                 {
+                    "hookEventName": "sessionStart",
                     "conversation_id": "conv-sess",
                 },
             )
@@ -1532,7 +1580,11 @@ class TestHandleSessionStart:
         with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5000):
             _dispatch(
                 "sessionStart",
-                {"conversation_id": "conv-cli", "generation_id": "gen-cli"},
+                {
+                    "hookEventName": "sessionStart",
+                    "conversation_id": "conv-cli",
+                    "generation_id": "gen-cli",
+                },
             )
         session_span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         assert adapter.gen_root_span_get("gen-cli") == session_span["spanId"]
@@ -1851,6 +1903,7 @@ class TestConversationIdAttribute:
             "status": "completed",
         },
         "sessionStart": {
+            "hookEventName": "sessionStart",
             "conversation_id": "conv-abc",
             "generation_id": "gen-ss",
             "cwd": "/tmp",
