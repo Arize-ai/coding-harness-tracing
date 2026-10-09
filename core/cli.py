@@ -14,17 +14,37 @@ standard library, and import anything heavier (``core.setup``, which pulls in
 import importlib
 import os
 import sys
-import traceback
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, TextIO
 
-from core.hook_table import EVENT_HOOKS, SINGLE_HOOKS, canonical_harness, iter_hooks, legacy_entry_point
+from core.hook_table import ALIASES, EVENT_HOOKS, SINGLE_HOOKS, canonical_harness, iter_hooks, legacy_entry_point
 
 _USAGE = "usage: arize-harness hook <harness> [<event>] [args...] | arize-harness hook --list"
 
 
+def _stderr() -> TextIO:
+    """The harness's stderr, even if an adapter has already redirected ``sys.stderr`` to its log."""
+    common = sys.modules.get("core.common")
+    log_fh = getattr(common, "_redirected_log_fh", None)
+    original = getattr(common, "_original_stderr", None)
+    if log_fh is not None and sys.stderr is log_fh and original is not None:
+        return original
+    return sys.stderr
+
+
 def _warn(message: str) -> None:
-    sys.stderr.write(f"[arize] {message}\n")
+    _stderr().write(f"[arize] {message}\n")
+
+
+def _default_log_file(harness: str) -> Path:
+    """The log file a harness's adapter would set as ``ARIZE_LOG_FILE``."""
+    from core.constants import HARNESSES, LOG_DIR
+
+    # HARNESSES is keyed by install.sh names (claude-code, not claude). Kiro and
+    # Devin are not in it; their adapters use LOG_DIR/<name>.log.
+    key = next((alias for alias, name in ALIASES.items() if name == harness), harness)
+    metadata = HARNESSES.get(key)
+    return metadata["default_log_file"] if metadata else LOG_DIR / f"{key}.log"
 
 
 def _log_load_failure(harness: str, target: str) -> Optional[str]:
@@ -34,11 +54,9 @@ def _log_load_failure(harness: str, target: str) -> Optional[str]:
     (a missing dependency, a syntax error in a handler) shows up.
     """
     try:
-        from core.constants import LOG_DIR
+        import traceback
 
-        # Every harness logs to LOG_DIR/<name>.log; Claude's file is claude-code.log.
-        log_name = "claude-code" if harness == "claude" else harness
-        path = Path(os.environ.get("ARIZE_LOG_FILE") or LOG_DIR / f"{log_name}.log")
+        path = Path(os.environ.get("ARIZE_LOG_FILE") or _default_log_file(harness))
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as log:
             log.write(f"[arize:error] could not load hook {target}\n{traceback.format_exc()}")

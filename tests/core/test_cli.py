@@ -186,11 +186,10 @@ class TestFailuresNeverBlock:
 
     @pytest.mark.parametrize("harness", sorted({h for h, _event, _target in hook_table.iter_hooks()}))
     def test_import_failure_defaults_to_harness_log(self, harness, monkeypatch, tmp_path) -> None:
-        """Covers harnesses missing from HARNESSES (kiro, devin), not just the ones listed there."""
-        from core import constants
-
+        """Without ARIZE_LOG_FILE the traceback goes to the harness's own default log."""
         monkeypatch.delenv("ARIZE_LOG_FILE")
-        monkeypatch.setattr(constants, "LOG_DIR", tmp_path)
+        log = tmp_path / "logs" / f"{harness}.log"
+        monkeypatch.setattr(cli, "_default_log_file", lambda name: log if name == harness else tmp_path / "wrong.log")
         broken = "tracing.does_not_exist.handlers:main"
         if harness in hook_table.SINGLE_HOOKS:
             monkeypatch.setattr(cli, "SINGLE_HOOKS", {harness: broken})
@@ -202,16 +201,50 @@ class TestFailuresNeverBlock:
             args = ["hook", harness, "stop"]
 
         assert cli.main(args) == 0
-        name = "claude-code" if harness == "claude" else harness
-        assert "ModuleNotFoundError" in (tmp_path / f"{name}.log").read_text()
-        assert [p.name for p in tmp_path.iterdir()] == [f"{name}.log"]
+        assert "ModuleNotFoundError" in log.read_text()
+        assert not (tmp_path / "wrong.log").exists()
 
-    def test_default_log_names_match_harness_metadata(self) -> None:
-        """The dispatcher's LOG_DIR/<name>.log must agree with each harness's own default log."""
-        from core import constants
+    def test_default_log_files_match_each_harness_adapter(self) -> None:
+        """The dispatcher's default log must be the file each harness's adapter sets as ARIZE_LOG_FILE."""
+        from core.constants import HARNESSES
+        from tracing.devin.constants import DEFAULT_LOG_FILE as DEVIN_LOG
+        from tracing.kiro.constants import DEFAULT_LOG_FILE as KIRO_LOG
 
-        for key, metadata in constants.HARNESSES.items():
-            assert metadata["default_log_file"].name == f"{key}.log"
+        expected = {
+            hook_table.canonical_harness(key): metadata["default_log_file"] for key, metadata in HARNESSES.items()
+        }
+        expected.update({"kiro": KIRO_LOG, "devin": DEVIN_LOG})
+        harnesses = {h for h, _event, _target in hook_table.iter_hooks()}
+        assert {h: cli._default_log_file(h) for h in harnesses} == {h: expected[h] for h in harnesses}
+
+    def test_import_failure_after_stderr_redirect_still_warns_on_stderr(self, monkeypatch, tmp_path, capsys, hook_log):
+        """An adapter may redirect sys.stderr to the log before a later import fails.
+
+        The warning must still reach the harness's stderr, and the log must get
+        the failure once, not once from the warning and again from the traceback.
+        """
+        from core import common
+
+        (tmp_path / "redirecting_hook_handlers.py").write_text(
+            "from core.common import redirect_stderr_to_log_file\n"
+            "redirect_stderr_to_log_file()\n"
+            "import tracing.does_not_exist\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "redirecting_hook_handlers", raising=False)
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "redirecting_hook_handlers:main"})
+        # Start with no redirect active, whatever earlier tests' adapter imports left behind.
+        monkeypatch.setattr(common, "_redirected_log_fh", None)
+        monkeypatch.setattr(common, "_original_stderr", None)
+        try:
+            assert cli.main(["hook", "cursor"]) == 0
+        finally:
+            common.restore_stderr_from_log_file()
+
+        err = capsys.readouterr().err
+        assert len(err.strip().splitlines()) == 1
+        assert "redirecting_hook_handlers" in err
+        assert hook_log.read_text().count("could not load hook") == 1
 
     def test_sys_exit_during_import_exits_0(self, monkeypatch, tmp_path, capsys) -> None:
         (tmp_path / "exiting_hook_handlers.py").write_text("import sys\nsys.exit(1)\n")

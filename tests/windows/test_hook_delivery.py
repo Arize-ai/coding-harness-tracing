@@ -207,8 +207,7 @@ class TestClaudeHookDelivery(unittest.TestCase):
         command directly with the event JSON as the last argument.
         """
         git_bash = _opted_in_git_bash(self)
-        scripts_dir = Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin")
-        dispatcher = scripts_dir / ("arize-harness.exe" if os.name == "nt" else "arize-harness")
+        dispatcher = Path(sys.prefix) / "Scripts" / "arize-harness.exe"
         self.assertTrue(dispatcher.is_file(), f"arize-harness was not installed: {dispatcher}")
 
         session_id = f"windows-dispatch-{uuid.uuid4().hex}"
