@@ -12,7 +12,10 @@ standard library, and import anything heavier (``core.setup``, which pulls in
 """
 
 import importlib
+import os
 import sys
+import traceback
+from pathlib import Path
 from typing import Any, List, Optional
 
 from core.hook_table import EVENT_HOOKS, SINGLE_HOOKS, canonical_harness, iter_hooks, legacy_entry_point
@@ -22,6 +25,28 @@ _USAGE = "usage: arize-harness hook <harness> [<event>] [args...] | arize-harnes
 
 def _warn(message: str) -> None:
     sys.stderr.write(f"[arize] {message}\n")
+
+
+def _log_load_failure(harness: str, target: str) -> Optional[str]:
+    """Append the current traceback to the harness log and return its path.
+
+    The hook still exits 0, so this log is the only place a broken install
+    (a missing dependency, a syntax error in a handler) shows up.
+    """
+    try:
+        from core.constants import HARNESSES, LOG_DIR
+
+        metadata = HARNESSES.get("claude-code" if harness == "claude" else harness)
+        path = Path(
+            os.environ.get("ARIZE_LOG_FILE")
+            or (metadata["default_log_file"] if metadata else LOG_DIR / "agent-kit.log")
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as log:
+            log.write(f"[arize:error] could not load hook {target}\n{traceback.format_exc()}")
+        return str(path)
+    except Exception:
+        return None
 
 
 def _list_hooks() -> int:
@@ -66,7 +91,8 @@ def _hook(args: List[str]) -> Any:
     try:
         handler = getattr(importlib.import_module(module_name), function_name)
     except (Exception, SystemExit) as e:  # a module calling sys.exit() at import must not block either
-        _warn(f"could not load hook {target}: {e}")
+        log_path = _log_load_failure(harness, target)
+        _warn(f"could not load hook {target}: {e}" + (f" (traceback in {log_path})" if log_path else ""))
         return 0
 
     # Handlers read their own arguments from sys.argv (Codex's notify payload is
@@ -79,8 +105,10 @@ def main(argv: Optional[List[str]] = None) -> Any:
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] == "hook":
         return _hook(args[1:])
+    # Exit 0, not the conventional 2: Claude Code treats a hook's exit 2 as a
+    # blocking error, so a mistyped hook command would block every tool call.
     _warn(_USAGE)
-    return 2
+    return 0
 
 
 if __name__ == "__main__":

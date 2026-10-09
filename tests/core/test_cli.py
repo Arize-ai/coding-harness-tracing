@@ -42,6 +42,12 @@ class TestHookTableParity:
         text = '[project.scripts]\na = "m:f"\nb = \'m:g\'  # comment\n[tool.x]\nc = "m:h"\n'
         assert parse_project_scripts(text) == {"a": "m:f", "b": "m:g"}
 
+    @pytest.mark.parametrize("line", ['"arize-hook-x" = "m:f"', 'arize-hook-x = "m:f" extra', "arize-hook-x = m:f"])
+    def test_parser_rejects_lines_it_cannot_read(self, line) -> None:
+        """An entry the parser can't read must fail loudly, not vanish from the parity tests."""
+        with pytest.raises(ValueError, match="unparsed"):
+            parse_project_scripts(f"[project.scripts]\n{line}\n")
+
     def test_arize_harness_registered(self) -> None:
         assert parse_project_scripts(PYPROJECT.read_text()).get("arize-harness") == "core.cli:main"
 
@@ -136,6 +142,13 @@ class TestDispatch:
 
 
 class TestFailuresNeverBlock:
+    @pytest.fixture(autouse=True)
+    def hook_log(self, monkeypatch, tmp_path) -> Path:
+        """Keep load-failure tracebacks out of the developer's real ~/.arize logs."""
+        log = tmp_path / "hook.log"
+        monkeypatch.setenv("ARIZE_LOG_FILE", str(log))
+        return log
+
     @pytest.mark.parametrize(
         "args",
         [
@@ -153,13 +166,33 @@ class TestFailuresNeverBlock:
         assert out == ""
         assert len(err.strip().splitlines()) == 1
 
-    def test_import_failure_exits_0_with_one_stderr_line(self, monkeypatch, capsys) -> None:
+    def test_import_failure_exits_0_with_one_stderr_line(self, monkeypatch, capsys, hook_log) -> None:
         monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "tracing.does_not_exist.handlers:main"})
         assert cli.main(["hook", "cursor"]) == 0
         out, err = capsys.readouterr()
         assert out == ""
         assert len(err.strip().splitlines()) == 1
         assert "tracing.does_not_exist" in err
+        assert str(hook_log) in err
+
+    def test_import_failure_writes_traceback_to_log(self, monkeypatch, hook_log) -> None:
+        """Exit 0 hides stderr from most harnesses, so the log must carry the traceback."""
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "tracing.does_not_exist.handlers:main"})
+        cli.main(["hook", "cursor"])
+        text = hook_log.read_text()
+        assert "could not load hook tracing.does_not_exist.handlers:main" in text
+        assert "Traceback (most recent call last)" in text
+        assert "ModuleNotFoundError" in text
+
+    def test_import_failure_defaults_to_harness_log(self, monkeypatch, tmp_path) -> None:
+        from core import constants
+
+        monkeypatch.delenv("ARIZE_LOG_FILE")
+        claude_log = tmp_path / "claude-code.log"
+        monkeypatch.setitem(constants.HARNESSES["claude-code"], "default_log_file", claude_log)
+        monkeypatch.setattr(cli, "EVENT_HOOKS", {"claude": {"stop": "tracing.does_not_exist.handlers:stop"}})
+        assert cli.main(["hook", "claude", "stop"]) == 0
+        assert "ModuleNotFoundError" in claude_log.read_text()
 
     def test_sys_exit_during_import_exits_0(self, monkeypatch, tmp_path, capsys) -> None:
         (tmp_path / "exiting_hook_handlers.py").write_text("import sys\nsys.exit(1)\n")
@@ -187,9 +220,13 @@ class TestFailuresNeverBlock:
         with pytest.raises(RuntimeError, match="boom"):
             cli.main(["hook", "cursor"])
 
-    def test_unknown_subcommand_is_a_usage_error(self, capsys) -> None:
-        assert cli.main([]) == 2
-        assert cli.main(["nope"]) == 2
+    @pytest.mark.parametrize("args", [[], ["nope"], ["hooks", "claude", "pre-tool-use"], ["claude", "stop"]])
+    def test_usage_error_exits_0(self, args, capsys) -> None:
+        """Claude Code treats exit 2 as a blocking error, so a mistyped hook command must not return it."""
+        assert cli.main(args) == 0
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert "usage: arize-harness" in err
 
 
 class TestList:

@@ -279,8 +279,16 @@ class TestClaudeHookDelivery(unittest.TestCase):
             print(f"received spans: {len(received)}")
             self.assertEqual(failures, [])
 
-        spans = [payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0] for _, payload, _ in received]
-        by_session = {_span_attributes(span)["session.id"]: _span_attributes(span) for span in spans}
+        # One send per harness: the Claude turn and the Codex notify. Counting
+        # first catches a duplicate send that the by-session lookup would hide.
+        self.assertEqual(len(received), 2, f"expected one Claude and one Codex send, got {len(received)}")
+        by_session = {}
+        for path, payload, headers in received:
+            self.assertEqual(path, "/v1/traces")
+            self.assertEqual(headers.get("content-type"), "application/json")
+            attributes = _span_attributes(payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+            self.assertIn("session.id", attributes)
+            by_session[attributes["session.id"]] = attributes
         self.assertEqual(set(by_session), {session_id, thread_id})
         self.assertEqual(by_session[session_id]["input.value"], "Windows dispatcher test")
         self.assertEqual(by_session[session_id]["output.value"], "Windows dispatcher response")

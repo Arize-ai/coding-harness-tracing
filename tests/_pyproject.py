@@ -16,6 +16,9 @@ def parse_project_scripts(text: str) -> dict[str, str]:
     so we parse the simple ``name = "value"`` table by hand. Values may use
     either TOML string quote (basic ``"..."`` or literal ``'...'``). Entry-point
     names are TOML bare keys (letters, digits, ``_``, ``-``, ``.``).
+
+    Any other line in the table raises ``ValueError`` rather than being skipped,
+    so an entry this parser can't read never goes unseen by the parity tests.
     """
     scripts: dict[str, str] = {}
     in_table = False
@@ -28,7 +31,8 @@ def parse_project_scripts(text: str) -> dict[str, str]:
             continue
         if not in_table:
             continue
-        m = re.match(r"""^([A-Za-z0-9_.\-]+)\s*=\s*(["'])([^"']+)\2""", line)
-        if m:
-            scripts[m.group(1)] = m.group(3)
+        m = re.match(r"""^([A-Za-z0-9_.\-]+)\s*=\s*(["'])([^"']+)\2\s*(#.*)?$""", line)
+        if not m:
+            raise ValueError(f"unparsed [project.scripts] line: {raw!r}")
+        scripts[m.group(1)] = m.group(3)
     return scripts

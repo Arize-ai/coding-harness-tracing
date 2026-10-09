@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-from core.hook_table import iter_hooks, legacy_entry_point
 from tests._pyproject import parse_project_scripts
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -28,9 +27,60 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 # 1. pyproject.toml entry points use new module paths
 # ---------------------------------------------------------------------------
 
-# Built from the hook table so there is one list of hooks to maintain;
-# tests/core/test_cli.py checks the table matches pyproject exactly.
-EXPECTED_HARNESS_ENTRY_POINTS = {legacy_entry_point(harness, event): target for harness, event, target in iter_hooks()}
+# Written out by hand on purpose, not derived from core/hook_table.py: these
+# command names are a public contract that users' harness configs already call.
+# tests/core/test_cli.py checks the table matches pyproject, so a command dropped
+# from both would pass there; this list catches it.
+EXPECTED_HARNESS_ENTRY_POINTS = {
+    # Claude Code hooks
+    "arize-hook-session-start": "tracing.claude_code.hooks.handlers:session_start",
+    "arize-hook-pre-tool-use": "tracing.claude_code.hooks.handlers:pre_tool_use",
+    "arize-hook-post-tool-use": "tracing.claude_code.hooks.handlers:post_tool_use",
+    "arize-hook-user-prompt-submit": "tracing.claude_code.hooks.handlers:user_prompt_submit",
+    "arize-hook-stop": "tracing.claude_code.hooks.handlers:stop",
+    "arize-hook-subagent-stop": "tracing.claude_code.hooks.handlers:subagent_stop",
+    "arize-hook-stop-failure": "tracing.claude_code.hooks.handlers:stop_failure",
+    "arize-hook-notification": "tracing.claude_code.hooks.handlers:notification",
+    "arize-hook-permission-request": "tracing.claude_code.hooks.handlers:permission_request",
+    "arize-hook-session-end": "tracing.claude_code.hooks.handlers:session_end",
+    "arize-hook-post-tool-use-failure": "tracing.claude_code.hooks.handlers:post_tool_use_failure",
+    "arize-hook-subagent-start": "tracing.claude_code.hooks.handlers:subagent_start",
+    "arize-hook-user-prompt-expansion": "tracing.claude_code.hooks.handlers:user_prompt_expansion",
+    "arize-hook-pre-compact": "tracing.claude_code.hooks.handlers:pre_compact",
+    "arize-hook-post-compact": "tracing.claude_code.hooks.handlers:post_compact",
+    "arize-hook-permission-denied": "tracing.claude_code.hooks.handlers:permission_denied",
+    # Codex hooks
+    "arize-hook-codex-notify": "tracing.codex.hooks.handlers:notify",
+    # Copilot hooks
+    "arize-hook-copilot-session-start": "tracing.copilot.hooks.handlers:session_start",
+    "arize-hook-copilot-user-prompt": "tracing.copilot.hooks.handlers:user_prompt_submitted",
+    "arize-hook-copilot-pre-tool": "tracing.copilot.hooks.handlers:pre_tool_use",
+    "arize-hook-copilot-post-tool": "tracing.copilot.hooks.handlers:post_tool_use",
+    "arize-hook-copilot-stop": "tracing.copilot.hooks.handlers:stop",
+    "arize-hook-copilot-subagent-stop": "tracing.copilot.hooks.handlers:subagent_stop",
+    # Gemini hooks
+    "arize-hook-gemini-session-start": "tracing.gemini.hooks.handlers:session_start",
+    "arize-hook-gemini-session-end": "tracing.gemini.hooks.handlers:session_end",
+    "arize-hook-gemini-before-agent": "tracing.gemini.hooks.handlers:before_agent",
+    "arize-hook-gemini-after-agent": "tracing.gemini.hooks.handlers:after_agent",
+    "arize-hook-gemini-before-model": "tracing.gemini.hooks.handlers:before_model",
+    "arize-hook-gemini-after-model": "tracing.gemini.hooks.handlers:after_model",
+    "arize-hook-gemini-before-tool": "tracing.gemini.hooks.handlers:before_tool",
+    "arize-hook-gemini-after-tool": "tracing.gemini.hooks.handlers:after_tool",
+    # Cursor hook
+    "arize-hook-cursor": "tracing.cursor.hooks.handlers:main",
+    # Kiro hook
+    "arize-hook-kiro": "tracing.kiro.hooks.handlers:main",
+    # Antigravity hooks
+    "arize-hook-antigravity-pre-invocation": "tracing.antigravity.hooks.handlers:pre_invocation",
+    "arize-hook-antigravity-stop": "tracing.antigravity.hooks.handlers:stop",
+    # opencode hook
+    "arize-hook-opencode": "tracing.opencode.hooks.handlers:main",
+    # omp hook
+    "arize-hook-omp": "tracing.omp.hooks.handlers:main",
+    # Devin hook
+    "arize-hook-devin": "tracing.devin.hooks.handlers:main",
+}
 
 
 def _parse_pyproject_scripts():
