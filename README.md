@@ -192,6 +192,15 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | Phoenix endpoint and (optional) API key. |
 | `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | Project override on the **Phoenix backend** (mirrors `ARIZE_PROJECT_NAME` for Arize). `PHOENIX_PROJECT` wins if both are set; both override `harnesses.<name>.project_name`. |
 
+The Phoenix OTLP path sends `Authorization: Bearer <api_key>` when `api_key` is set. An optional `headers` object on that harness is copied onto the request, for a different `Authorization` scheme or any extra headers. It is not written by the installer. If `headers` already includes `Authorization`, `api_key` is not turned into a second Bearer header. `Content-Type` stays `application/x-protobuf`.
+
+```json
+"headers": {
+  "Authorization": "Basic <token>",
+  "X-Custom-Header": "value"
+}
+```
+
 > Claude Code plugin reads env vars from `~/.claude/settings.json` under the `env` block
 
 ## Links
