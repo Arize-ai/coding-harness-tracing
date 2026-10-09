@@ -21,7 +21,7 @@ from typing import Any
 
 from core.common import StateManager, env, get_timestamp_ms, log, redirect_stderr_to_log_file
 from core.constants import STATE_BASE_DIR
-from tracing.kiro.constants import HARNESS_NAME, KIRO_SESSIONS_DIR
+from tracing.kiro.constants import DEFAULT_LOG_FILE, HARNESS_NAME, KIRO_SESSIONS_DIR
 
 STATE_DIR: Path = STATE_BASE_DIR / HARNESS_NAME
 SCOPE_NAME = "arize-kiro-plugin"
@@ -30,10 +30,7 @@ _SIDECAR_RETRY_SECS = 1.0
 _SIDECAR_POLL_INTERVAL = 0.1
 
 # Route hook stderr to a per-harness log file unless ARIZE_LOG_FILE is set.
-os.environ.setdefault(
-    "ARIZE_LOG_FILE",
-    str(Path.home() / ".arize" / "harness" / "logs" / "kiro.log"),
-)
+os.environ.setdefault("ARIZE_LOG_FILE", str(DEFAULT_LOG_FILE))
 redirect_stderr_to_log_file()
 
 
