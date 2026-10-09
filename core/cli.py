@@ -34,13 +34,11 @@ def _log_load_failure(harness: str, target: str) -> Optional[str]:
     (a missing dependency, a syntax error in a handler) shows up.
     """
     try:
-        from core.constants import HARNESSES, LOG_DIR
+        from core.constants import LOG_DIR
 
-        metadata = HARNESSES.get("claude-code" if harness == "claude" else harness)
-        path = Path(
-            os.environ.get("ARIZE_LOG_FILE")
-            or (metadata["default_log_file"] if metadata else LOG_DIR / "agent-kit.log")
-        )
+        # Every harness logs to LOG_DIR/<name>.log; Claude's file is claude-code.log.
+        log_name = "claude-code" if harness == "claude" else harness
+        path = Path(os.environ.get("ARIZE_LOG_FILE") or LOG_DIR / f"{log_name}.log")
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as log:
             log.write(f"[arize:error] could not load hook {target}\n{traceback.format_exc()}")

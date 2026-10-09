@@ -184,15 +184,34 @@ class TestFailuresNeverBlock:
         assert "Traceback (most recent call last)" in text
         assert "ModuleNotFoundError" in text
 
-    def test_import_failure_defaults_to_harness_log(self, monkeypatch, tmp_path) -> None:
+    @pytest.mark.parametrize("harness", sorted({h for h, _event, _target in hook_table.iter_hooks()}))
+    def test_import_failure_defaults_to_harness_log(self, harness, monkeypatch, tmp_path) -> None:
+        """Covers harnesses missing from HARNESSES (kiro, devin), not just the ones listed there."""
         from core import constants
 
         monkeypatch.delenv("ARIZE_LOG_FILE")
-        claude_log = tmp_path / "claude-code.log"
-        monkeypatch.setitem(constants.HARNESSES["claude-code"], "default_log_file", claude_log)
-        monkeypatch.setattr(cli, "EVENT_HOOKS", {"claude": {"stop": "tracing.does_not_exist.handlers:stop"}})
-        assert cli.main(["hook", "claude", "stop"]) == 0
-        assert "ModuleNotFoundError" in claude_log.read_text()
+        monkeypatch.setattr(constants, "LOG_DIR", tmp_path)
+        broken = "tracing.does_not_exist.handlers:main"
+        if harness in hook_table.SINGLE_HOOKS:
+            monkeypatch.setattr(cli, "SINGLE_HOOKS", {harness: broken})
+            monkeypatch.setattr(cli, "EVENT_HOOKS", {})
+            args = ["hook", harness]
+        else:
+            monkeypatch.setattr(cli, "EVENT_HOOKS", {harness: {"stop": broken}})
+            monkeypatch.setattr(cli, "SINGLE_HOOKS", {})
+            args = ["hook", harness, "stop"]
+
+        assert cli.main(args) == 0
+        name = "claude-code" if harness == "claude" else harness
+        assert "ModuleNotFoundError" in (tmp_path / f"{name}.log").read_text()
+        assert [p.name for p in tmp_path.iterdir()] == [f"{name}.log"]
+
+    def test_default_log_names_match_harness_metadata(self) -> None:
+        """The dispatcher's LOG_DIR/<name>.log must agree with each harness's own default log."""
+        from core import constants
+
+        for key, metadata in constants.HARNESSES.items():
+            assert metadata["default_log_file"].name == f"{key}.log"
 
     def test_sys_exit_during_import_exits_0(self, monkeypatch, tmp_path, capsys) -> None:
         (tmp_path / "exiting_hook_handlers.py").write_text("import sys\nsys.exit(1)\n")
