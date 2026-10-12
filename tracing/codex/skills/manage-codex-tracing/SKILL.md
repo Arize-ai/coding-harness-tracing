@@ -232,7 +232,7 @@ command = ["~/.arize/harness/venv/bin/arize-hook-codex-tool"]
 command = ["~/.arize/harness/venv/bin/arize-hook-codex-stop"]
 ```
 
-**Important:** If `notify` already exists in the config, update the existing line. If `[[hooks.<Event>]]` entries already exist that match our handlers (managed block), leave them alone — the installer manages the block idempotently.
+**Important:** Codex supports only one `notify` command. If the existing value already points to the Arize command, leave it alone. Otherwise, do not overwrite or append to it: configure a wrapper as the sole `notify` command and have the wrapper invoke both commands. The automated installer reports this conflict without changing the existing value. If `[[hooks.<Event>]]` entries already exist that match our handlers (managed block), leave them alone — the installer manages the block idempotently.
 
 ### Step 4: Approve the hooks inside Codex
 
