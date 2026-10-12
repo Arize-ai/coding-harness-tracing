@@ -1747,6 +1747,91 @@ class TestHandlePostToolUse:
         assert attrs["tool.name"]["stringValue"] == "glob"
         assert attrs["input.value"]["stringValue"] == '{"pattern": "*.py"}'
 
+    def test_post_tool_use_unwraps_json_tool_output(self, captured_spans, monkeypatch):
+        """JSON tool_output with an output key lands as that inner string."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=3000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch(
+                "postToolUse",
+                {
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                    "tool_name": "Grep",
+                    "tool_input": '{"pattern": "foo"}',
+                    "tool_output": json.dumps({"output": "src/a.py\n", "exitCode": 0}),
+                },
+            )
+
+        attrs = _span_attrs(captured_spans)
+        assert attrs["tool.name"]["stringValue"] == "Grep"
+        assert attrs["output.value"]["stringValue"] == "src/a.py\n"
+
+    def test_post_tool_use_keeps_json_tool_output_without_output_key(self, captured_spans, monkeypatch):
+        """JSON tool_output with no output key is stored as the raw string."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        raw = json.dumps({"matches": 3})
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=3000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch(
+                "postToolUse",
+                {
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                    "tool_name": "Glob",
+                    "tool_output": raw,
+                },
+            )
+
+        assert _span_attrs(captured_spans)["output.value"]["stringValue"] == raw
+
+    def test_post_tool_use_keeps_plain_text_tool_output(self, captured_spans, monkeypatch):
+        """Non-JSON tool_output is stored as-is and does not fail the hook."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=3000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch(
+                "postToolUse",
+                {
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                    "tool_name": "Grep",
+                    "tool_output": "found 2 files",
+                },
+            )
+
+        assert _span_attrs(captured_spans)["output.value"]["stringValue"] == "found 2 files"
+
+    def test_post_tool_use_malformed_tool_output_does_not_raise(self, captured_spans, monkeypatch):
+        """Malformed JSON in tool_output is kept verbatim."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        with (
+            mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=3000),
+            mock.patch("tracing.cursor.hooks.handlers.gen_root_span_get", return_value=""),
+        ):
+            _dispatch(
+                "postToolUse",
+                {
+                    "conversation_id": "c1",
+                    "generation_id": "g1",
+                    "tool_name": "Grep",
+                    "tool_output": "{not-json",
+                },
+            )
+
+        assert _span_attrs(captured_spans)["output.value"]["stringValue"] == "{not-json"
+
+
+def _span_attrs(captured_spans):
+    span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    return {a["key"]: a["value"] for a in span["attributes"]}
+
 
 # ---------------------------------------------------------------------------
 # _handle_session_end tests

@@ -1299,6 +1299,28 @@ _DEDICATED_TOOL_NAMES = frozenset(
 )
 
 
+def _unwrap_tool_output(raw: str) -> str:
+    """Return the inner ``output`` when *raw* is Cursor's JSON-encoded tool result.
+
+    ``postToolUse`` sends ``tool_output`` as a string such as
+    ``{"output": "text", "exitCode": 0}``. Plain text, malformed JSON, and
+    objects without an ``output`` key are returned unchanged so a bad payload
+    never fails the hook. ``exitCode`` stays on the dedicated shell span.
+    """
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return raw
+    if not isinstance(parsed, dict) or "output" not in parsed:
+        return raw
+    inner = parsed["output"]
+    if isinstance(inner, str):
+        return inner
+    if inner is None:
+        return ""
+    return json.dumps(inner)
+
+
 def _handle_post_tool_use(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for Cursor CLI postToolUse event."""
     tool_name = _jq_str(input_json, "tool_name", "toolName", "name", "tool")
@@ -1312,7 +1334,11 @@ def _handle_post_tool_use(input_json, conversation_id, gen_id, trace_id, now_ms)
     resolved_trace, parent, _, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
 
     tool_input = _jq_str(input_json, "tool_input", "toolInput", "input", "arguments", "args")
-    output = _jq_str(input_json, "result", "output", "response", "stdout")
+    # Cursor's real field is tool_output (often a JSON string). Older payloads
+    # still use result / output / response / stdout, which are already plain text.
+    output = _jq_str(input_json, "tool_output", "result", "output", "response", "stdout")
+    if input_json.get("tool_output") not in (None, ""):
+        output = _unwrap_tool_output(output)
 
     tool_input = redact_content(env.log_tool_content, tool_input)
     output = redact_content(env.log_tool_content, output)
