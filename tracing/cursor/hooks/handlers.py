@@ -395,9 +395,9 @@ def _flush_active_turn(conversation_id: str, end_ms: int) -> "dict | None":
     terminal_turn_mark_many(conversation_id, [canonical_gen, *aliases])
     _emit_closed_turn(turn, end_ms)
     if canonical_gen:
-        state_cleanup_generation(canonical_gen)
+        _drop_generation_state(canonical_gen)
     for alias in aliases:
-        state_cleanup_generation(alias)
+        _drop_generation_state(alias)
     return turn
 
 
@@ -505,7 +505,7 @@ def _handle_before_submit_prompt(input_json, conversation_id, gen_id, trace_id, 
         error(f"beforeSubmitPrompt: active_turn_save failed for key={turn_key}; closing turn immediately")
         _emit_closed_turn(turn, now_ms)
         if gen_id:
-            state_cleanup_generation(gen_id)
+            _drop_generation_state(gen_id)
         terminal_turn_mark(turn_key, gen_id)
         return
     log(f"beforeSubmitPrompt: deferred root span {sid} (trace={trace_id}, key={turn_key})")
@@ -634,11 +634,109 @@ def _handle_after_agent_thought(input_json, conversation_id, gen_id, trace_id, n
     log(f"afterAgentThought: span {sid}")
 
 
+_SHELL_TOOL_NAMES = frozenset({"shell", "terminal", "bash", "run_command", "run_shell"})
+
+
+def _shell_status(exit_code, output):
+    """Map an exit code to an OTLP status. Missing or non-numeric stays UNSET.
+
+    Output text is only the ERROR message. It is never used to decide the code.
+    """
+    parsed = _to_int(exit_code)
+    if parsed == 0:
+        return 1, ""
+    if parsed is not None:
+        return 2, truncate_attr(output, 1024)
+    return 0, ""
+
+
+def _shell_result_from_tool_output(raw):
+    """Read ``output`` and ``exitCode`` from a JSON ``tool_output`` string.
+
+    Plain text and malformed JSON yield empty strings and never raise.
+    """
+    if not isinstance(raw, str) or raw == "":
+        return "", ""
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return "", ""
+    if not isinstance(parsed, dict):
+        return "", ""
+    inner = parsed.get("output")
+    output = inner if isinstance(inner, str) else ""
+    code = parsed.get("exitCode", parsed.get("exit_code"))
+    if code is None or code == "":
+        return output, ""
+    return output, str(code)
+
+
+def _emit_shell_span(record, exit_code):
+    """Send one merged Shell TOOL span."""
+    command = record.get("command", "")
+    output = record.get("output", "")
+    conversation_id = record.get("conversation_id", "")
+    status_code, status_message = _shell_status(exit_code, output)
+    attrs = {
+        "openinference.span.kind": "TOOL",
+        "tool.name": "shell",
+        "input.value": command,
+        "output.value": output,
+        "session.id": conversation_id,
+    }
+    if conversation_id:
+        attrs["cursor.conversation.id"] = conversation_id
+    user_id = record.get("user_id", "")
+    if user_id:
+        attrs["user.id"] = user_id
+    if exit_code:
+        attrs["shell.exit_code"] = exit_code
+    sid = span_id_16()
+    send_span(
+        build_span(
+            "Shell",
+            "TOOL",
+            sid,
+            record.get("trace_id", ""),
+            record.get("parent", ""),
+            record.get("start_ms") or 0,
+            record.get("end_ms") or record.get("start_ms") or 0,
+            attrs,
+            SERVICE_NAME,
+            SCOPE_NAME,
+            status_code=status_code,
+            status_message=status_message,
+        )
+    )
+    log(f"shell: span {sid} exit={exit_code or 'unset'}")
+
+
+def _flush_pending_shells(canonical_gen):
+    """Emit held shell spans with UNSET status. Does not invent an exit code."""
+    if not canonical_gen:
+        return
+    key = f"shell_pending_{sanitize(canonical_gen)}"
+    while True:
+        pending = state_pop(key)
+        if not pending or not pending.get("pending_shell"):
+            return
+        _emit_shell_span(pending, "")
+
+
+def _drop_generation_state(gen_id):
+    """Flush a held shell span, then delete that generation's state files."""
+    _flush_pending_shells(gen_id)
+    state_cleanup_generation(gen_id)
+
+
 def _handle_before_shell_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
     """State push only, no span. Replaces bash lines 163-179."""
     resolved_trace, _, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
     if not canonical_gen:
         return
+
+    # A new command means the previous postToolUse is not coming.
+    _flush_pending_shells(canonical_gen)
 
     command = _jq_str(input_json, "command", "shell_command")
     cwd = _jq_str(input_json, "cwd", "working_directory")
@@ -656,12 +754,8 @@ def _handle_before_shell_execution(input_json, conversation_id, gen_id, trace_id
     log(f"beforeShellExecution: pushed state for gen={canonical_gen}")
 
 
-def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
-    """Merge with before state, create TOOL span. Replaces bash lines 184-232."""
-    sid = span_id_16()
-    resolved_trace, parent, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
-    popped = state_pop(f"shell_{sanitize(canonical_gen)}") if canonical_gen else None
-
+def _shell_record(input_json, conversation_id, resolved_trace, parent, popped, now_ms):
+    """Build the merged before/after shell span fields. Exit code is separate."""
     if popped:
         start_ms = popped.get("start_ms", "")
         command = popped.get("command", "")
@@ -670,58 +764,42 @@ def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id,
         command = ""
     start_ms = start_ms or str(now_ms)
 
-    # Override command from after-event if present
     after_cmd = _jq_str(input_json, "command", "shell_command")
     if after_cmd:
         command = after_cmd
 
     output = _jq_str(input_json, "output", "stdout", "result")
-    exit_code = _jq_str(input_json, "exit_code", "exitCode")
-
-    command = redact_content(env.log_tool_details, command)
-    output = redact_content(env.log_tool_content, output)
-
-    parsed_exit_code = _to_int(exit_code)
-    status_code = 0
-    status_message = ""
-    if parsed_exit_code == 0:
-        status_code = 1
-    elif parsed_exit_code is not None:
-        status_code = 2
-        status_message = truncate_attr(output, 1024)
-
-    user_id = _resolve_user_id(input_json)
-
-    attrs = {
-        "openinference.span.kind": "TOOL",
-        "tool.name": "shell",
-        "input.value": command,
-        "output.value": output,
-        "session.id": conversation_id,
+    return {
+        "pending_shell": True,
+        "command": redact_content(env.log_tool_details, command),
+        "output": redact_content(env.log_tool_content, output),
+        "start_ms": str(start_ms),
+        "end_ms": str(now_ms),
+        "trace_id": resolved_trace,
+        "parent": parent,
+        "conversation_id": conversation_id,
+        "user_id": _resolve_user_id(input_json),
     }
-    if conversation_id:
-        attrs["cursor.conversation.id"] = conversation_id
-    if user_id:
-        attrs["user.id"] = user_id
-    if exit_code:
-        attrs["shell.exit_code"] = exit_code
 
-    span = build_span(
-        "Shell",
-        "TOOL",
-        sid,
-        resolved_trace,
-        parent,
-        start_ms,
-        now_ms,
-        attrs,
-        SERVICE_NAME,
-        SCOPE_NAME,
-        status_code=status_code,
-        status_message=status_message,
-    )
-    send_span(span)
-    log(f"afterShellExecution: span {sid} (merged)")
+
+def _handle_after_shell_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
+    """Merge with before state. Emit now when the exit code is already here.
+
+    The IDE omits the code on this event and sends it on the following
+    postToolUse ``tool_output``. Hold the merged span until then. Spans are
+    append-only, so the code cannot be patched in later.
+    """
+    resolved_trace, parent, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
+    if canonical_gen:
+        _flush_pending_shells(canonical_gen)
+    popped = state_pop(f"shell_{sanitize(canonical_gen)}") if canonical_gen else None
+    record = _shell_record(input_json, conversation_id, resolved_trace, parent, popped, now_ms)
+    exit_code = _jq_str(input_json, "exit_code", "exitCode")
+    if exit_code or not canonical_gen:
+        _emit_shell_span(record, exit_code)
+        return
+    state_push(f"shell_pending_{sanitize(canonical_gen)}", record)
+    log(f"afterShellExecution: holding span for exit code gen={canonical_gen}")
 
 
 def _handle_before_mcp_execution(input_json, conversation_id, gen_id, trace_id, now_ms):
@@ -1141,14 +1219,14 @@ def _handle_stop(input_json, conversation_id, gen_id, trace_id, now_ms):
     closed_gen = turn.get("generation_id", "") if turn else ""
     aliases = (turn.get("generation_aliases") if turn else None) or []
     if closed_gen:
-        state_cleanup_generation(closed_gen)
+        _drop_generation_state(closed_gen)
     for alias in aliases:
-        state_cleanup_generation(alias)
+        _drop_generation_state(alias)
     if gen_id and gen_id != closed_gen and gen_id not in aliases:
         # The raw incoming id's own root/stack state is always safe to clean
         # up — it is keyed by exactly that id regardless of which turn (if
         # any) this stop actually closed.
-        state_cleanup_generation(gen_id)
+        _drop_generation_state(gen_id)
     if turn:
         terminal_turn_mark_many(turn_key, [closed_gen, *aliases, gen_id])
     log(f"stop: span {sid}, cleaned up gen={closed_gen or gen_id}")
@@ -1266,7 +1344,7 @@ def _handle_session_end(input_json, conversation_id, gen_id, trace_id, now_ms):
         )
     )
     if gen_id:
-        state_cleanup_generation(gen_id)
+        _drop_generation_state(gen_id)
     # The conversation itself is over: make sure no active turn lingers.
     # Terminal-marker history and lock files are deliberately left alone —
     # see `conversation_cleanup`'s docstring for why.
@@ -1299,8 +1377,33 @@ _DEDICATED_TOOL_NAMES = frozenset(
 )
 
 
+def _finish_pending_shell(input_json, conversation_id, gen_id, trace_id, now_ms):
+    """Attach postToolUse's exit code to a held shell span and emit it once.
+
+    Returns True when this event is a shell tool, whether or not a span was
+    waiting. Shell must not also emit the generic postToolUse span.
+    """
+    tool_name = _jq_str(input_json, "tool_name", "toolName", "name", "tool")
+    if tool_name.lower() not in _SHELL_TOOL_NAMES:
+        return False
+    _, _, canonical_gen, _ = _resolve_turn(conversation_id, gen_id, trace_id, now_ms)
+    pending = state_pop(f"shell_pending_{sanitize(canonical_gen)}") if canonical_gen else None
+    if not pending or not pending.get("pending_shell"):
+        log(f"postToolUse: skipping {tool_name!r} — shell span already emitted")
+        return True
+    parsed_output, parsed_exit = _shell_result_from_tool_output(input_json.get("tool_output", ""))
+    if not pending.get("output") and parsed_output:
+        pending["output"] = redact_content(env.log_tool_content, parsed_output)
+    exit_code = parsed_exit or _jq_str(input_json, "exit_code", "exitCode")
+    _emit_shell_span(pending, exit_code)
+    return True
+
+
 def _handle_post_tool_use(input_json, conversation_id, gen_id, trace_id, now_ms):
     """TOOL span for Cursor CLI postToolUse event."""
+    if _finish_pending_shell(input_json, conversation_id, gen_id, trace_id, now_ms):
+        return
+
     tool_name = _jq_str(input_json, "tool_name", "toolName", "name", "tool")
 
     # Dedup: skip tools that have dedicated before*/after* handlers

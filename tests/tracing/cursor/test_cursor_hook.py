@@ -608,6 +608,7 @@ class TestHandleAfterShellExecution:
                     "generation_id": "g1",
                     "command": "new_cmd",
                     "output": "ok",
+                    "exit_code": "0",
                 },
             )
 
@@ -631,6 +632,7 @@ class TestHandleAfterShellExecution:
                     "conversation_id": "c1",
                     "generation_id": "g1",
                     "output": "ok",
+                    "exit_code": "0",
                 },
             )
 
@@ -659,7 +661,7 @@ class TestHandleAfterShellExecution:
 
     @pytest.mark.parametrize(
         ("exit_code", "expected_status"),
-        [("0", 1), ("1", 2), ("-2", 2), (None, 0), ("invalid", 0)],
+        [("0", 1), ("1", 2), ("-2", 2), ("invalid", 0)],
     )
     def test_exit_code_maps_to_otlp_status(self, captured_spans, monkeypatch, exit_code, expected_status):
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
@@ -697,6 +699,213 @@ class TestHandleAfterShellExecution:
             )
         span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
         assert len(span["status"]["message"]) == 1024
+
+
+def _dispatch_at(event, payload, now_ms):
+    with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=now_ms):
+        _dispatch(event, payload)
+
+
+class TestShellExitFromPostToolUse:
+    """IDE shell status comes from the postToolUse that follows afterShellExecution."""
+
+    def test_post_tool_use_exit_code_sets_ok_on_merged_span(self, captured_spans, monkeypatch):
+        """One Shell span: before/after fields, plus exitCode from tool_output."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "beforeShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "command": "echo hello", "cwd": "/tmp"},
+            1000,
+        )
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "command": "echo hello", "output": "hello\n"},
+            2000,
+        )
+        assert captured_spans == []
+
+        _dispatch_at(
+            "postToolUse",
+            {
+                "conversation_id": "c1",
+                "generation_id": "g1",
+                "tool_name": "shell",
+                "tool_output": json.dumps({"output": "hello\n", "exitCode": 0}),
+            },
+            2100,
+        )
+
+        assert len(captured_spans) == 1
+        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        attrs = _attrs(span)
+        assert span["name"] == "Shell"
+        assert span["status"]["code"] == 1
+        assert "message" not in span["status"]
+        assert span["startTimeUnixNano"] == "1000000000"
+        assert span["endTimeUnixNano"] == "2000000000"
+        assert attrs["input.value"]["stringValue"] == "echo hello"
+        assert attrs["output.value"]["stringValue"] == "hello\n"
+        assert attrs["shell.exit_code"]["stringValue"] == "0"
+
+    def test_nonzero_exit_code_is_error(self, captured_spans, monkeypatch):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "command": "false", "output": "boom"},
+            2000,
+        )
+        _dispatch_at(
+            "postToolUse",
+            {
+                "conversation_id": "c1",
+                "generation_id": "g1",
+                "tool_name": "Shell",
+                "tool_output": json.dumps({"output": "boom", "exitCode": 1}),
+            },
+            2100,
+        )
+
+        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert span["status"]["code"] == 2
+        assert span["status"]["message"] == "boom"
+        assert _attrs(span)["shell.exit_code"]["stringValue"] == "1"
+
+    def test_tool_output_without_exit_code_stays_unset(self, captured_spans, monkeypatch):
+        """A failed-looking output string does not become ERROR without an exit code."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "output": "failed output"},
+            2000,
+        )
+        _dispatch_at(
+            "postToolUse",
+            {
+                "conversation_id": "c1",
+                "generation_id": "g1",
+                "tool_name": "shell",
+                "tool_output": json.dumps({"output": "failed output"}),
+            },
+            2100,
+        )
+
+        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert span["status"]["code"] == 0
+        assert "message" not in span["status"]
+        assert "shell.exit_code" not in _attrs(span)
+        assert _attrs(span)["output.value"]["stringValue"] == "failed output"
+
+    @pytest.mark.parametrize("tool_output", ["{not-json", "plain text"])
+    def test_unparseable_tool_output_stays_unset(self, captured_spans, monkeypatch, tool_output):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "command": "ls", "output": "ok"},
+            2000,
+        )
+        _dispatch_at(
+            "postToolUse",
+            {
+                "conversation_id": "c1",
+                "generation_id": "g1",
+                "tool_name": "shell",
+                "tool_output": tool_output,
+            },
+            2100,
+        )
+
+        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert len(captured_spans) == 1
+        assert span["status"]["code"] == 0
+        assert _attrs(span)["output.value"]["stringValue"] == "ok"
+
+    def test_direct_exit_code_emits_once(self, captured_spans, monkeypatch):
+        """An exit code already on afterShellExecution wins; postToolUse adds no second span."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "command": "true", "output": "ok", "exit_code": "0"},
+            2000,
+        )
+        _dispatch_at(
+            "postToolUse",
+            {
+                "conversation_id": "c1",
+                "generation_id": "g1",
+                "tool_name": "shell",
+                "tool_output": json.dumps({"output": "ok", "exitCode": 1}),
+            },
+            2100,
+        )
+
+        assert len(captured_spans) == 1
+        span = captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert span["status"]["code"] == 1
+        assert _attrs(span)["shell.exit_code"]["stringValue"] == "0"
+
+    def test_stop_flushes_held_span_as_unset(self, captured_spans, monkeypatch):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "output": "failed output"},
+            2000,
+        )
+        assert captured_spans == []
+
+        _dispatch_at("stop", {"conversation_id": "c1", "generation_id": "g1"}, 3000)
+
+        shell = _spans_by_name(captured_spans)["Shell"][0]
+        assert shell["status"]["code"] == 0
+        assert "message" not in shell["status"]
+        assert _attrs(shell)["output.value"]["stringValue"] == "failed output"
+
+    def test_next_command_flushes_previous_as_unset(self, captured_spans, monkeypatch):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "command": "first", "output": "one"},
+            2000,
+        )
+        _dispatch_at(
+            "afterShellExecution",
+            {
+                "conversation_id": "c1",
+                "generation_id": "g1",
+                "command": "second",
+                "output": "two",
+                "exit_code": "0",
+            },
+            3000,
+        )
+
+        shells = _spans_by_name(captured_spans)["Shell"]
+        assert len(shells) == 2
+        assert shells[0]["status"]["code"] == 0
+        assert _attrs(shells[0])["input.value"]["stringValue"] == "first"
+        assert shells[1]["status"]["code"] == 1
+        assert _attrs(shells[1])["shell.exit_code"]["stringValue"] == "0"
+
+    def test_empty_after_output_uses_tool_output_text(self, captured_spans, monkeypatch):
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        _dispatch_at(
+            "afterShellExecution",
+            {"conversation_id": "c1", "generation_id": "g1", "command": "ls"},
+            2000,
+        )
+        _dispatch_at(
+            "postToolUse",
+            {
+                "conversation_id": "c1",
+                "generation_id": "g1",
+                "tool_name": "bash",
+                "tool_output": json.dumps({"output": "file.py\n", "exitCode": 0}),
+            },
+            2100,
+        )
+
+        attrs = _attrs(captured_spans[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+        assert attrs["output.value"]["stringValue"] == "file.py\n"
+        assert attrs["shell.exit_code"]["stringValue"] == "0"
 
 
 # ---------------------------------------------------------------------------
@@ -1593,7 +1802,13 @@ class TestHandleSessionStart:
         with mock.patch("tracing.cursor.hooks.handlers.get_timestamp_ms", return_value=5100):
             _dispatch(
                 "afterShellExecution",
-                {"conversation_id": "conv-cli", "generation_id": "gen-cli", "command": "ls", "output": "ok"},
+                {
+                    "conversation_id": "conv-cli",
+                    "generation_id": "gen-cli",
+                    "command": "ls",
+                    "output": "ok",
+                    "exit_code": "0",
+                },
             )
         shell_span = _spans_by_name(captured_spans)["Shell"][0]
         assert shell_span["parentSpanId"] == session_span["spanId"]
@@ -1870,6 +2085,7 @@ class TestConversationIdAttribute:
             "generation_id": "gen-ase",
             "command": "ls",
             "output": "ok",
+            "exit_code": "0",
         },
         "afterMCPExecution": {
             "conversation_id": "conv-abc",
