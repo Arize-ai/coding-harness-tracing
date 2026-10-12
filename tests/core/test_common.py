@@ -1152,6 +1152,62 @@ class TestSendSpan:
 
     @mock.patch("core.common.resolve_backend")
     @mock.patch("core.common.urllib.request.urlopen")
+    def test_phoenix_extra_headers_passthrough(self, mock_urlopen, mock_resolve, monkeypatch):
+        """Configured headers are copied; Authorization is sent as written, not wrapped in Bearer."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "phoenix",
+            "endpoint": "http://localhost:5080/api/default",
+            "api_key": "ignored-when-authorization-is-set",
+            "project_name": "default",
+            "headers": {
+                "Authorization": "Basic dXNlcjpwYXNz",
+                "stream-name": "llm",
+                "Content-Type": "application/json",
+            },
+        }
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("Authorization") == "Basic dXNlcjpwYXNz"
+        # urllib capitalizes header names; HTTP treats them as case-insensitive.
+        assert req.get_header("Stream-name") == "llm"
+        assert req.get_header("Content-type") == "application/x-protobuf"
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
+    def test_phoenix_extra_headers_keep_bearer_without_authorization(self, mock_urlopen, mock_resolve, monkeypatch):
+        """Extra headers without Authorization still get Bearer from api_key."""
+        monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
+        monkeypatch.delenv("ARIZE_VERBOSE", raising=False)
+
+        mock_resolve.return_value = {
+            "target": "phoenix",
+            "endpoint": "http://localhost:6006",
+            "api_key": "test-key",
+            "project_name": "default",
+            "headers": {"stream-name": "llm"},
+        }
+        mock_resp = mock.MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = mock.Mock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.Mock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert send_span(self._SAMPLE_SPAN) is True
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("Authorization") == "Bearer test-key"
+        assert req.get_header("Stream-name") == "llm"
+
+    @mock.patch("core.common.resolve_backend")
+    @mock.patch("core.common.urllib.request.urlopen")
     def test_phoenix_send_failure(self, mock_urlopen, mock_resolve, monkeypatch):
         """Phoenix send returns False on network error."""
         monkeypatch.delenv("ARIZE_DRY_RUN", raising=False)
@@ -1401,6 +1457,32 @@ class TestResolveBackend:
         assert result["endpoint"] == "http://localhost:6006"
         assert result["api_key"] == "ph-key"
         assert result["project_name"] == "claude-code"
+        assert result["headers"] == {}
+
+    def test_phoenix_headers_from_config(self, monkeypatch):
+        """Optional headers are copied; non-string entries are dropped."""
+        cfg = {
+            "harnesses": {
+                "cursor": {
+                    "project_name": "cursor",
+                    "target": "phoenix",
+                    "endpoint": "http://localhost:5080/api/default",
+                    "api_key": "",
+                    "headers": {
+                        "Authorization": "Basic dXNlcjpwYXNz",
+                        "stream-name": "llm",
+                        "retries": 3,
+                    },
+                },
+            },
+        }
+        monkeypatch.setattr("core.config.load_config", lambda: cfg)
+
+        result = resolve_backend(self._make_span("cursor"))
+        assert result["headers"] == {
+            "Authorization": "Basic dXNlcjpwYXNz",
+            "stream-name": "llm",
+        }
 
     def test_arize_from_config(self, monkeypatch):
         """Config harness entry with arize target including space_id."""
