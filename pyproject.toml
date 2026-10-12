@@ -19,6 +19,7 @@ dev = [
     "black",
     "isort",
     "mypy",
+    "tomli; python_version < '3.11'",
 ]
 
 [project.scripts]

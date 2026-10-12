@@ -37,16 +37,20 @@ def _claude_table_scripts() -> dict[str, str]:
 
 
 class TestHookTableParity:
-    def test_parser_reads_both_toml_quote_styles(self) -> None:
-        """A single-quoted entry must not be invisible to the parity tests below."""
-        text = '[project.scripts]\na = "m:f"\nb = \'m:g\'  # comment\n[tool.x]\nc = "m:h"\n'
-        assert parse_project_scripts(text) == {"a": "m:f", "b": "m:g"}
+    def test_parser_reads_every_valid_toml_entry(self) -> None:
+        """Any valid TOML entry, including a quoted key, must be visible to the parity tests below."""
+        text = '[project.scripts]\na = "m:f"\nb = \'m:g\'  # comment\n"c.d" = "m:h"\n[tool.x]\ne = "m:i"\n'
+        assert parse_project_scripts(text) == {"a": "m:f", "b": "m:g", "c.d": "m:h"}
 
-    @pytest.mark.parametrize("line", ['"arize-hook-x" = "m:f"', 'arize-hook-x = "m:f" extra', "arize-hook-x = m:f"])
-    def test_parser_rejects_lines_it_cannot_read(self, line) -> None:
-        """An entry the parser can't read must fail loudly, not vanish from the parity tests."""
-        with pytest.raises(ValueError, match="unparsed"):
+    @pytest.mark.parametrize("line", ['arize-hook-x = "m:f" extra', "arize-hook-x = m:f"])
+    def test_parser_rejects_malformed_toml(self, line) -> None:
+        with pytest.raises(ValueError):
             parse_project_scripts(f"[project.scripts]\n{line}\n")
+
+    def test_parser_raises_without_scripts_table(self) -> None:
+        """A missing table must fail, not compare the parity tests against an empty dict."""
+        with pytest.raises(KeyError):
+            parse_project_scripts('[project]\nname = "x"\n')
 
     def test_arize_harness_registered(self) -> None:
         assert parse_project_scripts(PYPROJECT.read_text()).get("arize-harness") == "core.cli:main"
