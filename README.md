@@ -4,6 +4,55 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 
 Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response `LLM` spans, correlated `TOOL` spans, and a foreground subagent `AGENT` subtree when available. See [Claude Code trace structure and current limitations](tracing/claude_code/README.md#trace-structure) for details.
 
+## Quick Start
+
+You need Python 3.9+ and the harness you want to trace. The commands below are the three most common installs on macOS and Linux. Each one downloads the installer, asks where to send spans (Phoenix or [Arize AX](https://arize.com)), then writes credentials to `~/.arize/harness/config.json`. For Windows commands and the rest of the supported harnesses, see [Supported Harnesses](#supported-harnesses).
+
+### Claude Code
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- claude
+```
+
+The installer registers hooks in `~/.claude/settings.json`. Start a session with `claude`, or `claude -p "hello"`. Spans for that session show up in the project you chose.
+
+To install from the Claude marketplace instead:
+
+```bash
+claude plugin marketplace add Arize-ai/coding-harness-tracing
+claude plugin install claude-code-tracing@coding-harness-tracing
+```
+
+That path skips the wizard, so set backend credentials in `~/.claude/settings.json`. See [Claude Code marketplace](tracing/claude_code/README.md#claude-code-marketplace).
+
+### Codex
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- codex
+```
+
+The installer registers hooks in `~/.codex/config.toml`. Codex will not run them until you trust them once: start `codex`, run `/hooks`, and approve each `arize-hook-codex-*` entry. Then run a session, for example:
+
+```bash
+codex exec "explain what this file does" path/to/file.py
+```
+
+### Cursor
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- cursor
+```
+
+The installer registers hooks in `~/.cursor/hooks.json`, which applies to the Cursor IDE and the Cursor CLI for your user. Use either as usual; agent activity produces spans in the project you chose.
+
+Cursor 2.5+ can install from the marketplace instead. In a Cursor agent chat, run:
+
+```text
+/add-plugin Arize-ai/coding-harness-tracing
+```
+
+The plugin skips the wizard. Run the bundled `manage-cursor-tracing` skill once to write credentials. See [Cursor plugin install](tracing/cursor/README.md#plugin-install).
+
 ## Supported Harnesses
 
 | Harness Integration | Install command | Name |
