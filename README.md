@@ -180,7 +180,7 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 | `ARIZE_DRY_RUN` | `false` | Build spans but skip the backend send. Useful for confirming hook wiring without writing data. |
 | `ARIZE_USER_ID` | — | Attached to every span as `user.id`. Mirrors the `user_id` field in `config.json`; env wins if both are set. |
 | `ARIZE_PROJECT_NAME` | per-harness | Overrides `harnesses.<name>.project_name` from `config.json` for a single session. **Arize backend only** — ignored on the Phoenix backend (use `PHOENIX_PROJECT` there). |
-| `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. |
+| `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. An `arize-harness hook` command that names no known harness logs to `~/.arize/harness/logs/arize-harness.log`. |
 | `ARIZE_TRACE_DEBUG` | `false` | Dump raw hook payloads as JSON under `~/.arize/harness/state/<harness>/debug/`. Codex hooks use this for span-tree inspection. |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Standard OTel attribute string (`team=payments,environment=prod`) added to every span. Overrides `config.json` `attributes`/`harnesses.<name>.attributes` on key collision; set per-harness by placing it in that harness's settings env block. |
 

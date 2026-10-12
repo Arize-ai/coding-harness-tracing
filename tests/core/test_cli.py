@@ -170,6 +170,107 @@ class TestFailuresNeverBlock:
         assert out == ""
         assert len(err.strip().splitlines()) == 1
 
+    @pytest.mark.parametrize(
+        "args, message",
+        [
+            (["hook"], "usage: arize-harness"),
+            (["hook", "nope"], "unknown harness '<4-character argument>'"),
+            (["hook", "claude"], "missing event for harness 'claude'"),
+            (["hook", "claude", "nope"], "unknown event '<4-character argument>' for harness 'claude'"),
+            (["hook", "claud"], "unknown harness 'claud'"),
+            (["hook", "codex", "notfy"], "unknown event 'notfy' for harness 'codex'"),
+        ],
+    )
+    def test_dispatch_errors_append_to_arize_log_file(self, args, message, capsys, hook_log) -> None:
+        """Harnesses hide a 0-exit hook's stderr, so a mistyped command must also leave a line in the log."""
+        assert cli.main(args) == 0
+        assert message in capsys.readouterr().err
+        lines = hook_log.read_text().splitlines()
+        assert len(lines) == 1
+        assert lines[0].startswith("[arize:error] ")
+        assert message in lines[0]
+
+    @pytest.mark.parametrize(
+        "args, harness",
+        [
+            (["hook", "claude"], "claude"),
+            (["hook", "claude-code", "nope"], "claude"),
+            (["hook", "gemini", "stop"], "gemini"),
+            (["hook", "codex", "notfy"], "codex"),
+        ],
+    )
+    def test_dispatch_errors_for_known_harness_default_to_its_log(self, args, harness, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("ARIZE_LOG_FILE")
+        log = tmp_path / "logs" / f"{harness}.log"
+        monkeypatch.setattr(cli, "_default_log_file", lambda name: log if name == harness else tmp_path / "wrong.log")
+        assert cli.main(args) == 0
+        assert "[arize:error]" in log.read_text()
+        assert not (tmp_path / "wrong.log").exists()
+
+    @pytest.mark.parametrize("args", [["hook"], ["hook", "nope"], ["hook", "nope", "stop"]])
+    def test_dispatch_errors_without_a_harness_use_fallback_log(self, args, monkeypatch, tmp_path) -> None:
+        import core.constants
+
+        monkeypatch.delenv("ARIZE_LOG_FILE")
+        monkeypatch.setattr(core.constants, "LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr(cli, "_default_log_file", lambda name: pytest.fail(f"looked up a log for {name}"))
+        assert cli.main(args) == 0
+        assert [p.name for p in (tmp_path / "logs").iterdir()] == ["arize-harness.log"]
+        assert "[arize:error]" in (tmp_path / "logs" / "arize-harness.log").read_text()
+
+    @pytest.mark.parametrize("args", [["hook", "codex"], ["hook"]])
+    def test_codex_payload_in_place_of_a_name_is_not_echoed(self, args, capsys, hook_log) -> None:
+        """A Codex notify config missing ``notify`` (or ``codex``) puts the payload where a name belongs."""
+        payload = json.dumps({"type": "agent-turn-complete", "input-messages": ["secret prompt"]})
+        assert cli.main([*args, payload]) == 0
+        err = capsys.readouterr().err
+        assert "secret prompt" not in err
+        assert "secret prompt" not in hook_log.read_text()
+        assert f"<{len(payload)}-character argument>" in err
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["hook", "refactor"],
+            ["hook", "claude", "refactor"],
+            ["hook", "codex", "refactor"],
+        ],
+    )
+    def test_one_word_prompt_in_place_of_a_name_is_not_echoed(self, args, capsys, hook_log) -> None:
+        """A single word that is not a near miss for a real name shows only its length."""
+        assert cli.main(args) == 0
+        err = capsys.readouterr().err
+        assert "refactor" not in err
+        assert "refactor" not in hook_log.read_text()
+        assert "<8-character argument>" in err
+
+    @pytest.mark.parametrize("args", [[], ["nope"], ["hooks", "claude", "stop"], ["claude", "stop"], ["--help"]])
+    def test_top_level_misuse_prints_usage_without_logging(self, args, capsys, hook_log) -> None:
+        """Only hook invocations log: a person typing ``arize-harness --help`` sees stderr, and nothing is written."""
+        assert cli.main(args) == 0
+        assert "usage: arize-harness" in capsys.readouterr().err
+        assert not hook_log.exists()
+
+    @pytest.mark.parametrize(
+        "args, broken",
+        [
+            (["hook", "nope"], False),
+            (["hook", "claude", "nope"], False),
+            (["hook", "cursor"], True),
+        ],
+    )
+    def test_unwritable_log_does_not_crash(self, args, broken, monkeypatch, capsys, tmp_path) -> None:
+        """A log path that can't be created still exits 0 with the stderr warning."""
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("")
+        monkeypatch.setenv("ARIZE_LOG_FILE", str(blocker / "hook.log"))
+        if broken:
+            monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "tracing.does_not_exist.handlers:main"})
+        assert cli.main(args) == 0
+        err = capsys.readouterr().err
+        assert len(err.strip().splitlines()) == 1
+        assert "traceback in" not in err
+
     def test_import_failure_exits_0_with_one_stderr_line(self, monkeypatch, capsys, hook_log) -> None:
         monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "tracing.does_not_exist.handlers:main"})
         assert cli.main(["hook", "cursor"]) == 0
@@ -250,6 +351,28 @@ class TestFailuresNeverBlock:
         assert "redirecting_hook_handlers" in err
         assert hook_log.read_text().count("could not load hook") == 1
 
+    def test_log_line_follows_unflushed_redirected_stderr(self, monkeypatch, tmp_path, capsys, hook_log):
+        """A partial line the adapter wrote to its redirected stderr must land before the failure line."""
+        from core import common
+
+        (tmp_path / "partial_line_hook_handlers.py").write_text(
+            "import sys\n"
+            "from core.common import redirect_stderr_to_log_file\n"
+            "redirect_stderr_to_log_file()\n"
+            "sys.stderr.write('adapter partial line ')\n"
+            "import tracing.does_not_exist\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "partial_line_hook_handlers", raising=False)
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "partial_line_hook_handlers:main"})
+        monkeypatch.setattr(common, "_redirected_log_fh", None)
+        monkeypatch.setattr(common, "_original_stderr", None)
+        try:
+            assert cli.main(["hook", "cursor"]) == 0
+        finally:
+            common.restore_stderr_from_log_file()
+        assert hook_log.read_text().startswith("adapter partial line [arize:error] could not load hook")
+
     def test_sys_exit_during_import_exits_0(self, monkeypatch, tmp_path, capsys) -> None:
         (tmp_path / "exiting_hook_handlers.py").write_text("import sys\nsys.exit(1)\n")
         monkeypatch.syspath_prepend(str(tmp_path))
@@ -283,6 +406,47 @@ class TestFailuresNeverBlock:
         out, err = capsys.readouterr()
         assert out == ""
         assert "usage: arize-harness" in err
+
+
+class TestCommonStderrHelpers:
+    """``core.common.original_stderr`` and ``flush_redirected_stderr``, which the dispatcher uses."""
+
+    @pytest.fixture
+    def common(self, monkeypatch, tmp_path):
+        from core import common
+
+        monkeypatch.setattr(common, "_redirected_log_fh", None)
+        monkeypatch.setattr(common, "_original_stderr", None)
+        monkeypatch.setenv("ARIZE_LOG_FILE", str(tmp_path / "hook.log"))
+        yield common
+        common.restore_stderr_from_log_file()
+
+    def test_original_stderr_without_redirect_is_sys_stderr(self, common) -> None:
+        assert common.original_stderr() is sys.stderr
+
+    def test_original_stderr_during_redirect_is_the_replaced_stream(self, common) -> None:
+        before = sys.stderr
+        common.redirect_stderr_to_log_file()
+        assert sys.stderr is not before
+        assert common.original_stderr() is before
+
+    def test_original_stderr_after_restore_is_sys_stderr(self, common) -> None:
+        common.redirect_stderr_to_log_file()
+        common.restore_stderr_from_log_file()
+        assert common.original_stderr() is sys.stderr
+
+    def test_flush_redirected_stderr_writes_a_partial_line(self, common, tmp_path) -> None:
+        common.redirect_stderr_to_log_file()
+        sys.stderr.write("partial")
+        assert (tmp_path / "hook.log").read_text() == ""
+        common.flush_redirected_stderr()
+        assert (tmp_path / "hook.log").read_text() == "partial"
+
+    def test_flush_redirected_stderr_is_a_no_op_without_redirect_or_after_close(self, common) -> None:
+        common.flush_redirected_stderr()
+        common.redirect_stderr_to_log_file()
+        common._redirected_log_fh.close()
+        common.flush_redirected_stderr()
 
 
 class TestList:
@@ -338,6 +502,12 @@ class TestStartupImports:
         assert not {m for m in modules if m.startswith("tracing")}
         assert "dotenv" not in modules
         assert "core.setup" not in modules
+
+    def test_dispatch_error_imports_no_harness_and_no_common(self, tmp_path) -> None:
+        modules = _modules_loaded_by(["hook", "nope"], "", tmp_path)
+        assert not {m for m in modules if m.startswith("tracing")}
+        assert "core.common" not in modules
+        assert "dotenv" not in modules
 
     def test_claude_hook_imports_only_claude(self, tmp_path) -> None:
         payload = {"session_id": "s1", "cwd": str(tmp_path), "hook_event_name": "Stop"}

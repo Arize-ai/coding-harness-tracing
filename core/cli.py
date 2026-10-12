@@ -15,21 +15,32 @@ import importlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, TextIO
+from typing import Any, Iterable, List, Optional, TextIO
 
 from core.hook_table import ALIASES, EVENT_HOOKS, SINGLE_HOOKS, canonical_harness, iter_hooks, legacy_entry_point
 
 _USAGE = "usage: arize-harness hook <harness> [<event>] [args...] | arize-harness hook --list"
 
 
+# Dispatch failures with no known harness (an unknown name, a usage error)
+# have no harness log to go to. They are logged here, named for this command
+# so it sorts next to the harness logs without colliding with any of them.
+_FALLBACK_LOG_NAME = "arize-harness.log"
+
+
+def _common(name: str) -> Any:
+    """``core.common.<name>``, or None if nothing has imported ``core.common`` yet.
+
+    Never imports ``core.common`` itself: that would slow every hook's startup.
+    It only matters once a handler's adapter has imported it anyway.
+    """
+    return getattr(sys.modules.get("core.common"), name, None)
+
+
 def _stderr() -> TextIO:
     """The harness's stderr, even if an adapter has already redirected ``sys.stderr`` to its log."""
-    common = sys.modules.get("core.common")
-    log_fh = getattr(common, "_redirected_log_fh", None)
-    original = getattr(common, "_original_stderr", None)
-    if log_fh is not None and sys.stderr is log_fh and original is not None:
-        return original
-    return sys.stderr
+    original_stderr = _common("original_stderr")
+    return original_stderr() if original_stderr is not None else sys.stderr
 
 
 def _warn(message: str) -> None:
@@ -47,22 +58,69 @@ def _default_log_file(harness: str) -> Path:
     return metadata["default_log_file"] if metadata else LOG_DIR / f"{key}.log"
 
 
-def _log_load_failure(harness: str, target: str) -> Optional[str]:
-    """Append the current traceback to the harness log and return its path.
+def _log_path(harness: Optional[str]) -> Path:
+    """``ARIZE_LOG_FILE`` if set, else the harness's default log, else the fallback log."""
+    override = os.environ.get("ARIZE_LOG_FILE")
+    if override:
+        return Path(override)
+    if harness is None:
+        from core.constants import LOG_DIR
 
-    The hook still exits 0, so this log is the only place a broken install
-    (a missing dependency, a syntax error in a handler) shows up.
+        return LOG_DIR / _FALLBACK_LOG_NAME
+    return _default_log_file(harness)
+
+
+def _log_failure(harness: Optional[str], message: str, with_traceback: bool = False) -> Optional[str]:
+    """Append ``message`` (and the current traceback) to the log; return its path, or None if it can't be written.
+
+    The hook still exits 0, and harnesses hide the stderr of a hook that exits
+    0, so this log is the only lasting record of a broken install or a
+    mistyped hook command. Only the message is logged, never the hook's other
+    arguments: Codex's notify payload carries prompt text.
     """
     try:
-        import traceback
+        text = f"[arize:error] {message}\n"
+        if with_traceback:
+            import traceback
 
-        path = Path(os.environ.get("ARIZE_LOG_FILE") or _default_log_file(harness))
+            text += traceback.format_exc()
+        path = _log_path(harness)
+        flush_redirected_stderr = _common("flush_redirected_stderr")
+        if flush_redirected_stderr is not None:
+            # The adapter may hold the same file open as sys.stderr; flush it so lines stay in order.
+            flush_redirected_stderr()
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as log:
-            log.write(f"[arize:error] could not load hook {target}\n{traceback.format_exc()}")
+            log.write(text)
         return str(path)
     except Exception:
         return None
+
+
+def _shown(name: str, known: Iterable[str]) -> str:
+    """``name`` for an error message if it is a near miss for a name in ``known``, else a placeholder.
+
+    A misconfigured Codex ``notify`` puts its JSON payload, prompt text
+    included, where the harness or event name should be, and a stray word can
+    land there too. Only a typo of a real name is echoed to stderr or the log;
+    anything else shows its length alone.
+    """
+    from difflib import get_close_matches
+
+    if len(name) <= 64 and get_close_matches(name, list(known), n=1, cutoff=0.6):
+        return name
+    return f"<{len(name)}-character argument>"
+
+
+def _harness_names() -> List[str]:
+    return [*EVENT_HOOKS, *SINGLE_HOOKS, *ALIASES]
+
+
+def _dispatch_error(harness: Optional[str], message: str) -> int:
+    """Report a bad hook command on stderr and in the log, and exit 0."""
+    _warn(message)
+    _log_failure(harness, message)
+    return 0
 
 
 def _list_hooks() -> int:
@@ -74,12 +132,12 @@ def _list_hooks() -> int:
 def _hook(args: List[str]) -> Any:
     """Dispatch ``hook`` arguments to a handler.
 
-    Unknown names and import failures print one line to stderr and exit 0:
-    a hook must never block the harness that runs it.
+    Unknown names and import failures print one line to stderr, append to the
+    log, and exit 0: a hook must never block the harness that runs it. Only
+    this path logs; top-level misuse in ``main`` is stderr only.
     """
     if not args:
-        _warn(_USAGE)
-        return 0
+        return _dispatch_error(None, _USAGE)
     if args[0] == "--list":
         return _list_hooks()
 
@@ -90,24 +148,26 @@ def _hook(args: List[str]) -> Any:
         rest = args[1:]
     elif harness in EVENT_HOOKS:
         if len(args) < 2:
-            _warn(f"missing event for harness '{args[0]}' (see arize-harness hook --list)")
-            return 0
+            return _dispatch_error(harness, f"missing event for harness '{args[0]}' (see arize-harness hook --list)")
         event = args[1]
         events = EVENT_HOOKS[harness]
         if event not in events:
-            _warn(f"unknown event '{event}' for harness '{args[0]}' (see arize-harness hook --list)")
-            return 0
+            return _dispatch_error(
+                harness,
+                f"unknown event '{_shown(event, events)}' for harness '{args[0]}' (see arize-harness hook --list)",
+            )
         target = events[event]
         rest = args[2:]
     else:
-        _warn(f"unknown harness '{args[0]}' (see arize-harness hook --list)")
-        return 0
+        return _dispatch_error(
+            None, f"unknown harness '{_shown(args[0], _harness_names())}' (see arize-harness hook --list)"
+        )
 
     module_name, _, function_name = target.partition(":")
     try:
         handler = getattr(importlib.import_module(module_name), function_name)
     except (Exception, SystemExit) as e:  # a module calling sys.exit() at import must not block either
-        log_path = _log_load_failure(harness, target)
+        log_path = _log_failure(harness, f"could not load hook {target}", with_traceback=True)
         _warn(f"could not load hook {target}: {e}" + (f" (traceback in {log_path})" if log_path else ""))
         return 0
 
@@ -123,6 +183,7 @@ def main(argv: Optional[List[str]] = None) -> Any:
         return _hook(args[1:])
     # Exit 0, not the conventional 2: Claude Code treats a hook's exit 2 as a
     # blocking error, so a mistyped hook command would block every tool call.
+    # Not logged: a person typing this at a shell sees it, and no harness hides it.
     _warn(_USAGE)
     return 0
 

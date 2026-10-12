@@ -1,8 +1,8 @@
 """The hook table: every (harness, event) pair a coding harness can invoke.
 
-This is the single source of truth for hook targets. ``arize-harness hook``
-dispatches through it, and launcher generation reads it instead of keeping a
-separate list.
+This is the single source of truth for hook targets: ``arize-harness hook``
+dispatches through it, and tests check it against the ``arize-hook-*`` entries
+in ``pyproject.toml``.
 
 Targets are ``"module:function"`` strings so that looking a hook up never
 imports a harness; only the module of the hook actually being run is imported.
