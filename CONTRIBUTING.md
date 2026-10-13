@@ -69,48 +69,36 @@ If `test_run_hook_bootstraps_on_python312_without_setuptools` fails against a uv
 
 You do not need to run the Windows jobs locally. CI runs `install.bat` and Windows hook delivery on `windows-latest`.
 
-## Testing releases locally
+## Testing an install locally
 
-You can rehearse build, publish, and install on your own machine before anything is public. Docker is optional. Only the clean-container helper needs it.
-
-Start the local registry and release server. They run in the foreground, so use a separate terminal. Ctrl-C stops both.
+The pytest suite never runs `install.sh`. To check that a change still installs, run the install smoke test:
 
 ```bash
-scripts/local-registry.sh
+scripts/smoke-install.sh
 ```
 
-This serves a pypiserver registry at `http://localhost:8080/simple/` from `~/local-pypi`. It also serves a release folder at `http://localhost:8000/` from `~/local-releases`, laid out like GitHub Releases (`releases/download/<tag>/...`). Installers that download release files can use it as their base URL. Override the folders and ports with `LOCAL_PYPI_DIR`, `LOCAL_RELEASE_DIR`, `LOCAL_REGISTRY_PORT`, and `LOCAL_RELEASE_PORT`.
+It builds a wheel from your checkout, installs it with `install.sh --wheel-dir --non-interactive` into a throwaway `HOME` with placeholder credentials, and then checks `status --json`, `update` and `uninstall`. Your real `~/.claude/settings.json` and `~/.arize/harness` are not touched, and neither is the checkout. CI's `install-smoke` job runs this same script on Linux and macOS, so a CI failure there reproduces with this command. The harness defaults to `claude`. Pass another one to test it, for example `scripts/smoke-install.sh copilot`.
 
-Build and publish the current checkout:
+CI installs with Python 3.9. To match it:
 
 ```bash
-scripts/publish-local.sh
+UV_PYTHON=3.9 scripts/smoke-install.sh
 ```
 
-This uploads the wheel and sdist to the registry. It also copies them into `releases/download/v<version>/` with a `SHA256SUMS` file, and writes the tag to `latest` at the release folder's root.
-
-Install the build with a throwaway `HOME` and uv tool directory, so your real `~/.claude/settings.json` and tracing install stay untouched. `publish-local.sh` prints this command with your version filled in, so you can copy it from there. Otherwise, replace `0.1.0` below with the version you published:
+To inspect the install afterwards, set `SMOKE_KEEP=1`. The script then skips the uninstall, leaves the throwaway `HOME` in place, and prints its path along with the commands to run `status` against it and to delete it:
 
 ```bash
-export T=$(mktemp -d)
-HOME=$T UV_TOOL_DIR=$T/tools UV_TOOL_BIN_DIR=$T/bin \
-  uv tool install --reinstall --index http://localhost:8080/simple/ coding-harness-tracing==0.1.0
+SMOKE_KEEP=1 scripts/smoke-install.sh
 ```
 
-- Pin `==<version>` to install exactly the build you published. An unpinned install picks the newest stable version and skips development versions such as `0.2.0.dev1` while a stable one exists. Add `--prerelease allow` to an unpinned install to consider development versions too.
-- Pass `--reinstall` after republishing. Without it, uv's cache can serve the previous build of the same version.
-- Republishing the same version overwrites it. That is local only. Real PyPI never allows overwriting a file, so a real release always needs a new version.
-
-To install inside a clean Linux container that reaches both servers through `host.docker.internal`:
+To run the same smoke test in a clean Linux container, use the container helper. It is the only part that needs Docker:
 
 ```bash
 scripts/test-in-container.sh ubuntu
-scripts/test-in-container.sh fedora -- sh -c 'curl -fsS "$LOCAL_RELEASE_URL/latest"'
+scripts/test-in-container.sh fedora copilot
 ```
 
-With no command, the helper checks both servers, installs uv, and installs the exact version named in `latest` from the local registry, so it always tests the build you just published. The distro defaults to `ubuntu`, so `scripts/test-in-container.sh -- <command>` also works. The container gets the server addresses as `LOCAL_REGISTRY_URL` and `LOCAL_RELEASE_URL`. The helper exits with a message if Docker is not running.
-
-Both servers listen on `127.0.0.1` by default, because the registry accepts unauthenticated overwrites. Docker Desktop reaches them anyway. On a Linux Docker host, start the servers with `LOCAL_BIND=0.0.0.0` so the container can connect.
+The distro defaults to `ubuntu` (24.04), and `fedora` means Fedora 44. The harness defaults to `claude`. The helper mounts your checkout read-only and copies it inside the container, so the container never writes to it.
 
 ## Find the code you need
 

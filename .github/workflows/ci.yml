@@ -36,6 +36,32 @@ jobs:
       - name: Run tests
         run: uv run pytest tests/ -m "not slow"
 
+  # The Linux and macOS counterpart of windows-offline: builds the wheel and
+  # runs the real install.sh --wheel-dir into a throwaway HOME. Developers run
+  # the same script locally, so a failure here reproduces with one command.
+  install-smoke:
+    name: Install smoke (${{ matrix.os }}, ${{ matrix.harness }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        harness: [claude]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Sets UV_PYTHON, which smoke-install.sh also uses for the installed venv.
+      # Wheel download goes through uv, so this job does not need a pip-bearing
+      # interpreter from setup-python.
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        with:
+          python-version: "3.9"
+
+      - name: Smoke-test install.sh
+        run: scripts/smoke-install.sh ${{ matrix.harness }}
+
   windows-offline:
     name: Windows offline install (install.bat --wheel-dir)
     runs-on: windows-latest
