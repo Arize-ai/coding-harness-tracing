@@ -114,7 +114,8 @@ install_repo() {
     # documented as running from there and repo mode gets it via the extract.
     if [[ -n "$WHEEL_DIR" ]]; then
         mkdir -p "$INSTALL_DIR"
-        if [[ -f "${BASH_SOURCE[0]}" ]] && ! cmp -s "${BASH_SOURCE[0]}" "${INSTALL_DIR}/install.sh"; then
+        # -ef, not cmp: cmp comes from diffutils, which minimal images lack.
+        if [[ -f "${BASH_SOURCE[0]}" && ! "${BASH_SOURCE[0]}" -ef "${INSTALL_DIR}/install.sh" ]]; then
             cp "${BASH_SOURCE[0]}" "${INSTALL_DIR}/install.sh" && chmod +x "${INSTALL_DIR}/install.sh"
         fi
         return 0
