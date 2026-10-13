@@ -218,6 +218,20 @@ Harnesses:
 
 `hooks: NOT registered` means credentials are saved but the harness was never wired up (or something removed the hooks) — re-run the install for that harness.
 
+### Running a hook by hand
+
+`arize-harness hook` runs the same handler as the matching `arize-hook-*` command. The installers still register the `arize-hook-*` commands, so existing harness configs don't need to change.
+
+```bash
+arize-harness hook --list                  # every harness and event it accepts
+arize-harness hook claude pre-tool-use     # one handler per event: name the event
+arize-harness hook cursor                  # one handler for every event: no event argument
+```
+
+Claude Code, Codex, Copilot, Gemini, and Antigravity take an event name. Cursor, Kiro, OpenCode, OMP, and Devin take none, and any further arguments go to the handler. Event data is passed the way the harness passes it to the hook: as JSON on stdin, except Codex, which takes it as the last argument (`arize-harness hook codex notify '<json>'`).
+
+A mistyped harness or event exits 0, so it never blocks the harness, and is written to the log described under `ARIZE_LOG_FILE` below.
+
 ### Environment variables
 
 Most settings live in `.arize/harness/config.json`, but a small set of env vars affect runtime behavior on every harness. The installers wire most of these for you; set them yourself when you want to override behavior for a single session or debug locally.
@@ -229,7 +243,7 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 | `ARIZE_DRY_RUN` | `false` | Build spans but skip the backend send. Useful for confirming hook wiring without writing data. |
 | `ARIZE_USER_ID` | — | Attached to every span as `user.id`. Mirrors the `user_id` field in `config.json`; env wins if both are set. |
 | `ARIZE_PROJECT_NAME` | per-harness | Overrides `harnesses.<name>.project_name` from `config.json` for a single session. **Arize backend only** — ignored on the Phoenix backend (use `PHOENIX_PROJECT` there). |
-| `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. |
+| `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. When this is unset, an `arize-harness` error that names no known harness is logged to `~/.arize/harness/logs/arize-harness.log`. |
 | `ARIZE_TRACE_DEBUG` | `false` | Dump raw hook payloads as JSON under `~/.arize/harness/state/<harness>/debug/`. Codex hooks use this for span-tree inspection. |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Standard OTel attribute string (`team=payments,environment=prod`) added to every span. Overrides `config.json` `attributes`/`harnesses.<name>.attributes` on key collision; set per-harness by placing it in that harness's settings env block. |
 
