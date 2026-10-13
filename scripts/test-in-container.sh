@@ -19,8 +19,10 @@ distro="${1:-ubuntu}"
 harness="${2:-claude}"
 
 case "$distro" in
+    # Noninteractive, or with a terminal attached tzdata waits for a timezone
+    # at a prompt hidden by the >/dev/null.
     ubuntu) image="ubuntu:24.04"
-            prep="apt-get update -qq && apt-get install -y -qq ca-certificates python3 python3-venv >/dev/null" ;;
+            prep="export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq ca-certificates python3 python3-venv >/dev/null" ;;
     # No curl: uv comes from PyPI and a --wheel-dir install downloads nothing.
     # Installing curl on Fedora can also conflict with the image's curl-minimal.
     fedora) image="fedora:44"
