@@ -1,13 +1,14 @@
-"""The hook table: every (harness, event) pair a coding harness can invoke.
+"""Hook targets used by ``arize-harness hook``: every (harness, event) pair a coding harness can invoke.
 
-This is the single source of truth for hook targets: ``arize-harness hook``
-dispatches through it, and tests check it against the ``arize-hook-*`` entries
-in ``pyproject.toml``.
+The same targets are also listed in ``pyproject.toml`` and in the Claude
+plugin (its ``pyproject.toml``, ``scripts/run-hook``, and ``HOOK_EVENTS``);
+``tests/core/test_cli.py`` checks that all of them match this table.
 
 Targets are ``"module:function"`` strings so that looking a hook up never
 imports a harness; only the module of the hook actually being run is imported.
-This module must stay standard-library only and must not import ``tracing.*``:
-it is importable from the Claude plugin path, where neither resolves.
+The Claude plugin ships only ``core`` and ``tracing.claude_code``, with no
+dependencies, so this module must stay standard-library only and import no
+harness package.
 """
 
 from typing import Dict, Iterator, Optional, Tuple

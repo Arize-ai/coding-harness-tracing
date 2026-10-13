@@ -315,8 +315,8 @@ def error(msg: str) -> None:
     print(f"[arize:error] {msg}", file=sys.stderr, flush=True)
 
 
-# Module-level handles for the active stderr redirect. Kept so tests (and any
-# future caller) can restore the original stderr via restore_stderr_from_log_file().
+# Module-level handles for the active stderr redirect, read by
+# restore_stderr_from_log_file(), original_stderr(), and flush_redirected_stderr().
 _original_stderr: Optional[TextIO] = None
 _redirected_log_fh: Optional[IO] = None
 

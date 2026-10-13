@@ -56,7 +56,7 @@ class TestHookTableParity:
         assert parse_project_scripts(PYPROJECT.read_text()).get("arize-harness") == "core.cli:main"
 
     def test_every_legacy_command_has_a_matching_table_entry(self) -> None:
-        """Adding an ``arize-hook-*`` command without a table entry fails here."""
+        """Checked both ways: a command without a table entry, or an entry without a command, fails."""
         table = {hook_table.legacy_entry_point(h, e): target for h, e, target in hook_table.iter_hooks()}
         assert table == _legacy_hook_scripts()
 
@@ -177,8 +177,12 @@ class TestFailuresNeverBlock:
             (["hook", "nope"], "unknown harness '<4-character argument>'"),
             (["hook", "claude"], "missing event for harness 'claude'"),
             (["hook", "claude", "nope"], "unknown event '<4-character argument>' for harness 'claude'"),
-            (["hook", "claud"], "unknown harness 'claud'"),
-            (["hook", "codex", "notfy"], "unknown event 'notfy' for harness 'codex'"),
+            (["hook", "claud"], "unknown harness '<5-character argument>'; did you mean 'claude'?"),
+            (
+                ["hook", "codex", "notfy"],
+                "unknown event '<5-character argument>' for harness 'codex'; did you mean 'notify'?",
+            ),
+            (["hook", "claude-code"], "missing event for harness 'claude'"),
         ],
     )
     def test_dispatch_errors_append_to_arize_log_file(self, args, message, capsys, hook_log) -> None:
@@ -244,12 +248,33 @@ class TestFailuresNeverBlock:
         assert "refactor" not in hook_log.read_text()
         assert "<8-character argument>" in err
 
+    @pytest.mark.parametrize(
+        "args, secret, suggestion",
+        [
+            (["hook", "claude\nSECRET", "stop"], "SECRET", "claude"),
+            (["hook", "close"], "close", "codex"),
+            (["hook", "claude", "stopped"], "stopped", "stop"),
+            (["hook", "codex", "notify me"], "notify me", "notify"),
+        ],
+    )
+    def test_text_resembling_a_name_is_not_echoed(self, args, secret, suggestion, capsys, hook_log) -> None:
+        """Text close to a real name, or a real name with text appended, gets a suggestion, never an echo."""
+        assert cli.main(args) == 0
+        err = capsys.readouterr().err
+        log = hook_log.read_text()
+        assert secret not in err
+        assert secret not in log
+        assert f"did you mean '{suggestion}'?" in err
+        assert len(err.strip().splitlines()) == 1
+        assert len(log.splitlines()) == 1
+
     @pytest.mark.parametrize("args", [[], ["nope"], ["hooks", "claude", "stop"], ["claude", "stop"], ["--help"]])
-    def test_top_level_misuse_prints_usage_without_logging(self, args, capsys, hook_log) -> None:
-        """Only hook invocations log: a person typing ``arize-harness --help`` sees stderr, and nothing is written."""
+    def test_top_level_misuse_logs_usage_without_arguments(self, args, capsys, hook_log) -> None:
+        """A hook command missing ``hook`` lands here and its stderr is hidden, so the usage line is logged too."""
         assert cli.main(args) == 0
         assert "usage: arize-harness" in capsys.readouterr().err
-        assert not hook_log.exists()
+        lines = hook_log.read_text().splitlines()
+        assert lines == [f"[arize:error] {cli._USAGE}"]
 
     @pytest.mark.parametrize(
         "args, broken",
@@ -291,7 +316,6 @@ class TestFailuresNeverBlock:
 
     @pytest.mark.parametrize("harness", sorted({h for h, _event, _target in hook_table.iter_hooks()}))
     def test_import_failure_defaults_to_harness_log(self, harness, monkeypatch, tmp_path) -> None:
-        """Without ARIZE_LOG_FILE the traceback goes to the harness's own default log."""
         monkeypatch.delenv("ARIZE_LOG_FILE")
         log = tmp_path / "logs" / f"{harness}.log"
         monkeypatch.setattr(cli, "_default_log_file", lambda name: log if name == harness else tmp_path / "wrong.log")
@@ -472,8 +496,8 @@ sys.exit(main(sys.argv[1:]))
 
 def _modules_loaded_by(args: list[str], stdin: str, tmp_path: Path) -> set[str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ARIZE_", "PHOENIX_", "OTEL_"))}
-    # ARIZE_DISABLE_FORK keeps span sends in this process, so no detached sender
-    # outlives the test and every module a hook imports is in the report.
+    # Gemini, Antigravity and OMP send spans from a detached fork unless
+    # ARIZE_DISABLE_FORK=true; disabling it keeps their imports in this report.
     env.update(
         {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "ARIZE_DRY_RUN": "true", "ARIZE_DISABLE_FORK": "true"}
     )

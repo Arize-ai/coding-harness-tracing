@@ -22,9 +22,7 @@ from core.hook_table import ALIASES, EVENT_HOOKS, SINGLE_HOOKS, canonical_harnes
 _USAGE = "usage: arize-harness hook <harness> [<event>] [args...] | arize-harness hook --list"
 
 
-# Dispatch failures with no known harness (an unknown name, a usage error)
-# have no harness log to go to. They are logged here, named for this command
-# so it sorts next to the harness logs without colliding with any of them.
+# Default log name for dispatch errors without a recognized harness.
 _FALLBACK_LOG_NAME = "arize-harness.log"
 
 
@@ -97,19 +95,27 @@ def _log_failure(harness: Optional[str], message: str, with_traceback: bool = Fa
         return None
 
 
-def _shown(name: str, known: Iterable[str]) -> str:
-    """``name`` for an error message if it is a near miss for a name in ``known``, else a placeholder.
+def _shown(name: str) -> str:
+    """A placeholder for an unrecognized argument in an error message.
 
     A misconfigured Codex ``notify`` puts its JSON payload, prompt text
-    included, where the harness or event name should be, and a stray word can
-    land there too. Only a typo of a real name is echoed to stderr or the log;
-    anything else shows its length alone.
+    included, where the harness or event name should be, and a stray word or
+    a name with text appended can land there too. Unknown arguments are never
+    echoed to stderr or the log; only their length is shown.
+    """
+    return f"'<{len(name)}-character argument>'"
+
+
+def _suggestion(name: str, known: Iterable[str]) -> str:
+    """``; did you mean '<real name>'?`` if ``name`` is close to a name in ``known``, else empty.
+
+    Only the name from ``known`` is shown, never ``name`` itself. Arguments
+    over 64 characters are longer than any real name and skip the comparison.
     """
     from difflib import get_close_matches
 
-    if len(name) <= 64 and get_close_matches(name, list(known), n=1, cutoff=0.6):
-        return name
-    return f"<{len(name)}-character argument>"
+    matches = get_close_matches(name, list(known), n=1, cutoff=0.6) if len(name) <= 64 else []
+    return f"; did you mean '{matches[0]}'?" if matches else ""
 
 
 def _harness_names() -> List[str]:
@@ -132,9 +138,9 @@ def _list_hooks() -> int:
 def _hook(args: List[str]) -> Any:
     """Dispatch ``hook`` arguments to a handler.
 
-    Unknown names and import failures print one line to stderr, append to the
-    log, and exit 0: a hook must never block the harness that runs it. Only
-    this path logs; top-level misuse in ``main`` is stderr only.
+    Lookup and import errors print one line to stderr, append to the log, and
+    return 0. Exceptions raised by the handler propagate, as they do from the
+    ``arize-hook-*`` commands.
     """
     if not args:
         return _dispatch_error(None, _USAGE)
@@ -148,19 +154,22 @@ def _hook(args: List[str]) -> Any:
         rest = args[1:]
     elif harness in EVENT_HOOKS:
         if len(args) < 2:
-            return _dispatch_error(harness, f"missing event for harness '{args[0]}' (see arize-harness hook --list)")
+            return _dispatch_error(harness, f"missing event for harness '{harness}' (see arize-harness hook --list)")
         event = args[1]
         events = EVENT_HOOKS[harness]
         if event not in events:
             return _dispatch_error(
                 harness,
-                f"unknown event '{_shown(event, events)}' for harness '{args[0]}' (see arize-harness hook --list)",
+                f"unknown event {_shown(event)} for harness '{harness}'{_suggestion(event, events)}"
+                " (see arize-harness hook --list)",
             )
         target = events[event]
         rest = args[2:]
     else:
         return _dispatch_error(
-            None, f"unknown harness '{_shown(args[0], _harness_names())}' (see arize-harness hook --list)"
+            None,
+            f"unknown harness {_shown(args[0])}{_suggestion(args[0], _harness_names())}"
+            " (see arize-harness hook --list)",
         )
 
     module_name, _, function_name = target.partition(":")
@@ -182,10 +191,10 @@ def main(argv: Optional[List[str]] = None) -> Any:
     if args and args[0] == "hook":
         return _hook(args[1:])
     # Exit 0, not the conventional 2: Claude Code treats a hook's exit 2 as a
-    # blocking error, so a mistyped hook command would block every tool call.
-    # Not logged: a person typing this at a shell sees it, and no harness hides it.
-    _warn(_USAGE)
-    return 0
+    # blocking error (on PreToolUse, it blocks the tool call). Logged as well as
+    # printed: a hook command missing ``hook`` lands here, and the harness hides
+    # its stderr. Only the fixed usage text is written, never the arguments.
+    return _dispatch_error(None, _USAGE)
 
 
 if __name__ == "__main__":
