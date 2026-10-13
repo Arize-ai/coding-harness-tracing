@@ -22,6 +22,9 @@ KIRO_SESSIONS_DIR = Path.home() / ".kiro" / "sessions" / "cli"
 # Default agent name when the user doesn't specify one during install.
 DEFAULT_AGENT_NAME = "arize-traced"
 
+# Hook stderr goes here unless ARIZE_LOG_FILE is set.
+DEFAULT_LOG_FILE = Path.home() / ".arize" / "harness" / "logs" / "kiro.log"
+
 # Single hook binary; the handler dispatches by hook_event_name.
 HOOK_BIN_NAME = "arize-hook-kiro"
 

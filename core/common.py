@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import IO, Optional
+from typing import IO, Optional, TextIO
 
 from core.otlp_proto import otlp_json_to_protobuf
 
@@ -315,9 +315,9 @@ def error(msg: str) -> None:
     print(f"[arize:error] {msg}", file=sys.stderr, flush=True)
 
 
-# Module-level handles for the active stderr redirect. Kept so tests (and any
-# future caller) can restore the original stderr via restore_stderr_from_log_file().
-_original_stderr: Optional[IO] = None
+# Module-level handles for the active stderr redirect, read by
+# restore_stderr_from_log_file(), original_stderr(), and flush_redirected_stderr().
+_original_stderr: Optional[TextIO] = None
 _redirected_log_fh: Optional[IO] = None
 
 
@@ -363,6 +363,27 @@ def redirect_stderr_to_log_file() -> None:
     # Restore on interpreter shutdown so atexit hooks (and any late prints)
     # don't write to an FD that's about to close.
     atexit.register(restore_stderr_from_log_file)
+
+
+def original_stderr() -> TextIO:
+    """The stream stderr would reach without the log redirect.
+
+    While ``redirect_stderr_to_log_file()`` is active this is the stderr it
+    replaced; otherwise it is ``sys.stderr``.
+    """
+    if _redirected_log_fh is not None and sys.stderr is _redirected_log_fh and _original_stderr is not None:
+        return _original_stderr
+    return sys.stderr
+
+
+def flush_redirected_stderr() -> None:
+    """Flush the stderr log redirect, if active, so another handle can append to the same file in order."""
+    if _redirected_log_fh is None:
+        return
+    try:
+        _redirected_log_fh.flush()
+    except (OSError, ValueError):  # ValueError: already closed
+        pass
 
 
 def restore_stderr_from_log_file() -> None:

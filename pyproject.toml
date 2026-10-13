@@ -19,11 +19,13 @@ dev = [
     "black",
     "isort",
     "mypy",
+    "tomli; python_version < '3.11'",
 ]
 
 [project.scripts]
 # Core tools
 arize-config = "core.config:main"
+arize-harness = "core.cli:main"
 # Claude Code hooks
 arize-hook-session-start = "tracing.claude_code.hooks.handlers:session_start"
 arize-hook-pre-tool-use = "tracing.claude_code.hooks.handlers:pre_tool_use"

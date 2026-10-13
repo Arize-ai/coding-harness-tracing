@@ -19,12 +19,18 @@ from pathlib import Path
 
 import pytest
 
+from tests._pyproject import parse_project_scripts
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ---------------------------------------------------------------------------
 # 1. pyproject.toml entry points use new module paths
 # ---------------------------------------------------------------------------
 
+# Written out by hand on purpose, not derived from core/hook_table.py: these
+# command names are a public contract that users' harness configs already call.
+# tests/core/test_cli.py checks the table matches pyproject, so a command dropped
+# from both would pass there; this list catches it.
 EXPECTED_HARNESS_ENTRY_POINTS = {
     # Claude Code hooks
     "arize-hook-session-start": "tracing.claude_code.hooks.handlers:session_start",
@@ -79,25 +85,7 @@ EXPECTED_HARNESS_ENTRY_POINTS = {
 
 def _parse_pyproject_scripts():
     """Parse [project.scripts] from pyproject.toml."""
-    content = (REPO_ROOT / "pyproject.toml").read_text()
-    scripts = {}
-    in_scripts = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped == "[project.scripts]":
-            in_scripts = True
-            continue
-        if in_scripts:
-            if stripped.startswith("[") and stripped.endswith("]"):
-                break
-            if stripped.startswith("#") or not stripped:
-                continue
-            key, _, value = stripped.partition("=")
-            key = key.strip()
-            value = value.strip().strip('"')
-            if key and value:
-                scripts[key] = value
-    return scripts
+    return parse_project_scripts((REPO_ROOT / "pyproject.toml").read_text())
 
 
 class TestPyprojectEntryPointsUpdated:
@@ -122,8 +110,8 @@ class TestPyprojectEntryPointsUpdated:
         assert not any(name.startswith("arize-setup-") for name in self.scripts)
 
     def test_total_entry_point_count(self):
-        """Entry point count should match expected harness + arize-config."""
-        expected_count = len(EXPECTED_HARNESS_ENTRY_POINTS) + 1  # +1 for arize-config
+        """Entry point count should match expected harness + arize-config + arize-harness."""
+        expected_count = len(EXPECTED_HARNESS_ENTRY_POINTS) + 2  # +2 for arize-config, arize-harness
         assert (
             len(self.scripts) == expected_count
         ), f"Expected {expected_count} entry points, got {len(self.scripts)}: {sorted(self.scripts.keys())}"
