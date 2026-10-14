@@ -7,6 +7,12 @@ The installer prompts for your backend (Phoenix or Arize AX) and project name, w
 
 Pass `--with-skills` to also symlink the `manage-codex-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Codex tracing configuration.
 
+### Existing notification commands
+
+If `notify` already contains a command, the installer preserves it using `--previous-notify` chaining. Recognized Codex desktop callbacks remain outermost. Reinstall keeps a single Arize callback; uninstall restores the previous command.
+
+The rollout reader also recognizes user prompts stored as `response_item` messages. When content provenance is available, it excludes injected repository instructions and environment content.
+
 ### Remote setup
 
 #### macOS / Linux
