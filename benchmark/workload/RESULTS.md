@@ -172,6 +172,37 @@ What this means:
    launcher. Benchmarks run back to back also understate every hook by ~25 ms (4b), so budgets set
    from the spike's warm numbers are too optimistic.
 
+## Per-hook cost for every build
+
+`HOOKS_ONLY=1 BUILDS=<builds> benchmark/run-all.sh` runs `workload.py hooks` on each build in
+run-all.sh's CANDIDATES, as `<exe> hook claude <event>`. Setup matches bench.sh: throwaway HOME,
+`ARIZE_DRY_RUN=true` plus `ARIZE_VERBOSE=true`, and the same gate (every timed Stop logs a dry-run
+span; all six builds passed, 65/65). Each call follows a session reset and untimed setup calls, so it
+does real work. There are 30 runs per hook per mode, with 5 warmups back to back. Raw results:
+`benchmark/results/<label>/hooks.json`.
+
+| build | SessionStart mean / p95 (ms) | Stop mean / p95 (ms) | first run, worst (ms) | first run read-only, worst (ms) | size | files | .so/.dylib | build time (s) | budget | UPS b2b p50 / p95 (ms) | Pre b2b p50 / p95 (ms) | Post b2b p50 / p95 (ms) | Stop b2b p50 / p95 (ms) | UPS idle 2s p50 / p95 (ms) | Pre idle 2s p50 / p95 (ms) | Post idle 2s p50 / p95 (ms) | Stop idle 2s p50 / p95 (ms) | 20-tool turn, idle (est.) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| nuitka | 37.6 / 39.3 | 40.3 / 42.5 | 692 | 555 |  27M | 4 | 1 | 36 | PASS | 42 / 43 | 40 / 48 | 42 / 45 | 45 / 60 | 65 / 72 | 65 / 70 | 65 / 68 | 64 / 68 | 2.72 s |
+| pbs | 63.2 / 67.5 | 61.6 / 67.1 | 576 | 539 |  87M | 3004 | 10 | 3 | PASS | 65 / 67 | 65 / 68 | 66 / 69 | 65 / 68 | 93 / 98 | 94 / 97 | 93 / 97 | 93 / 98 | 3.93 s |
+| pbs-nocompile | 171.9 / 174.5 | 176.2 / 184.6 | 1209 | 561 |  67M | 1812 | 10 | 3 | FAIL | 181 / 193 | 178 / 193 | 183 / 198 | 179 / 183 | 214 / 217 | 212 / 230 | 213 / 230 | 213 / 222 | 8.94 s |
+| pyi-onedir | 45.8 / 48.3 | 46.9 / 48.3 | 482 | 453 |  20M | 5 | 1 | 5 | PASS | 49 / 51 | 48 / 50 | 49 / 50 | 50 / 53 | 76 / 78 | 75 / 79 | 76 / 83 | 77 / 82 | 3.17 s |
+| pyi-onefile | 346.5 / 383.1 | 351.9 / 427.3 | 630 | 569 | 9.3M | 1 | 0 | 15 | FAIL | 352 / 428 | 351 / 369 | 350 / 367 | 346 / 363 | 389 / 441 | 386 / 400 | 393 / 421 | 389 / 407 | 16.34 s |
+| venv312 | 41.6 / 42.6 | 43.2 / 44.2 | 71 | 60 | 2.8M | 299 | 0 | - | baseline | 52 / 57 | 49 / 57 | 50 / 58 | 49 / 59 | 73 / 79 | 71 / 75 | 70 / 73 | 69 / 73 | 2.95 s |
+
+Budget: warm p95 at most 25 ms slower than venv312 on both events. First-run times are reported, not judged against it.
+Per-hook columns: 20-tool turn = UPS + 20×Pre + 20×Post + Stop, idle p50s; reported, not judged against the budget.
+
+The ranking is the same as on startup: nuitka < venv312 < pyi-onedir < pbs < pbs-nocompile <
+pyi-onefile. The gaps change, though:
+- Idle adds 20–25 ms per hook on venv312 and nuitka, 27 ms on pyi-onedir, 28 ms on pbs, 33 ms on
+  pbs-nocompile, and ~40 ms on pyi-onefile. So builds with larger trees lose more after a pause.
+- Back to back, pyi-onedir ties venv312 (48–50 vs 49–52 ms). After idle it is ~5 ms slower per hook:
+  +0.22 s per 20-tool turn.
+- pbs passes the startup budget at the edge (+24.9 ms p95) but costs +1.0 s per 20-tool turn
+  (3.93 vs 2.95 s).
+- nuitka is the only build cheaper than venv312 per turn: −0.23 s, about 8%.
+
 ## Caveats
 
 - The tool-response bytes from scenario 2 are not also put into the transcript. In a real turn they

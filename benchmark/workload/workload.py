@@ -9,6 +9,7 @@ This measures the costs that grow with real use and that no packaging format cha
   transcript   UserPromptSubmit/Stop with large session transcripts
   invocation   the same event via run-hook, its venv launcher, the console script, arize-harness
   idle         back-to-back runs vs runs after 0.5/2/5 s of idle
+  hooks        UPS/Pre/Post/Stop on any build (--cmd), back to back and idle -> results/<label>/hooks.json
   network      dry-run off: local sink, real endpoint + fake key, refused port, blackholed IP
   replay       a recorded turn's hook sequence with its real gaps, with and without hooks
 
@@ -166,8 +167,10 @@ def filler(path, size):
 class Harness:
     """A throwaway HOME, a backend config, and the ways to invoke one Claude hook."""
 
-    def __init__(self, venv, endpoint=None, lock_probe=False, dry_run=False):
-        self.venv = Path(venv).resolve()
+    def __init__(self, venv, endpoint=None, lock_probe=False, dry_run=False, cmd=None):
+        # cmd: any build's executable (+ args) run as `<cmd> hook claude <event>`; else venv's arize-harness.
+        self.venv = Path(venv).resolve() if venv else None
+        self.cmd = list(cmd) if cmd else [str(self.venv / "bin" / "arize-harness")]
         self.home = Path(tempfile.mkdtemp(prefix="workload-home-"))
         self.state_dir = self.home / ".arize" / "harness" / "state" / "claude-code"
         self.state_file = self.state_dir / f"state_{SID}.json"
@@ -182,6 +185,8 @@ class Harness:
         }
         self.env.update(HOME=str(self.home), ARIZE_TRACE_ENABLED="true",
                         ARIZE_DRY_RUN="true" if dry_run else "false")
+        if dry_run:
+            self.env["ARIZE_VERBOSE"] = "true"  # as bench.sh: the dry-run span line is only logged when verbose
         if lock_probe:
             self.env.update(PYTHONPATH=str(HERE / "instrument"), WORKLOAD_LOCK_LOG=str(self.lock_log))
         if endpoint:
@@ -202,7 +207,7 @@ class Harness:
     def command(self, event, path="harness"):
         name = EVENTS[event]
         if path == "harness":
-            return [str(self.venv / "bin" / "arize-harness"), "hook", "claude", name], self.env
+            return self.cmd + ["hook", "claude", name], self.env
         if path == "console":
             return [str(self.venv / "bin" / f"arize-hook-{name}")], self.env
         env = dict(self.env, CLAUDE_PLUGIN_ROOT=str(REPO / "tracing" / "claude_code"),
@@ -317,9 +322,10 @@ def observation(tool_id, response_bytes):
             "hook_event_metadata": {"hook_event_name": "PostToolUse"}}
 
 
-def save(name, result):
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f"{name}.json").write_text(json.dumps(result, indent=2))
+def save(name, result, out=None):
+    out = out or OUT
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{name}.json").write_text(json.dumps(result, indent=2))
 
 
 def stat_row(label, values):
@@ -544,6 +550,80 @@ def idle_gap(args):
     print("\n".join(rows))
 
 
+# --------------------------------------------------------------------------- 4c. per-hook, any build
+
+DRY_RUN_SPAN = "[dry-run] would send span"
+HOOKS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
+
+
+def per_hook(args):
+    """UPS, Pre, Post and Stop on any build, back to back and after an idle pause.
+
+    Setup matches benchmark/bench.sh (throwaway HOME, dry-run + verbose, `<cmd> hook claude
+    <event>`), so results/<label>/hooks.json sits beside its startup numbers. Before every
+    timed call the session is reset and the untimed calls that make it do real work run first:
+    SessionStart (+ UPS, which opens a turn), the matching Pre before a Post, and Pre/Post of
+    the turn's tool before Stop, whose transcript then holds a 1-tool turn to correlate.
+    Gate: every timed and warmup Stop logs one dry-run span.
+    """
+    if not args.cmd or not args.label:
+        raise SystemExit("hooks needs --cmd '<build executable>' and --label <build label>")
+    runs = 3 if args.quick else args.runs
+    warmup = 1 if args.quick else 5
+    idle = 0.2 if args.quick else args.idle
+    h = Harness(None, dry_run=True, cmd=args.cmd.split())
+    out = Path(args.results) / args.label
+    result = {"cmd": args.cmd, "runs": runs, "warmup": warmup, "idle_s": idle, "modes": {}}
+    stops = spans_seen = 0
+    try:
+        for mode, gap in (("back-to-back", 0.0), ("idle", idle)):
+            result["modes"][mode] = {}
+            for event in HOOKS:
+                times = []
+                for i in range(warmup + runs if mode == "back-to-back" else runs):
+                    tid = f"toolu_{mode}_{event}_{i}"
+                    tool = dict(tool_use_id=tid, tool_name="Read", tool_input={"file_path": "/w/x.py"})
+                    h.state_file.unlink(missing_ok=True)
+                    h.transcript.write_text("".join(turn_lines("seed")))
+                    h.run("SessionStart", h.payload("SessionStart", source="startup"))
+                    if event == "UserPromptSubmit":
+                        payload = h.payload(event, prompt="workload")
+                    else:
+                        h.run("UserPromptSubmit", h.payload("UserPromptSubmit", prompt="workload"))
+                        with open(h.transcript, "a") as f:
+                            f.write("".join(turn_lines(f"t{i}", (tid,))))
+                        if event in ("PostToolUse", "Stop"):
+                            h.run("PreToolUse", h.payload("PreToolUse", **tool))
+                        if event == "Stop":
+                            h.run("PostToolUse", h.payload("PostToolUse", **tool, tool_response="y" * KB))
+                            payload = h.payload(event, stop_hook_active=False)
+                        elif event == "PostToolUse":
+                            payload = h.payload(event, **tool, tool_response="y" * KB)
+                        else:
+                            payload = h.payload(event, **tool)
+                    before = h.log_count(DRY_RUN_SPAN)
+                    if gap:
+                        time.sleep(gap)
+                    ms = h.run(event, payload)
+                    if event == "Stop":
+                        stops += 1
+                        spans_seen += min(1, h.log_count(DRY_RUN_SPAN) - before)
+                    if mode == "idle" or i >= warmup:
+                        times.append(ms)
+                result["modes"][mode][event] = summary(times)
+                s = result["modes"][mode][event]
+                print(f"{args.label:<14} {mode:<12} {event:<17} p50 {fmt(s['p50']):>6}  p95 {fmt(s['p95']):>6} ms",
+                      flush=True)
+    finally:
+        h.close()
+    result["gate"] = "ok" if stops and spans_seen == stops else "fail"
+    result["spans"] = f"{spans_seen}/{stops}"
+    save("hooks", result, out)
+    print(f"{args.label}: dry-run spans {result['spans']} gate={result['gate']} -> {out / 'hooks.json'}")
+    if result["gate"] != "ok":
+        sys.exit(1)
+
+
 # --------------------------------------------------------------------------- 5. network
 
 
@@ -709,7 +789,7 @@ def replay(args):
 
 
 SCENARIOS = {"concurrency": concurrency, "buffer": buffer_growth, "transcript": transcript_size,
-             "invocation": invocation, "idle": idle_gap, "network": network, "replay": replay}
+             "invocation": invocation, "idle": idle_gap, "hooks": per_hook, "network": network, "replay": replay}
 
 
 def main():
@@ -719,8 +799,13 @@ def main():
     ap.add_argument("--quick", action="store_true", help="few reps, small sizes: check the harness works")
     ap.add_argument("--transcript", help="replay: a recorded Claude Code transcript")
     ap.add_argument("--max-gap", type=float, default=5.0, help="replay: cap each inter-hook gap (s); 0 = none")
+    ap.add_argument("--cmd", help="hooks: a build's executable, run as `<cmd> hook claude <event>`")
+    ap.add_argument("--label", help="hooks: build label; results go to <results>/<label>/hooks.json")
+    ap.add_argument("--results", default=str(HERE.parent / "results"), help="hooks: results root")
+    ap.add_argument("--runs", type=int, default=30, help="hooks: timed runs per hook per mode")
+    ap.add_argument("--idle", type=float, default=2.0, help="hooks: idle seconds before each idle-mode call")
     args = ap.parse_args()
-    if not (Path(args.venv) / "bin" / "arize-harness").exists():
+    if args.scenario != "hooks" and not (Path(args.venv) / "bin" / "arize-harness").exists():
         raise SystemExit(f"no venv312 install at {args.venv}: build one with setup.sh or pass --venv")
     SCENARIOS[args.scenario](args)
 
