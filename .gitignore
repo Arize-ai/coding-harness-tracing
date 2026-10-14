@@ -53,3 +53,9 @@ run/
 wheel.json
 docs/superpowers/*
 .serena/*
+
+# Binary feasibility spike (#90274): commit the scripts, never the builds or results.
+# (Un-ignore first: some global gitignores exclude benchmark/.)
+!benchmark/
+benchmark/builds/
+benchmark/results/
