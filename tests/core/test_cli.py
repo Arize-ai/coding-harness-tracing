@@ -336,13 +336,10 @@ class TestFailuresNeverBlock:
     def test_default_log_files_match_each_harness_adapter(self) -> None:
         """The dispatcher's default log must be the file each harness's adapter sets as ARIZE_LOG_FILE."""
         from core.constants import HARNESSES
-        from tracing.devin.constants import DEFAULT_LOG_FILE as DEVIN_LOG
-        from tracing.kiro.constants import DEFAULT_LOG_FILE as KIRO_LOG
 
         expected = {
             hook_table.canonical_harness(key): metadata["default_log_file"] for key, metadata in HARNESSES.items()
         }
-        expected.update({"kiro": KIRO_LOG, "devin": DEVIN_LOG})
         harnesses = {h for h, _event, _target in hook_table.iter_hooks()}
         assert {h: cli._default_log_file(h) for h in harnesses} == {h: expected[h] for h in harnesses}
 
