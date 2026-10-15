@@ -18,6 +18,10 @@ CANDIDATES=(
   "nuitka       $B/nuitka/arize-harness.dist  arize-harness.bin"
   "pbs          $B/pbs                        bin/arize-harness"
   "pbs-nocompile $B/pbs-nocompile             bin/arize-harness"
+  # Check 8 universal build (CHECKS.md): lipo-merged arm64 + x86_64 Nuitka builds from uv 3.12.10, and
+  # the arm64 half on its own, so going universal is compared without a Python patch-version change.
+  "nuitka-universal     $B/nuitka-universal     arize-harness.bin"
+  "nuitka-arm64-3.12.10 $B/nuitka-arm64-3.12.10 arize-harness.bin"
 )
 for row in "${CANDIDATES[@]}"; do
   read -r label dir exe <<<"$row"

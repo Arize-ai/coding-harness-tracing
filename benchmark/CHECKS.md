@@ -245,6 +245,38 @@ if that user happened to have run python.org's Install Certificates. The uv inte
 hand-written includes, no entitlements. PyInstaller onedir fails check 8 as built. It would need a CA
 path, either via `SSL_CERT_FILE` at runtime or a CA bundle shipped and wired in at build time.
 
+#### Cost of going universal (Nuitka)
+
+Benchmarked with `run-all.sh` from ba99619 plus two rows (`nuitka-universal`, `nuitka-arm64-3.12.10`).
+It uses the same `bench.sh` / `first-run.sh` that produced the existing table, runs natively on Apple
+Silicon only, and both builds are read-only. Both span gates pass: startup 210/210, per-hook 65/65. The
+rows were added to `$M/benchmark/results/table.md`; the earlier table is kept as `table.before-universal.md`,
+and no existing row changed.
+
+```bash
+# builds staged read-only as bb/nuitka-universal (nk-u2) and bb/nuitka-arm64-3.12.10 (nk-arm64)
+echo 85 > results/nuitka-universal/build_seconds       # 36 s arm64 + 49 s x86_64 + 0.4 s lipo/cmp/codesign
+echo 36 > results/nuitka-arm64-3.12.10/build_seconds
+BUILDS=$U8/bb ./run-all.sh < /dev/null                 # other rows' builds absent → skipped, results kept
+```
+
+| | nuitka-arm64-3.12.10 | nuitka-universal |
+|---|---|---|
+| size / files | 28M / 4 | 57M / 4 |
+| build time | 36 s | 85 s (36 + 49 + 0.4) |
+| first run, writable: per copy (ms) | 553, 521, 503, 507, 493 | 902, **1805**, 865, 864, 869 |
+| first run, read-only: per copy (ms) | 507, 511, 500, 503, 564 | 884, 872, 824, 876, 879 |
+| SessionStart / Stop mean / p95 (ms) | 44.3 / 52.8, 43.7 / 52.4 | 41.1 / 42.8, 41.3 / 42.5 |
+| UPS / Pre / Post / Stop p50 / p95, back to back (ms) | 43/47, 42/42, 42/43, 43/43 | 43/45, 43/44, 43/45, 43/45 |
+| UPS / Pre / Post / Stop p50 / p95, after 2 s idle (ms) | 73/80, 72/77, 72/78, 74/78 | 74/81, 73/78, 73/80, 75/80 |
+| 20-tool turn, idle (est.) | 3.04 s | 3.07 s |
+
+**Does going universal matter?** Only on the first launch after install or update, which costs about
++360 ms (roughly 870 ms instead of 505 ms, once). Every later hook is within 1–2 ms of the arm64-only
+build, so per-turn cost doesn't change. Size doubles to 57M and build time more than doubles, which
+affects packaging but not users. (The arm64 build's higher startup p95 is noise: its per-hook p95s are
+the lowest in the table.)
+
 ### 9. Oldest supported macOS
 
 Each bundle has exactly two Mach-O files, because python-build-standalone links its extension modules
