@@ -7,7 +7,8 @@
   equiv.py diff <a.json> <b.json>              compare two sequence outputs (exit 1 on any difference)
   equiv.py sessionkey <cmd>                    two Claude hooks with no session_id from one parent:
                                                print the state files they created
-  equiv.py https <cmd> [endpoint]              one span to the real endpoint with a fake key; prints
+  equiv.py dryrun <cmd>                        one Claude turn, dry-run on: exit 1 unless Stop logs its span
+  equiv.py https <cmd> [endpoint]            one span to the real endpoint with a fake key; prints
                                                the logged send result
 
 Ids (traceId/spanId/parentSpanId) are replaced by their order of first appearance, times by "T",
@@ -325,6 +326,29 @@ def sessionkey(cmd):
         h.close()
 
 
+# --------------------------------------------------------------------------- dry-run span
+
+
+def dryrun(cmd):
+    """One Claude turn with dry-run + verbose on; exit 1 unless Stop logs its dry-run span."""
+    h = Home(cmd, "http://127.0.0.1:9")
+    h.env.update(ARIZE_DRY_RUN="true", ARIZE_VERBOSE="true")
+    try:
+        tr = h.home / "t.jsonl"
+        tr.write_text("".join(turn_lines("seed")))
+        base = {"session_id": "equiv-dryrun", "transcript_path": str(tr), "cwd": "/equiv"}
+        h.run("claude", "session-start", {**base, "hook_event_name": "SessionStart"})
+        h.run("claude", "user-prompt-submit", {**base, "hook_event_name": "UserPromptSubmit", "prompt": "x"})
+        with open(tr, "a") as f:
+            f.write("".join(turn_lines("d", t0=50)))
+        h.run("claude", "stop", {**base, "hook_event_name": "Stop"})
+        spans = [l for log in h.logs().values() for l in log.splitlines() if "[dry-run] would send span" in l]
+        print(f"dry-run spans logged: {len(spans)}" + (f" (first: {spans[0].split('] ', 1)[-1]})" if spans else ""))
+        return 0 if spans else 1
+    finally:
+        h.close()
+
+
 # --------------------------------------------------------------------------- real HTTPS
 
 
@@ -354,6 +378,8 @@ if __name__ == "__main__":
         sys.exit(diff(a[1], a[2]))
     elif a[:1] == ["sessionkey"] and len(a) == 2:
         sessionkey(a[1].split())
+    elif a[:1] == ["dryrun"] and len(a) == 2:
+        sys.exit(dryrun(a[1].split()))
     elif a[:1] == ["https"] and len(a) in (2, 3):
         https(a[1].split(), *a[2:])
     else:

@@ -23,17 +23,18 @@ Every run uses a throwaway HOME. No hook logic was changed.
 | 5 | no duplicate core packages via the `tracing/{claude_code,cursor}/core` symlinks | **pass** | **pass** | none |
 | 6 | session key with no session_id matches venv312 | **pass** | **pass** | none |
 | 7 | ad hoc sign, `--options runtime`, no entitlements: verify --strict + hooks run | **fail**: signs/verifies, then dyld refuses libpython | **fail**: same | `com.apple.security.cs.disable-library-validation`, or a real Developer ID signature |
-| 8 | universal2 build: `lipo -archs`, runs under `arch -x86_64` | **fail**: Nuitka refuses `--macos-target-arch=universal` | **fail**: builds, but libpython is arm64 only → dlopen fails under x86_64 | a universal2 CPython (python.org) to build from |
+| 8 | universal2 build: `lipo -archs`, runs under `arch -x86_64` (3.12.10 rerun, see below) | **pass**: arm64 + x86_64 builds, `lipo -create`, re-sign ad hoc | **fail**: universal2 build runs on both archs, but HTTPS gets CERTIFICATE_VERIFY_FAILED | nuitka: none (post-build merge only). pyi: `SSL_CERT_FILE` or a bundled CA file |
 | 9 | oldest supported macOS (minos) | **11.0** (both Mach-O files) | **11.0** (both Mach-O files) | none |
 
 ### Verdicts
 
-- **nuitka:** passes cleanly on 1, 2, 5, 6 and 9. 3 and 4 can't run because the product CLI doesn't expose them, and that applies equally to both tools. Fails 7 (hardened runtime with ad hoc signing; the cause isn't Nuitka-specific) and 8 (needs a universal2 interpreter). No Nuitka-specific failure.
-- **pyi-onedir:** the same results check for check: passes cleanly on 1, 2, 5, 6 and 9, n/a on 3 and 4, fails 7 and 8 for the same reasons. Unlike Nuitka, its universal2 failure is silent: the build succeeds and only crashes when run under x86_64.
+- **nuitka:** passes cleanly on 1, 2, 5, 6, 8 and 9. For 8, `build-nuitka.sh` runs unchanged once per architecture and the two outputs are merged with `lipo`. 3 and 4 can't run because the product CLI doesn't expose them, and that applies equally to both tools. Fails 7 (hardened runtime with ad hoc signing; the cause isn't Nuitka-specific). No Nuitka-specific failure.
+- **pyi-onedir:** passes cleanly on 1, 2, 5, 6 and 9, n/a on 3 and 4, fails 7 for the same reason as Nuitka. It also fails 8: the python.org universal2 build runs on both architectures, but its bundled OpenSSL only looks for CAs inside `/Library/Frameworks/Python.framework/...`, so HTTPS fails out of the box. On the uv arm64 interpreter, `--target-arch universal2` builds but crashes under x86_64.
 
-Correctness doesn't separate the two builds: every difference found is shared and comes from the
-product or the platform. So the decision goes back to speed (Nuitka, about 10 ms per hook) and to the
-check 8 trap, which also favours Nuitka. Nuitka fails loudly, while PyInstaller ships a broken "universal2".
+On the single-arch checks the two builds behave the same. Check 8 separates them: Nuitka gives a
+working universal binary with no workaround, while PyInstaller's universal2 build can't send spans
+unless someone supplies a CA path. Together with speed (Nuitka is about 10 ms faster per hook), that
+favours Nuitka.
 
 ## Details and exact commands
 
@@ -173,7 +174,7 @@ stderr for "could not load hook" and never checks the exit status.
 
 ### 8. Universal binary
 
-The only interpreters on this machine are arm64-only uv builds (`lipo -archs` → `arm64`).
+First attempt, with the original arm64-only uv 3.12.13 buildtools (`lipo -archs` → `arm64`):
 
 - Nuitka: `--macos-target-arch=universal` → `error: option --macos-target-arch: invalid choice:
   'universal' (choose from 'arm64', 'x86_64')`. No build.
@@ -183,6 +184,66 @@ The only interpreters on this machine are arm64-only uv builds (`lipo -archs` �
 - The current builds are `arm64` only and `arch -x86_64` can't spawn them.
 
 Both need a universal2 CPython (the python.org installer), or two single-arch builds merged with `lipo`.
+
+#### Rerun with 3.12.10 throughout
+
+Interpreters: uv `cpython-3.12.10-macos-aarch64-none` and `cpython-3.12.10-macos-x86_64-none`, and
+python.org's universal2 3.12.10 at `/Library/Frameworks/Python.framework/Versions/3.12` (Install
+Certificates not run). Each gets its own build-tools venv with the existing buildtools' exact pins
+(nuitka 4.3, ordered-set 4.1.0, pyinstaller 6.22.3, pyinstaller-hooks-contrib 2026.8, macholib 1.16.4,
+python-dotenv 1.2.4, plus the package). Builds run from a scratch copy of the spike checkout, so the
+existing `benchmark/builds/`, `results/` and `.workbench/` stay untouched. `arch -x86_64 sh -c arch` prints `i386`.
+
+```bash
+uv python install cpython-3.12.10-macos-aarch64-none cpython-3.12.10-macos-x86_64-none
+# (uv also linked ~/.local/bin/python3.12 to the x86_64 interpreter; removed again)
+rsync -a --exclude .git --exclude .workbench --exclude benchmark/builds --exclude benchmark/results $M/ $U8/repo/
+uv venv --no-config -p cpython-3.12.10-macos-aarch64-none $U8/bt-arm64     # and bt-x86 (x86_64), bt-pyorg (python.org)
+uv pip install --python $U8/bt-arm64/bin/python -r req.txt $U8/repo        # req.txt = the pins above
+
+# Nuitka: build-nuitka.sh unchanged, once per arch, copying each build aside
+BUILDTOOLS=$U8/bt-arm64 $U8/repo/benchmark/build-nuitka.sh < /dev/null
+cp -R $U8/repo/benchmark/builds/nuitka/arize-harness.dist $U8/nk-arm64
+arch -x86_64 /bin/bash -c "BUILDTOOLS=$U8/bt-x86 $U8/repo/benchmark/build-nuitka.sh" < /dev/null
+cp -R $U8/repo/benchmark/builds/nuitka/arize-harness.dist $U8/nk-x86
+# merge: same 4 files in both; lipo the 2 Mach-O files, cmp the rest (the two .ts files: identical)
+lipo -create nk-arm64/<f> nk-x86/<f> -output nk-u2/<f>          # arize-harness.bin, libpython3.12.dylib
+codesign --force --sign - --timestamp=none nk-u2/libpython3.12.dylib
+codesign --force --sign - --timestamp=none nk-u2/arize-harness.bin && codesign --verify --strict nk-u2/arize-harness.bin
+
+# PyInstaller: build-pyi.sh's command line plus --target-arch universal2, from the python.org Python
+$U8/bt-pyorg/bin/python -m PyInstaller --noconfirm --clean --log-level WARN --onedir --target-arch universal2 \
+  --name arize-harness --paths $U8/repo --distpath $U8/pyi-u2 ... <build_inputs.py hidden imports / data> entry.py
+
+# step 3, both builds: checks/check8.sh, natively and under arch -x86_64
+DRIVER=$U8/bt-pyorg/bin/python REPO=$U8/repo checks/check8.sh $U8/nk-u2 $U8/nk-u2/arize-harness.bin
+DRIVER=$U8/bt-pyorg/bin/python REPO=$U8/repo checks/check8.sh $U8/pyi-u2/arize-harness $U8/pyi-u2/arize-harness/arize-harness
+```
+
+`check8.sh` uses the universal2 `bt-pyorg` python as the driver. Under `arch -x86_64` the driver runs as
+x86_64, so the build it spawns does too. `hook --list` is run directly under `arch`, and its own exit
+status is checked.
+
+| | nuitka (lipo-merged) | pyi-onedir (`--target-arch universal2`) |
+|---|---|---|
+| Mach-O files, all `x86_64 arm64` | 2/2 | 49/49 (exe, Python.framework, libssl/libcrypto, 45 lib-dynload .so) |
+| native: `hook --list` exit / build_inputs check / dry-run span | 0 / 38 of 38, exit 0 / `Turn 1` logged | 0 / 38 of 38, exit 0 / `Turn 1` logged |
+| native: `equiv.py https` | **403** | **CERTIFICATE_VERIFY_FAILED** |
+| x86_64: `hook --list` exit / build_inputs check / dry-run span | 0 / 38 of 38, exit 0 / `Turn 1` logged | 0 / 38 of 38, exit 0 / `Turn 1` logged |
+| x86_64: `equiv.py https` | **403** | **CERTIFICATE_VERIFY_FAILED** |
+| minos arm64 / x86_64 | 11.0 / 10.15 | 11.0 / 10.13 (LC_VERSION_MIN_MACOSX) |
+
+PyInstaller's certificate failure comes from the interpreter, not from freezing. The python.org OpenSSL
+is built with `OPENSSLDIR "/Library/Frameworks/Python.framework/Versions/3.12/etc/openssl"`, and that
+folder is empty until Install Certificates runs. The bundled libcrypto keeps the same path. With
+`SSL_CERT_FILE=/etc/ssl/cert.pem`, both architectures get 403. On a user's Mac the build would only work
+if that user happened to have run python.org's Install Certificates. The uv interpreters' OpenSSL reads
+`/etc/ssl/cert.pem`, which is why the Nuitka build needs nothing.
+
+**Verdict:** Nuitka still passes cleanly. It needs `build-nuitka.sh` run once natively and once under
+`arch -x86_64` from uv 3.12.10, then `lipo -create` and an ad hoc re-sign: no code changes, no
+hand-written includes, no entitlements. PyInstaller onedir fails check 8 as built. It would need a CA
+path, either via `SSL_CERT_FILE` at runtime or a CA bundle shipped and wired in at build time.
 
 ### 9. Oldest supported macOS
 
