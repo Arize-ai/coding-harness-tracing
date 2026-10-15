@@ -18,18 +18,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tracing.devin.constants import DEFAULT_LOG_FILE
+from core.common import env, log, redirect_stderr_to_log_file
+from core.constants import HARNESSES, STATE_BASE_DIR
+
+# --- Module-level constants derived from HARNESSES ---
+_HARNESS = HARNESSES["devin"]
+SERVICE_NAME = _HARNESS["service_name"]  # "devin"
+SCOPE_NAME = _HARNESS["scope_name"]  # "arize-devin-plugin"
+STATE_DIR: Path = STATE_BASE_DIR / _HARNESS["state_subdir"]  # ~/.arize/harness/state/devin
 
 # Route hook stderr to a per-harness log file unless ARIZE_LOG_FILE is set.
-os.environ.setdefault("ARIZE_LOG_FILE", str(DEFAULT_LOG_FILE))
-
-from core.common import env, log, redirect_stderr_to_log_file  # noqa: E402
-from core.constants import STATE_BASE_DIR  # noqa: E402
-from tracing.devin.constants import HARNESS_NAME  # noqa: E402
+os.environ.setdefault("ARIZE_LOG_FILE", str(_HARNESS["default_log_file"]))
 
 redirect_stderr_to_log_file()
 
-STATE_DIR: Path = STATE_BASE_DIR / HARNESS_NAME
 _EMITTED_FILE_NAME = "emitted_requests.txt"
 
 

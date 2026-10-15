@@ -47,13 +47,11 @@ def _warn(message: str) -> None:
 
 def _default_log_file(harness: str) -> Path:
     """The log file a harness's adapter would set as ``ARIZE_LOG_FILE``."""
-    from core.constants import HARNESSES, LOG_DIR
+    from core.constants import HARNESSES
 
-    # HARNESSES is keyed by install.sh names (claude-code, not claude). Kiro and
-    # Devin are not in it; their adapters use LOG_DIR/<name>.log.
+    # HARNESSES is keyed by install.sh names (claude-code, not claude).
     key = next((alias for alias, name in ALIASES.items() if name == harness), harness)
-    metadata = HARNESSES.get(key)
-    return metadata["default_log_file"] if metadata else LOG_DIR / f"{key}.log"
+    return HARNESSES[key]["default_log_file"]
 
 
 def _log_path(harness: Optional[str]) -> Path:
