@@ -1,96 +1,96 @@
 #!/usr/bin/env python3
-"""results/<label>/*.json + meta.txt + first-run.txt + build_seconds -> Markdown table for the decision doc.
+"""results/bench-result.json (timing/hooks.py) -> Markdown table, one column per build.
 
-A row only gets PASS/FAIL if bench.sh recorded gate=ok (every timed Stop sent a span);
-a failed or missing gate is INVALID, since a build that does nothing is also fast.
-Build time is read from results/<label>/build_seconds if present (see run.sh).
+  timing/summarize.py [results/bench-result.json]
 
-Per-hook columns come from results/<label>/hooks.json (workload/workload.py hooks): p50 / p95
-of UserPromptSubmit, PreToolUse, PostToolUse and Stop, back to back and after an idle pause,
-plus a 20-tool turn estimate from the idle p50s. A failed hooks gate also makes the row INVALID;
-the budget rule itself still uses only the startup columns.
+A build gets PASS/FAIL only if its gate is ok: inputs.py check passed and every Stop logged a
+dry-run span. Otherwise it is INVALID, since a build that does nothing is also fast. The budget
+rule: back-to-back p95 at most BUDGET_MS slower than venv312 on SessionStart and on Stop. Every
+other number is reported, not judged.
 """
-import json, statistics, sys
+import json
+import sys
 from pathlib import Path
 
-BUDGET_MS = 25.0  # p95 may be at most this much slower than the venv baseline, on both events
-root = Path(sys.argv[1])
-
-
-def times(path):
-    r = json.loads(path.read_text())["results"][0]
-    ms = [1000 * (m["time_wall_clock"]["value"] if "measurements" in r else m)
-          for m in r.get("measurements", r.get("times", []))]
-    ms.sort()
-    return statistics.mean(ms), ms[int(0.95 * (len(ms) - 1))]
-
-
-HOOKS = (("UserPromptSubmit", "UPS"), ("PreToolUse", "Pre"), ("PostToolUse", "Post"), ("Stop", "Stop"))
+BUDGET_MS = 25.0
+BUDGET_EVENTS = ("SessionStart", "Stop")
+EVENTS = (("SessionStart", "SessionStart"), ("UserPromptSubmit", "UPS"), ("PreToolUse", "Pre"),
+          ("PostToolUse", "Post"), ("Stop", "Stop"))
 TURN_TOOLS = 20
+BENCH = Path(__file__).resolve().parent.parent
 
 
-def hook_cells(hooks):
-    """Per-hook p50 / p95 cells (back to back, then idle) and the 20-tool turn estimate."""
-    if not hooks:
-        return ["-"] * (2 * len(HOOKS) + 1)
-    cells = []
-    for mode in ("back-to-back", "idle"):
-        for event, _ in HOOKS:
-            s = hooks["modes"].get(mode, {}).get(event)
-            cells.append(f"{s['p50']:.0f} / {s['p95']:.0f}" if s else "-")
-    idle = hooks["modes"].get("idle", {})
+def verdict(name, r, base):
+    if r["gate"] != "ok":
+        why = r["error"] or ("inputs.py check failed" if r["inputs_check"] != "ok" else f"spans {r['spans']}")
+        return f"INVALID ({why})"
+    if name == "venv312":
+        return "baseline"
+    if not base:
+        return "no valid baseline"
     try:
-        turn = (idle["UserPromptSubmit"]["p50"] + TURN_TOOLS * (idle["PreToolUse"]["p50"] + idle["PostToolUse"]["p50"])
-                + idle["Stop"]["p50"])
-        cells.append(f"{turn / 1000:.2f} s")
+        slower = [r["hooks"]["b2b"][e]["p95"] - base["hooks"]["b2b"][e]["p95"] for e in BUDGET_EVENTS]
     except KeyError:
-        cells.append("-")
-    return cells
+        return "no valid baseline"
+    return "PASS" if all(d <= BUDGET_MS for d in slower) else "FAIL"
 
 
-def read(path):
-    return path.read_text().strip() if path.exists() else None
+def ms(x):
+    return "-" if x is None else f"{x:.0f}"
 
 
-rows = {}
-for d in sorted(p for p in root.iterdir() if (p / "stop.json").exists()):
-    meta_text = read(d / "meta.txt") or ""
-    meta = dict(l.split("=", 1) for l in meta_text.splitlines() if "=" in l)
-    first = read(d / "first-run.txt")
-    first_ms = max(map(float, first.split())) if first else None
-    first_ro = read(d / "first-run-ro.txt")
-    first_ro_ms = max(map(float, first_ro.split())) if first_ro else None
-    rows[d.name] = dict(start=times(d / "session-start.json"), stop=times(d / "stop.json"), first=first_ms, first_ro=first_ro_ms,
-                        build_s=read(d / "build_seconds"), **meta)
-    hooks_text = read(d / "hooks.json")
-    rows[d.name]["hooks"] = json.loads(hooks_text) if hooks_text else None
+def first(r, key):
+    f = r["first_run_ms"].get(key)
+    return f"{ms(f['p50'])} / {ms(f['max'])}" if f else "-"
 
-base = rows.get("venv312")
-if base and base.get("gate") != "ok":
-    base = None  # an invalid baseline can't judge anyone
-idle_s = next((r["hooks"]["idle_s"] for r in rows.values() if r["hooks"]), 2)
-hook_headers = [f"{short} {mode} p50 / p95 (ms)" for mode in ("b2b", f"idle {idle_s:g}s") for _, short in HOOKS]
-print("| build | SessionStart mean / p95 (ms) | Stop mean / p95 (ms) | first run, worst (ms) | first run read-only, worst (ms) | size | files "
-      "| .so/.dylib | build time (s) | budget | " + " | ".join(hook_headers) + f" | {TURN_TOOLS}-tool turn, idle (est.) |")
-print("|---|---|---|---|---|---|---|---|---|---|" + "---|" * (len(hook_headers) + 1))
-for name, r in rows.items():
-    if r.get("gate") != "ok":
-        ok = f"INVALID (spans {r.get('spans', 'unknown')})"
-    elif r["hooks"] and r["hooks"].get("gate") != "ok":
-        ok = f"INVALID (hook spans {r['hooks'].get('spans', 'unknown')})"
-    elif name == "venv312":
-        ok = "baseline"
-    elif not base:
-        ok = "no valid baseline"
-    else:
-        ok = "PASS" if all(r[e][1] - base[e][1] <= BUDGET_MS for e in ("start", "stop")) else "FAIL"
-    first = f"{r['first']:.0f}" if r["first"] is not None else "-"
-    first_ro = f"{r['first_ro']:.0f}" if r["first_ro"] is not None else "-"
-    print(f"| {name} | {r['start'][0]:.1f} / {r['start'][1]:.1f} | {r['stop'][0]:.1f} / {r['stop'][1]:.1f} "
-          f"| {first} | {first_ro} | {r.get('size', '-')} | {r.get('files', '-')} | {r.get('native_libs', '-')} "
-          f"| {r['build_s'] or '-'} | {ok} | " + " | ".join(hook_cells(r["hooks"])) + " |")
-print()
-print(f"Budget: warm p95 at most {BUDGET_MS:.0f} ms slower than venv312 on both events. "
-      "First-run times are reported, not judged against it.")
-print(f"Per-hook columns: {TURN_TOOLS}-tool turn = UPS + {TURN_TOOLS}×Pre + {TURN_TOOLS}×Post + Stop, idle p50s; "
-      "reported, not judged against the budget.")
+
+def hook(r, mode, event):
+    s = r["hooks"].get(mode, {}).get(event)
+    return f"{ms(s['p50'])} / {ms(s['p95'])}" if s else "-"
+
+
+def turn(r):
+    idle = r["hooks"].get("idle", {})
+    try:
+        t = (idle["UserPromptSubmit"]["p50"] + TURN_TOOLS * (idle["PreToolUse"]["p50"] + idle["PostToolUse"]["p50"])
+             + idle["Stop"]["p50"])
+    except KeyError:
+        return "-"
+    return f"{t / 1000:.2f} s"
+
+
+def main():
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else BENCH / "results" / "bench-result.json"
+    res = json.loads(path.read_text())
+    builds = res["builds"]
+    base = builds.get("venv312")
+    if base and base["gate"] != "ok":
+        base = None  # an invalid baseline can't judge anyone
+    idle_s = res["config"]["idle_s"]
+    rows = [
+        ("budget", lambda n, r: verdict(n, r, base)),
+        ("size / files / .so+.dylib", lambda n, r: f"{r['size_bytes'] / 2**20:.0f}M / {r['files']} / {r['native_libs']}"),
+        ("build time (s)", lambda n, r: ms(r["build_s"])),
+        ("first run, writable: p50 / worst (ms)", lambda n, r: first(r, "writable")),
+        ("first run, read-only: p50 / worst (ms)", lambda n, r: first(r, "readonly")),
+    ]
+    for mode, title in (("b2b", "back to back"), ("idle", f"after {idle_s:g} s idle")):
+        for event, short in EVENTS:
+            rows.append((f"{short} {title}: p50 / p95 (ms)", lambda n, r, m=mode, e=event: hook(r, m, e)))
+    rows.append((f"{TURN_TOOLS}-tool turn, idle p50s (est.)", lambda n, r: turn(r)))
+
+    print(f"Python {res['python']}, Nuitka {res['nuitka']}, commit {res['commit'][:12] or '?'}, "
+          f"{res['config']['runs']} runs per event and mode, {res['config']['warmup']} b2b warmups, "
+          f"macOS {res['config']['macos']} {res['config']['machine']}.\n")
+    print("| | " + " | ".join(builds) + " |")
+    print("|---|" + "---|" * len(builds))
+    for title, cell in rows:
+        print(f"| {title} | " + " | ".join(cell(n, r) for n, r in builds.items()) + " |")
+    print()
+    print(f"Budget: back-to-back p95 at most {BUDGET_MS:.0f} ms slower than venv312 on {' and '.join(BUDGET_EVENTS)}. "
+          "First runs and idle numbers are reported, not judged.")
+    print(f"{TURN_TOOLS}-tool turn = UPS + {TURN_TOOLS}×Pre + {TURN_TOOLS}×Post + Stop, idle p50s.")
+
+
+if __name__ == "__main__":
+    main()

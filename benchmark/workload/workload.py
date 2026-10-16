@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-turn cost of the Claude Code hooks on one fixed install (venv312). Measurement only.
 
-The packaging comparison in benchmark/ times startup (SessionStart, a near-empty Stop).
+The packaging comparison (timing/hooks.py) times each hook once per call on each build.
 This measures the costs that grow with real use and that no packaging format changes:
 
   concurrency  N parallel PreToolUse/PostToolUse pairs on one session (lock waits)
@@ -9,7 +9,6 @@ This measures the costs that grow with real use and that no packaging format cha
   transcript   UserPromptSubmit/Stop with large session transcripts
   invocation   the same event via run-hook, its venv launcher, the console script, arize-harness
   idle         back-to-back runs vs runs after 0.5/2/5 s of idle
-  hooks        UPS/Pre/Post/Stop on any build (--cmd), back to back and idle -> results/<label>/hooks.json
   network      dry-run off: local sink, real endpoint + fake key, refused port, blackholed IP
   replay       a recorded turn's hook sequence with its real gaps, with and without hooks
 
@@ -35,7 +34,6 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE.parent / "results" / "workload"
 sys.path.insert(0, str(HERE.parent / "timing"))
 from harness import BUFFER_KEY, KB, Harness, fmt, pct, summary, turn_lines  # noqa: E402
-from hooks import per_hook  # noqa: E402
 
 
 
@@ -489,7 +487,7 @@ def replay(args):
 
 
 SCENARIOS = {"concurrency": concurrency, "buffer": buffer_growth, "transcript": transcript_size,
-             "invocation": invocation, "idle": idle_gap, "hooks": per_hook, "network": network, "replay": replay}
+             "invocation": invocation, "idle": idle_gap, "network": network, "replay": replay}
 
 
 def main():
@@ -499,13 +497,8 @@ def main():
     ap.add_argument("--quick", action="store_true", help="few reps, small sizes: check the harness works")
     ap.add_argument("--transcript", help="replay: a recorded Claude Code transcript")
     ap.add_argument("--max-gap", type=float, default=5.0, help="replay: cap each inter-hook gap (s); 0 = none")
-    ap.add_argument("--cmd", help="hooks: a build's executable, run as `<cmd> hook claude <event>`")
-    ap.add_argument("--label", help="hooks: build label; results go to <results>/<label>/hooks.json")
-    ap.add_argument("--results", default=str(HERE.parent / "results"), help="hooks: results root")
-    ap.add_argument("--runs", type=int, default=30, help="hooks: timed runs per hook per mode")
-    ap.add_argument("--idle", type=float, default=2.0, help="hooks: idle seconds before each idle-mode call")
     args = ap.parse_args()
-    if args.scenario != "hooks" and not (Path(args.venv) / "bin" / "arize-harness").exists():
+    if not (Path(args.venv) / "bin" / "arize-harness").exists():
         raise SystemExit(f"no venv312 install at {args.venv}: build one with setup.sh or pass --venv")
     SCENARIOS[args.scenario](args)
 
