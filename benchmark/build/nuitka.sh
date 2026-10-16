@@ -13,6 +13,7 @@ EXE=$DEST/arize-harness.bin
 . "$HERE/common.sh"
 
 SECONDS=0
+buildtools arm64
 clean_dest "$DIST"
 ARGS=()
 while read -r m; do ARGS+=("--include-module=$m"); done < <(inputs modules)

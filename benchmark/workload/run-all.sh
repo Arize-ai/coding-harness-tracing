@@ -7,13 +7,13 @@
 # requests with a fake key to otlp.arize.com (expect 401); SKIP_REMOTE=1 skips it.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-REPO=$(cd "$HERE/../.." && pwd)
 OUT=$HERE/../results/workload
 export VENV=${VENV:-$HERE/../builds/venv312}
 if [ ! -x "$VENV/bin/arize-harness" ]; then
   # A venv path over ~127 bytes gets a /bin/sh shim instead of a shebang, which adds one exec
   # per hook; prefer a short VENV path when comparing against benchmark/ numbers.
-  uv venv -q -p 3.12 "$VENV" && uv pip install -q --python "$VENV/bin/python" "$REPO"
+  [ "$VENV" = "$HERE/../builds/venv312" ] || { echo "no arize-harness in VENV=$VENV" >&2; exit 1; }
+  "$HERE/../build/venv.sh"
 fi
 mkdir -p "$OUT"
 SCENARIOS=(concurrency buffer transcript invocation idle network)
