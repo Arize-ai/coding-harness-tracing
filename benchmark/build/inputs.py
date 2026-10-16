@@ -9,7 +9,8 @@
   inputs.py hooks           the exact `arize-harness hook --list` output a complete build must print
   inputs.py check EXE       smoke-test a build: `hook --list` must match `hooks` exactly, and every
                             hook must load (--list only prints the table, which is plain data, so a
-                            build missing every handler still passes it). Exit 1 on any failure.
+                            build missing every handler still passes it) and exit 0: a crash, a
+                            signal or a timeout is a failure too. Exit 1 on any failure.
 """
 import os
 import shutil
@@ -58,23 +59,43 @@ def check(exe):
     home = tempfile.mkdtemp()
     # Tracing off: handlers return right after loading. Dry-run in case one doesn't check.
     env = dict(os.environ, HOME=home, ARIZE_TRACE_ENABLED="false", ARIZE_DRY_RUN="true")
-    run = lambda *a: subprocess.run([exe, "hook", *a], cwd=home, env=env, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=30)
-    failures = load_failures = 0
-    listed = run("--list").stdout.splitlines()
+    exe = os.path.abspath(exe)  # the hooks run from the throwaway HOME
+
+    def run(*a):
+        """(CompletedProcess or None, problem). problem is None only for exit 0: a crashing build
+        prints nothing about loading, so its exit status is the only sign that it failed."""
+        try:
+            p = subprocess.run([exe, "hook", *a], cwd=home, env=env, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired as e:
+            return None, f"timed out after {e.timeout:g} s"
+        if p.returncode == 0:
+            return p, None
+        how = f"exit {p.returncode}" if p.returncode > 0 else f"killed by signal {-p.returncode}"
+        last = p.stderr.strip().splitlines()[-1:]
+        return p, how + (f": {last[0]}" if last else "")
+
+    failures = bad_hooks = 0
+    p, problem = run("--list")
+    if problem:
+        failures += 1
+        print(f"check: hook --list: {problem}", file=sys.stderr)
+    listed = [] if problem else p.stdout.splitlines()
     if listed != hooks():
         failures += 1
         print("check: hook --list does not match iter_hooks()", file=sys.stderr)
         for line in sorted(set(hooks()) ^ set(listed)):
             print(f"  {'missing' if line in hooks() else 'extra'}: {line}", file=sys.stderr)
     for hook in hooks():
-        err = run(*hook.split()).stderr
-        if "could not load hook" in err:
+        p, problem = run(*hook.split())
+        if not problem and "could not load hook" in p.stderr:
+            problem = p.stderr.strip().splitlines()[-1]
+        if problem:
             failures += 1
-            load_failures += 1
-            print(f"check: {hook}: {err.strip().splitlines()[-1]}", file=sys.stderr)
+            bad_hooks += 1
+            print(f"check: {hook}: {problem}", file=sys.stderr)
     shutil.rmtree(home, ignore_errors=True)
-    print(f"check: {len(listed)} hooks listed, {len(hooks()) - load_failures}/{len(hooks())} loaded, "
+    print(f"check: {len(listed)} hooks listed, {len(hooks()) - bad_hooks}/{len(hooks())} loaded and exited 0, "
           f"{failures} failure(s)")
     return 1 if failures else 0
 
