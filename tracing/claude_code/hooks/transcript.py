@@ -69,6 +69,12 @@ def parse_claude_transcript(
             continue
         if not isinstance(entry, dict):
             continue
+        # Claude Code 2.1.3xx also records the request it replays to the model
+        # ("api-request-blob"), with copies of earlier tool_use and tool_result
+        # blocks. Only conversation records are events; the replay would
+        # duplicate every tool as a pending span under an empty model call.
+        if entry.get("type") not in (None, "assistant", "user"):
+            continue
 
         message = entry.get("message")
         if not isinstance(message, dict):
