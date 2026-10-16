@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """What a frozen build must include, generated from the code so a new hook can't be left out.
 
-  build_inputs.py modules   every module imported by name at runtime, one per line:
+  inputs.py modules         every module imported by name at runtime, one per line:
                             each hook target in core/hook_table.py iter_hooks(), plus the
                             core.setup.status registration modules (status.py:62)
-  build_inputs.py data      data files found via __file__, as "<abs source>\t<dest in bundle>";
+  inputs.py data            data files found via __file__, as "<abs source>\t<dest in bundle>";
                             a listed path that doesn't exist is reported on stderr, not skipped silently
-  build_inputs.py hooks     the exact `arize-harness hook --list` output a complete build must print
-  build_inputs.py check EXE smoke-test a build: `hook --list` must match `hooks` exactly, and every
+  inputs.py hooks           the exact `arize-harness hook --list` output a complete build must print
+  inputs.py check EXE       smoke-test a build: `hook --list` must match `hooks` exactly, and every
                             hook must load (--list only prints the table, which is plain data, so a
                             build missing every handler still passes it). Exit 1 on any failure.
 """
@@ -18,7 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO))
 
 from core.hook_table import iter_hooks  # noqa: E402

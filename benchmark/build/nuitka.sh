@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Build the Nuitka standalone candidate from benchmark/entry.py.
-#   build-nuitka.sh -> builds/nuitka/arize-harness.dist/arize-harness.bin
-# Modules and data files come from build_inputs.py, never by hand. Nuitka's build
+# Build the Nuitka standalone candidate from benchmark/build/entry.py.
+#   build/nuitka.sh -> builds/nuitka/arize-harness.dist/arize-harness.bin
+# Modules and data files come from inputs.py, never by hand. Nuitka's build
 # directory and compilation report go to .workbench/nuitka/.
 set -euo pipefail
-HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/.." && pwd)
+HERE=$(cd "$(dirname "$0")" && pwd); BENCH=$(cd "$HERE/.." && pwd); REPO=$(cd "$BENCH/.." && pwd)
 LABEL=nuitka
-DIST=$HERE/builds/nuitka
+DIST=$BENCH/builds/nuitka
 DEST=$DIST/arize-harness.dist
 EXE=$DEST/arize-harness.bin
-# shellcheck source=build-common.sh
-. "$HERE/build-common.sh"
+# shellcheck source=common.sh
+. "$HERE/common.sh"
 
 SECONDS=0
 clean_dest "$DIST"

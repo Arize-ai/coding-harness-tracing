@@ -3,7 +3,7 @@
 
 A row only gets PASS/FAIL if bench.sh recorded gate=ok (every timed Stop sent a span);
 a failed or missing gate is INVALID, since a build that does nothing is also fast.
-Build time is read from results/<label>/build_seconds if present (see run-all.sh).
+Build time is read from results/<label>/build_seconds if present (see run.sh).
 
 Per-hook columns come from results/<label>/hooks.json (workload/workload.py hooks): p50 / p95
 of UserPromptSubmit, PreToolUse, PostToolUse and Stop, back to back and after an idle pause,

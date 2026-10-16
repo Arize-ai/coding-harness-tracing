@@ -8,8 +8,8 @@
 #   SECONDS=0; <build command>; mkdir -p results/nuitka; echo $SECONDS > results/nuitka/build_seconds
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-B=${BUILDS:-$HERE/builds}
-RESULTS=${RESULTS:-$HERE/results}  # hooks.json and table.md; bench.sh/first-run.sh always use $HERE/results
+B=${BUILDS:-$HERE/../builds}
+RESULTS=${RESULTS:-$HERE/../results}  # hooks.json and table.md; bench.sh/first-run.sh always use benchmark/results
 #        label        build dir                     executable inside it
 CANDIDATES=(
   "venv312      $B/venv312                    bin/arize-harness"
@@ -27,7 +27,7 @@ for row in "${CANDIDATES[@]}"; do
   read -r label dir exe <<<"$row"
   [ -x "$dir/$exe" ] || { echo "== $label: not built, skipping"; continue; }
   if [ -n "${HOOKS_ONLY:-}" ]; then
-    python3 "$HERE/workload/workload.py" hooks --cmd "$dir/$exe" --label "$label" --results "$RESULTS" \
+    python3 "$HERE/../workload/workload.py" hooks --cmd "$dir/$exe" --label "$label" --results "$RESULTS" \
       || echo "== $label: hooks gate failed (INVALID)"
     continue
   fi
@@ -35,7 +35,7 @@ for row in "${CANDIDATES[@]}"; do
   BUILD_ROOT=$dir "$HERE/bench.sh" "$label" "$dir/$exe" || { echo "== $label: INVALID, skipping first run"; continue; }
   "$HERE/first-run.sh" "$label" "$dir" "$exe"
   READONLY=1 "$HERE/first-run.sh" "$label" "$dir" "$exe"
-  [ -n "${SKIP_HOOKS:-}" ] || python3 "$HERE/workload/workload.py" hooks --cmd "$dir/$exe" --label "$label" \
+  [ -n "${SKIP_HOOKS:-}" ] || python3 "$HERE/../workload/workload.py" hooks --cmd "$dir/$exe" --label "$label" \
     --results "$RESULTS" || echo "== $label: hooks gate failed (INVALID)"
 done
 "$HERE/summarize.py" "$RESULTS" > "$RESULTS/table.md" && cat "$RESULTS/table.md"

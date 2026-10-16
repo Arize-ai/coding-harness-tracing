@@ -14,7 +14,7 @@
 # first run; only self-contained builds give a meaningful one.
 set -euo pipefail
 LABEL=$1; BUILD=$2; EXE=$3; TRIALS=${4:-5}
-HERE=$(cd "$(dirname "$0")" && pwd); OUT=$HERE/results/$LABEL; mkdir -p "$OUT"
+HERE=$(cd "$(dirname "$0")" && pwd); OUT=$HERE/../results/$LABEL; mkdir -p "$OUT"
 RESULT=$OUT/first-run.txt; [ "${READONLY:-}" = 1 ] && RESULT=$OUT/first-run-ro.txt
 FAKE_HOME=$(mktemp -d); WORK=$(mktemp -d)
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$FAKE_HOME" "$WORK"' EXIT
