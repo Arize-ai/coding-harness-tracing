@@ -39,6 +39,10 @@ def parse_claude_transcript(
     models_by_message_id: dict[str, ModelCallEvent] = {}
     agent_id = root_event.agent_id if isinstance(root_event, AgentEvent) else None
     sequence = root_event.sequence + 1
+    # The transcript stamps a model response only when it arrives. Its request
+    # went out at the previous conversation record (the prompt, the last tool
+    # result, or the previous response), so that is when the call started.
+    request_ms = _valid_ms(root_event.started_at_ms)
 
     try:
         lines = transcript.read_text(encoding="utf-8").splitlines()
@@ -68,6 +72,12 @@ def parse_claude_transcript(
             )
             continue
         if not isinstance(entry, dict):
+            continue
+        # Claude Code 2.1.3xx also records the request it replays to the model
+        # ("api-request-blob"), with copies of earlier tool_use and tool_result
+        # blocks. Only conversation records are events; the replay would
+        # duplicate every tool as a pending span under an empty model call.
+        if entry.get("type") not in (None, "assistant", "user"):
             continue
 
         message = entry.get("message")
@@ -109,13 +119,16 @@ def parse_claude_transcript(
             # stay one-event-per-record (also preserves assistant-line-* ids).
             model_event = models_by_message_id.get(message_id) if message_id else None
             if model_event is None:
+                started_at_ms = timestamp_ms
+                if timestamp_ms is not None and request_ms is not None and request_ms <= timestamp_ms:
+                    started_at_ms = request_ms
                 model_event = ModelCallEvent(
                     event_id=event_id,
                     parent_event_id=root_event.event_id,
                     session_id=_string(entry.get("sessionId")) or root_event.session_id,
                     turn_id=root_event.turn_id,
                     sequence=sequence,
-                    started_at_ms=timestamp_ms,
+                    started_at_ms=started_at_ms,
                     ended_at_ms=timestamp_ms,
                     status=EventStatus.COMPLETED,
                     input=None,
@@ -145,6 +158,8 @@ def parse_claude_transcript(
                 existing_total = model_event.usage.total_tokens if model_event.usage else -1
                 if record_usage.total_tokens > existing_total:
                     model_event.usage = record_usage
+            if timestamp_ms is not None:
+                request_ms = timestamp_ms
 
             for block in _content_blocks(content):
                 if block.get("type") != "tool_use":
@@ -184,6 +199,8 @@ def parse_claude_transcript(
 
         elif role == "user":
             result_timestamp_ms = _timestamp_ms(entry.get("timestamp"))
+            if result_timestamp_ms is not None:
+                request_ms = result_timestamp_ms
             for block in _content_blocks(message.get("content")):
                 if block.get("type") != "tool_result":
                     continue
@@ -304,6 +321,12 @@ def _optional_nonnegative_int(value: Any) -> int | None:
     if value is None:
         return None
     return _nonnegative_int(value)
+
+
+def _valid_ms(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return int(value)
 
 
 def _timestamp_ms(value: Any) -> int | None:
