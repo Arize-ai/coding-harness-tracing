@@ -1,26 +1,22 @@
 #!/usr/bin/env bash
-# Install smoke test: build a wheel from this checkout, install it with the real
-# user installer (install.sh --wheel-dir --non-interactive) into a throwaway
-# HOME, then check status, update and uninstall. The Linux and macOS
-# counterpart of the windows-offline job in .github/workflows/ci.yml. CI's
-# unix-offline and linux-distro-offline jobs run this same script.
+# Install smoke test: build a wheel from this checkout, install it with
+# install.sh --wheel-dir --non-interactive into a throwaway HOME, then check
+# status, update and uninstall. CI's unix-offline and linux-distro-offline jobs
+# run this script.
 #
 #   scripts/smoke-install.sh [harness]      harness defaults to claude
 #
 #   UV_PYTHON=3.9   build and install with this Python, as CI does
-#   SMOKE_KEEP=1    skip the uninstall and keep the throwaway HOME to inspect
+#   SMOKE_KEEP=1    skip the uninstall and keep the throwaway HOME
 #
-# Your real ~/.claude, ~/.arize and the checkout itself are never written to.
-# See "Testing an install locally" in CONTRIBUTING.md.
+# Never writes to your ~/.claude, ~/.arize or the checkout. See CONTRIBUTING.md.
 set -euo pipefail
 
 HARNESS="${1:-claude}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEEP="${SMOKE_KEEP:-}"
 
-# With SMOKE_KEEP=1, pass or fail, say where the install is and how to look at
-# it. The HOME it names is the throwaway one, not the shell's. A run that fails
-# before install.sh has nothing to run status against, so only the work dir.
+# With SMOKE_KEEP=1, print where the install is and how to inspect it.
 kept() {
     [[ -n "${work:-}" ]] || return 0
     local inst="$work/home/.arize/harness/install.sh"
@@ -47,13 +43,10 @@ command -v uv >/dev/null || die "uv not found. Install it: https://docs.astral.s
 work="$(mktemp -d "${TMPDIR:-/tmp}/smoke-install.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
 [[ "$KEEP" == 1 ]] || trap 'rm -rf "$work"' EXIT
-# Run everything from the work dir. tracing/copilot/install.py writes
-# .github/hooks/hooks.json under the cwd, and from the repo root that would
-# land in this repo's .github/hooks/.
+# copilot's installer writes .github/hooks/ under the cwd; stay out of the repo.
 cd "$work"
 
-# install.sh takes the first python3 on PATH, so put the chosen interpreter
-# there. Otherwise UV_PYTHON would reach the build but not the installed venv.
+# install.sh uses the first python3 on PATH, so put UV_PYTHON's there.
 if [[ -n "${UV_PYTHON:-}" ]]; then
     py="$(uv python find "$UV_PYTHON" 2>/dev/null)" ||
         { uv python install "$UV_PYTHON" && py="$(uv python find "$UV_PYTHON")"; } ||
@@ -67,13 +60,9 @@ fi
 echo "smoke-install: $HARNESS with $("$py" --version 2>&1) ($py)"
 
 step "building the wheel"
-# setuptools leaves build/ and *.egg-info next to pyproject.toml. They are
-# gitignored, so git status would not show them, so build a copy instead of the
-# checkout. tar keeps the tracing/*/core symlinks as symlinks.
-# .git, venvs, build and dist are skipped at the checkout root only, so a
-# nested directory that happens to share one of those names still reaches the
-# wheel. That is done by listing the root here: macOS tar ignores a ./ anchor
-# on --exclude and would drop the nested ones too.
+# Build from a copy, so build/ and *.egg-info never land in the checkout.
+# Root-level dirs are filtered here rather than with tar --exclude, which on
+# macOS would also drop nested dirs with the same names.
 mkdir -p "$work/src" "$work/wheels"
 top=()
 shopt -s dotglob nullglob
@@ -87,28 +76,18 @@ uv build --quiet --wheel --out-dir "$work/wheels" "$work/src" || die "uv build f
 wheel=("$work/wheels"/*.whl)
 [[ ${#wheel[@]} -eq 1 && -f "${wheel[0]}" ]] || die "expected exactly one wheel in $work/wheels"
 
-# install.sh --wheel-dir installs with --no-index, so every dependency has to be
-# in the folder. Resolve them from the built wheel, so a dependency added to
-# pyproject.toml is picked up here too. certifi is not a package dependency, but
-# install.sh installs it for the macOS SSL fix; without it the install only warns,
-# so CI would never notice.
-# A uv-created venv has no pip, and python3 is one whenever .venv is active or
-# this script runs under `uv run`. Download through an ephemeral pip instead.
+# --wheel-dir installs with --no-index, so fetch the wheel's dependencies plus
+# certifi (install.sh adds it on macOS, and only warns if missing). Uses an
+# ephemeral pip, since a uv-created venv has none.
 uv run --quiet --python "$py" --with pip --no-project --isolated \
     python -m pip download --quiet --disable-pip-version-check \
     --only-binary :all: -d "$work/wheels" "${wheel[0]}" certifi ||
     die "could not download the dependency wheels"
 ls -1 "$work/wheels"
 
-# Every per-user path now points at the throwaway HOME. Also drop settings that
-# would send the installer elsewhere or change what it does. The PYTHON* and
-# PIP_* settings would let the installed venv load code or packages from outside
-# the wheel, for example the checkout on PYTHONPATH, and hide a module the wheel
-# is missing. UV_PYTHON stays: it picks the interpreter on purpose.
-# PIP_CONFIG_FILE=/dev/null also stops pip reading the global and site config
-# files, such as /etc/pip.conf, whose find-links could supply a wheel missing
-# from the wheel dir. Set after the download, so a configured mirror still works
-# there.
+# Use the throwaway HOME, and drop settings that could load code or wheels from
+# outside the wheel dir (PYTHONPATH, PIP_*, pip.conf) and hide a broken wheel.
+# Done after the download, so a pip mirror still works there. UV_PYTHON stays.
 export HOME="$work/home"
 mkdir -p "$HOME"
 unset CODEX_HOME DEVIN_PROJECT_DIR PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE VIRTUAL_ENV
@@ -128,10 +107,8 @@ step "checking the install"
     { rc=$?; cat "$work/status.json"; die "status --json exited $rc (1 = nothing configured, 2 = hooks missing)"; }
 echo "status --json: healthy"
 
-# Exit 0 only says every configured harness is wired up. Check that the one
-# under test is among them, with its hooks confirmed rather than unknown. The
-# config key is the CLI name for every harness except claude (see harness_dir
-# in install.sh).
+# Exit 0 only means the configured harnesses are healthy, so also check this one
+# is listed with its hooks registered. claude's config key is claude-code.
 config_key="$HARNESS"
 [[ "$HARNESS" == claude ]] && config_key=claude-code
 "$py" - "$work/status.json" "$config_key" <<'EOF' ||
