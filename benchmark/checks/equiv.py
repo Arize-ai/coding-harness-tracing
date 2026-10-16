@@ -27,8 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "workload"))
-from workload import turn_lines  # noqa: E402  (same Claude v2 transcript the workload uses)
+sys.path.insert(0, str(HERE.parent / "timing"))
+from harness import turn_lines  # noqa: E402  (same Claude v2 transcript the workload uses)
 
 SID = "equiv-session"
 KB = 1024
