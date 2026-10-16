@@ -24,8 +24,8 @@ import sys
 from typing import Any
 
 from core.common import build_span, env, generate_span_id, generate_trace_id, log, redact_content, send_span
-from tracing.devin.constants import SCOPE_NAME, SERVICE_NAME, SESSIONS_DB
-from tracing.devin.hooks.adapter import already_emitted, check_requirements, mark_emitted
+from tracing.devin.constants import SESSIONS_DB
+from tracing.devin.hooks.adapter import SCOPE_NAME, SERVICE_NAME, already_emitted, check_requirements, mark_emitted
 from tracing.devin.session_db import (
     LlmStep,
     connect_readonly,

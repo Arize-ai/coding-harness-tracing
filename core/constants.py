@@ -91,6 +91,20 @@ HARNESSES: dict[str, HarnessMetadata] = {
         "state_subdir": "omp",
         "default_log_file": LOG_DIR / "omp.log",
     },
+    "kiro": {
+        "service_name": "kiro",
+        "scope_name": "arize-kiro-plugin",
+        "default_project_name": "kiro",
+        "state_subdir": "kiro",
+        "default_log_file": LOG_DIR / "kiro.log",
+    },
+    "devin": {
+        "service_name": "devin",
+        "scope_name": "arize-devin-plugin",
+        "default_project_name": "devin",
+        "state_subdir": "devin",
+        "default_log_file": LOG_DIR / "devin.log",
+    },
 }
 
 # model-name substring -> OpenInference llm.system well-known value

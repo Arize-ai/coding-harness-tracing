@@ -9,11 +9,6 @@ from pathlib import Path
 HARNESS_NAME = "devin"
 DISPLAY_NAME = "Devin"
 
-# Self-contained service/scope identity (Kiro pattern — not in core HARNESSES).
-SERVICE_NAME = "devin"
-SCOPE_NAME = "arize-devin-plugin"
-DEFAULT_PROJECT_NAME = "devin"
-
 HARNESS_BIN = "devin"  # binary name for shutil.which() fallback
 
 
@@ -77,5 +72,3 @@ HOOK_BIN_NAME = "arize-hook-devin"
 # Stop fires per agent response (per-turn emission); SessionEnd is a final
 # flush for an interrupted last turn. Both dispatch to the same hook binary.
 HOOK_EVENTS = ("Stop", "SessionEnd")
-
-DEFAULT_LOG_FILE = Path.home() / ".arize" / "harness" / "logs" / "devin.log"
