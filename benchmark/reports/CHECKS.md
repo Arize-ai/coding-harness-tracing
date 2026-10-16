@@ -1,3 +1,5 @@
+> Commands and paths in this report refer to the tag `spike/binary-packaging-90274` (b590564), not to the current `benchmark/` layout.
+
 # Binary spike: correctness checks (Arize-ai/arize#90274)
 
 Builds under test, both made by the spike's `benchmark/build-nuitka.sh` / `build-pyi.sh` (on

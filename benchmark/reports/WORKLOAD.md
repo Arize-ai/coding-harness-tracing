@@ -1,3 +1,5 @@
+> Commands and paths in this report refer to the tag `spike/binary-packaging-90274` (b590564), not to the current `benchmark/` layout.
+
 # Per-turn hook cost (Claude Code, venv312)
 
 This follows up the binary feasibility spike (Arize-ai/arize#90274). `benchmark/run-all.sh` compares

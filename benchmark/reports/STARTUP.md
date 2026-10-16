@@ -1,3 +1,5 @@
+> Commands and paths in this report refer to the tag `spike/binary-packaging-90274` (b590564), not to the current `benchmark/` layout.
+
 | build | SessionStart mean / p95 (ms) | Stop mean / p95 (ms) | first run, worst (ms) | first run read-only, worst (ms) | size | files | .so/.dylib | build time (s) | budget | UPS b2b p50 / p95 (ms) | Pre b2b p50 / p95 (ms) | Post b2b p50 / p95 (ms) | Stop b2b p50 / p95 (ms) | UPS idle 2s p50 / p95 (ms) | Pre idle 2s p50 / p95 (ms) | Post idle 2s p50 / p95 (ms) | Stop idle 2s p50 / p95 (ms) | 20-tool turn, idle (est.) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | nuitka | 37.6 / 39.3 | 40.3 / 42.5 | 692 | 555 |  27M | 4 | 1 | 36 | PASS | 42 / 43 | 40 / 48 | 42 / 45 | 45 / 60 | 65 / 72 | 65 / 70 | 65 / 68 | 64 / 68 | 2.72 s |
