@@ -3,7 +3,7 @@
 # user installer (install.sh --wheel-dir --non-interactive) into a throwaway
 # HOME, then check status, update and uninstall. The Linux and macOS
 # counterpart of the windows-offline job in .github/workflows/ci.yml. CI's
-# install-smoke job runs this same script.
+# unix-offline and linux-distro-offline jobs run this same script.
 #
 #   scripts/smoke-install.sh [harness]      harness defaults to claude
 #
@@ -18,7 +18,28 @@ HARNESS="${1:-claude}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEEP="${SMOKE_KEEP:-}"
 
-die() { echo "smoke-install: FAIL: $*" >&2; exit 1; }
+# With SMOKE_KEEP=1, pass or fail, say where the install is and how to look at
+# it. The HOME it names is the throwaway one, not the shell's. A run that fails
+# before install.sh has nothing to run status against, so only the work dir.
+kept() {
+    [[ -n "${work:-}" ]] || return 0
+    local inst="$work/home/.arize/harness/install.sh"
+    if [[ -x "$inst" ]]; then
+        echo "  HOME=$work/home"
+        echo "  HOME=\"$work/home\" \"$inst\" status"
+    else
+        echo "  $work (nothing installed yet)"
+    fi
+    echo "  rm -rf \"$work\""
+}
+die() {
+    echo "smoke-install: FAIL: $*" >&2
+    if [[ "$KEEP" == 1 && -n "${work:-}" ]]; then
+        echo "smoke-install: kept for inspection" >&2
+        kept >&2
+    fi
+    exit 1
+}
 step() { echo; echo "smoke-install: $*"; }
 
 command -v uv >/dev/null || die "uv not found. Install it: https://docs.astral.sh/uv/"
@@ -80,11 +101,19 @@ uv run --quiet --python "$py" --with pip --no-project --isolated \
 ls -1 "$work/wheels"
 
 # Every per-user path now points at the throwaway HOME. Also drop settings that
-# would send the installer elsewhere or change what it does.
+# would send the installer elsewhere or change what it does. The PYTHON* and
+# PIP_* settings would let the installed venv load code or packages from outside
+# the wheel, for example the checkout on PYTHONPATH, and hide a module the wheel
+# is missing. UV_PYTHON stays: it picks the interpreter on purpose.
+# PIP_CONFIG_FILE=/dev/null also stops pip reading the global and site config
+# files, such as /etc/pip.conf, whose find-links could supply a wheel missing
+# from the wheel dir. Set after the download, so a configured mirror still works
+# there.
 export HOME="$work/home"
 mkdir -p "$HOME"
-unset CODEX_HOME DEVIN_PROJECT_DIR
-while IFS= read -r var; do unset "$var"; done < <(compgen -v | grep -E '^(ARIZE|PHOENIX|OTEL)_' || true)
+unset CODEX_HOME DEVIN_PROJECT_DIR PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE VIRTUAL_ENV
+while IFS= read -r var; do unset "$var"; done < <(compgen -v | grep -E '^(ARIZE|PHOENIX|OTEL|PIP)_' || true)
+export PIP_CONFIG_FILE=/dev/null
 
 creds="$work/creds.env"
 printf '%s\n' ARIZE_API_KEY=ci-not-a-real-key ARIZE_SPACE_ID=ci-space > "$creds"
@@ -132,13 +161,9 @@ grep -q "no source tree to update" "$work/update.log" ||
 echo "update refused, as intended"
 
 if [[ "$KEEP" == 1 ]]; then
-    cat <<EOF
-
-smoke-install: OK ($HARNESS), kept for inspection (uninstall skipped)
-  HOME=$HOME
-  HOME="$HOME" "$installed/install.sh" status
-  rm -rf "$work"
-EOF
+    echo
+    echo "smoke-install: OK ($HARNESS), kept for inspection (uninstall skipped)"
+    kept
     exit 0
 fi
 

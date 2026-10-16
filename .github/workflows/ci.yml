@@ -39,8 +39,8 @@ jobs:
   # The Linux and macOS counterpart of windows-offline: builds the wheel and
   # runs the real install.sh --wheel-dir into a throwaway HOME. Developers run
   # the same script locally, so a failure here reproduces with one command.
-  install-smoke:
-    name: Install smoke (${{ matrix.os }}, ${{ matrix.harness }})
+  unix-offline:
+    name: Unix offline install (install.sh --wheel-dir, ${{ matrix.os }}, ${{ matrix.harness }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -61,6 +61,27 @@ jobs:
 
       - name: Smoke-test install.sh
         run: scripts/smoke-install.sh ${{ matrix.harness }}
+
+  # The same smoke test as unix-offline, in clean distro images. Minimal images
+  # catch tools install.sh assumes exist, such as cmp from diffutils on
+  # fedora:44. Runs scripts/test-in-container.sh with the Podman that ships on
+  # GitHub's Ubuntu runners, so a failure here reproduces locally with the same
+  # command and no Docker Desktop.
+  linux-distro-offline:
+    name: Linux offline install (install.sh --wheel-dir, ${{ matrix.distro }}, claude)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [ubuntu, fedora]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Smoke-test install.sh in a clean container
+        env:
+          CONTAINER_ENGINE: podman
+        run: scripts/test-in-container.sh ${{ matrix.distro }} claude
 
   windows-offline:
     name: Windows offline install (install.bat --wheel-dir)

@@ -77,7 +77,7 @@ The pytest suite never runs `install.sh`. To check that a change still installs,
 scripts/smoke-install.sh
 ```
 
-It builds a wheel from your checkout, installs it with `install.sh --wheel-dir --non-interactive` into a throwaway `HOME` with placeholder credentials, and then checks `status --json`, `update` and `uninstall`. Your real `~/.claude/settings.json` and `~/.arize/harness` are not touched, and neither is the checkout. CI's `install-smoke` job runs this same script on Linux and macOS, so a CI failure there reproduces with this command. The harness defaults to `claude`. Pass another one to test it, for example `scripts/smoke-install.sh copilot`.
+It builds a wheel from your checkout, installs it with `install.sh --wheel-dir --non-interactive` into a throwaway `HOME` with placeholder credentials, and then checks `status --json`, `update` and `uninstall`. Your real `~/.claude/settings.json` and `~/.arize/harness` are not touched, and neither is the checkout. CI's `unix-offline` job runs this same script on Linux and macOS, so a CI failure there reproduces with this command. The harness defaults to `claude`. Pass another one to test it, for example `scripts/smoke-install.sh copilot`.
 
 CI installs with Python 3.9. To match it:
 
@@ -85,20 +85,30 @@ CI installs with Python 3.9. To match it:
 UV_PYTHON=3.9 scripts/smoke-install.sh
 ```
 
-To inspect the install afterwards, set `SMOKE_KEEP=1`. The script then skips the uninstall, leaves the throwaway `HOME` in place, and prints its path along with the commands to run `status` against it and to delete it:
+To inspect the install afterwards, set `SMOKE_KEEP=1`. The script then skips the uninstall, leaves the throwaway `HOME` in place and, pass or fail, prints its path along with the commands to run `status` against it and to delete it:
 
 ```bash
 SMOKE_KEEP=1 scripts/smoke-install.sh
 ```
 
-To run the same smoke test in a clean Linux container, use the container helper. It is the only part that needs Docker:
+To run the same smoke test in a clean Linux container, use the container helper. CI's `linux-distro-offline` job runs this same helper, so a failure there reproduces with the same command:
 
 ```bash
 scripts/test-in-container.sh ubuntu
 scripts/test-in-container.sh fedora copilot
 ```
 
-The distro defaults to `ubuntu` (24.04), and `fedora` means Fedora 44. The harness defaults to `claude`. The helper mounts your checkout read-only and copies it inside the container, so the container never writes to it.
+The distro defaults to `ubuntu` (24.04), and `fedora` means Fedora 44. The harness defaults to `claude`. The helper mounts your checkout read-only and copies it inside the container, so the container never writes to it. To debug a failure, set `SMOKE_SHELL=1`. After the run, pass or fail, the helper opens a shell in the container with the install kept for inspection.
+
+The helper uses [Podman](https://podman.io), which is free. Docker Desktop is not needed. Set it up once:
+
+```bash
+brew install podman
+podman machine init
+podman machine start
+```
+
+After a restart, run `podman machine start` again. If Podman is not installed, the helper falls back to any `docker` CLI, for example on [Colima](https://github.com/abiosoft/colima). Set `CONTAINER_ENGINE` to pick one yourself.
 
 ## Find the code you need
 
