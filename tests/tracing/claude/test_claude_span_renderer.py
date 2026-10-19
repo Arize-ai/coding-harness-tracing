@@ -58,7 +58,7 @@ def test_renders_turn_model_calls_and_tools_with_exact_parents():
         "LLM call 3: qwen3-coder-next",
     ]
     assert [_attrs(span)["openinference.span.kind"] for span in spans] == [
-        "CHAIN",
+        "AGENT",
         "LLM",
         "TOOL",
         "LLM",
@@ -149,6 +149,27 @@ def test_renders_agent_as_agent_parent_for_its_model_and_tool():
     assert _attrs(spans[0])["subagent.id"] == "agent-1"
     assert spans[1]["parentSpanId"] == spans[0]["spanId"]
     assert spans[2]["parentSpanId"] == spans[1]["spanId"]
+
+
+def test_renders_agent_tool_invocations_as_agent_spans():
+    root = TurnEvent(
+        event_id="turn:1",
+        session_id="session-agent-1",
+        turn_id="1",
+        sequence=0,
+        started_at_ms=1_767_272_400_000,
+        ended_at_ms=1_767_272_404_000,
+        status=EventStatus.COMPLETED,
+    )
+    graph = parse_claude_transcript(FIXTURE_DIR / "subagent_main.jsonl", root)
+    spans = _spans(render_event_graph(graph, trace_id=TRACE_ID, span_id_factory=_factory()))
+
+    agent_span = next(span for span in spans if span["name"] == "Agent")
+    attrs = _attrs(agent_span)
+    assert attrs["openinference.span.kind"] == "AGENT"
+    assert attrs["subagent.id"] == "agent-1"
+    assert attrs["subagent.type"] == "synthetic-explorer"
+    assert attrs["tool.call.id"] == "tool-agent-1"
 
 
 def test_duplicate_event_ids_receive_distinct_span_ids():
