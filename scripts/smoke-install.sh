@@ -22,7 +22,7 @@ kept() {
     local inst="$work/home/.arize/harness/install.sh"
     if [[ -x "$inst" ]]; then
         echo "  HOME=$work/home"
-        echo "  HOME=\"$work/home\" \"$inst\" status"
+        echo "  cd \"$work\" && HOME=\"$work/home\" \"$inst\" status"
     else
         echo "  $work (nothing installed yet)"
     fi
