@@ -34,7 +34,8 @@ Every build comes from one interpreter, named exactly in `build/common.sh`: uv's
 `uv python install --managed-python`. The build tools (`requirements-build.txt`: nuitka 4.3,
 ordered-set 4.1.0, python-dotenv 1.2.4, plus this checkout) go into `.workbench/bt-arm64` and
 `.workbench/bt-x86_64`, also created with `--managed-python`. `BUILDTOOLS=<venv>` uses another
-venv, which still has to pass the interpreter check below.
+venv for `nuitka.sh`, which still has to pass the interpreter check below. `universal.sh` needs
+both architectures' venvs, so it stops if `BUILDTOOLS` is set.
 
 **uv version.** The interpreter names pin the Python version but not the python-build-standalone
 release behind it; that comes from uv. The numbers in `reports/` and in the PR were taken with uv
@@ -90,10 +91,10 @@ table instead of PASS/FAIL.
 | spans | `hooks.py` | every Stop, warmups included, logs its dry-run span | the Stop numbers (and, since every timed call is set up the same way, the rest): Stop really builds and sends a trace |
 
 `build/selftest.sh` tests the build gates themselves: in a throwaway copy of the repo it breaks
-each one on purpose (failing `inputs.py`, a missing or changed data file, a wrong minos) and checks
-that the build stops with the expected message, and that the previous bundle survives a stopped
-build. Run it after both single-arch builds: it reuses their bundles and `.workbench/bt-arm64`
-(under a minute here, most of it two arm64 builds).
+each one on purpose (failing `inputs.py`, a hook module left out of the build, a missing or changed
+data file, a wrong minos) and checks that the build stops with the expected message, and that the
+previous bundle survives a stopped build. Run it after both single-arch builds: it reuses their
+bundles and `.workbench/bt-arm64` (about a minute here, most of it three arm64 builds).
 
 Beyond the gates, `checks/equiv.py` compares a build with venv312 (run these by hand after a
 change to the build; the driver needs this checkout's `core/`, so use a build-tools Python):

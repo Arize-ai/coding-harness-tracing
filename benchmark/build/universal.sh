@@ -9,6 +9,12 @@
 set -euo pipefail
 exec </dev/null
 HERE=$(cd "$(dirname "$0")" && pwd); BENCH=$(cd "$HERE/.." && pwd); REPO=$(cd "$BENCH/.." && pwd)
+# BUILDTOOLS names one venv, and one venv can't be both arm64 and x86_64: without this the
+# x86_64 interpreter check fails and blames the interpreter.
+if [ -n "${BUILDTOOLS:-}" ]; then
+  echo "UNIVERSAL STOPPED: universal.sh needs one build-tools venv per architecture; unset BUILDTOOLS" >&2
+  exit 1
+fi
 # The pinned interpreter's minos. A deliberate uv or Python bump can change it: see README.md.
 DEFAULT_MINOS_ARM64=11.0 DEFAULT_MINOS_X86_64=10.15
 EXPECT_MINOS_ARM64=${EXPECT_MINOS_ARM64:-$DEFAULT_MINOS_ARM64}

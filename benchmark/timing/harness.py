@@ -5,6 +5,7 @@ Hooks run as `<cmd> hook claude <event>` with a scrubbed environment.
 """
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ KB = 1024
 def pct(values, p):
     """Nearest-rank percentile; values need not be sorted."""
     s = sorted(values)
-    return s[min(len(s) - 1, max(0, int(round(p / 100 * len(s) + 0.5)) - 1))] if s else float("nan")
+    return s[min(len(s) - 1, max(0, math.ceil(p / 100 * len(s)) - 1))] if s else float("nan")
 
 
 def fmt(ms):

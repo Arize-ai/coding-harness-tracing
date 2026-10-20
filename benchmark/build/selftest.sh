@@ -4,7 +4,8 @@
 #   build/selftest.sh   after ARCH=arm64 and ARCH=x86_64 build/nuitka.sh; exit 1 if any case fails
 # Cases: (a) inputs.py modules fails, and the previous bundle is kept; (b) a DATA path that doesn't
 # exist; (c) a data file removed from the bundle before finish(); (d) a data file changed in the
-# bundle; (e) EXPECT_MINOS_ARM64=99.0 build/universal.sh; (f) tracing/devin/skills alone passes.
+# bundle; (e) EXPECT_MINOS_ARM64=99.0 build/universal.sh; (f) tracing/devin/skills alone passes;
+# (g) one hook module left out of inputs.py modules: the smoke test fails on that hook alone.
 # Each case gets its own copy (no .git, .workbench, builds or results); this checkout is never
 # changed. The arm64 cases reuse .workbench/bt-arm64 (or BUILDTOOLS=<venv>) as is; (e) runs
 # universal.sh, which sets up both build-tools venvs inside its copy.
@@ -90,6 +91,22 @@ rc=0
 "$BT/bin/python" -I "$d/benchmark/build/inputs.py" data >"$TMP/f.log" 2>&1 || rc=$?
 [ "$rc" = 0 ] && grep -qF "data path missing, not included: tracing/devin/skills" "$TMP/f.log" && ok=0 || ok=1
 result f "$ok" "inputs.py data exit $rc (want 0), devin path reported"
+
+echo "-- (g) one hook module left out of inputs.py modules"
+# Kiro has one hook, and only --include-module brings its handlers in (nothing imports them), so
+# the binary lacks exactly that hook: the smoke test has to find one bad hook among all of them.
+d=$(copy g)
+drop=tracing.kiro.hooks.handlers
+inject "$d/benchmark/build/inputs.py" "s/^(\\s+)return sorted\\(names\\)/\$1return sorted(names - {\"$drop\"})/"
+expect_fail g "BUILD FAILED SMOKE TEST: nuitka-arm64" build_arm64 "$d"
+n=$("$BT/bin/python" -I "$d/benchmark/build/inputs.py" hooks | wc -l)
+n=$((n))  # wc pads with spaces
+grep -qF "check: kiro: " "$TMP/g.log" && grep -qF "$((n - 1))/$n loaded" "$TMP/g.log" && ok=0 || ok=1
+result g "$ok" "only the kiro hook failed ($((n - 1))/$n loaded)"
+# Otherwise a module Nuitka bundled anyway would look like a gate that missed it.
+report=$d/.workbench/nuitka-arm64/compilation-report.xml
+[ -f "$report" ] && ! grep -qF "module name=\"$drop\"" "$report" && ok=0 || ok=1
+result g "$ok" "$drop not in the compilation report"
 
 echo "selftest: $((cases - failed))/$cases passed"
 [ "$failed" = 0 ]

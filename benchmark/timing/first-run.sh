@@ -20,7 +20,8 @@ FAKE_HOME=$(mktemp -d); WORK=$(mktemp -d)
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$FAKE_HOME" "$WORK"' EXIT
 export HOME=$FAKE_HOME ARIZE_DRY_RUN=true
 for i in $(seq "$TRIALS"); do
-  COPY=$WORK/build-$i; cp -R "$BUILD" "$COPY"
+  # cp -R keeps the read-only modes finish() puts on Nuitka bundles: make each copy writable first.
+  COPY=$WORK/build-$i; cp -R "$BUILD" "$COPY"; chmod -R u+w "$COPY"
   [ "${READONLY:-}" = 1 ] && chmod -R a-w "$COPY"
   if head -1 "$COPY/$EXE" | grep -q '^#!/.*python'; then
     # -I: the hook's cwd must not put the repo's own core/ on sys.path.
