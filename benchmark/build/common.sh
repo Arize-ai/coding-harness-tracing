@@ -15,6 +15,7 @@ uv_have=$(uv --version | awk '{print $2}')
 REQUIREMENTS=$BENCH/requirements-build.txt
 WORKBENCH=$REPO/.workbench/$LABEL   # build/, spec files, reports: never the repo root
 INPUTS=$HERE/inputs.py
+unset INPUT_DATA  # set by nuitka.sh for finish(); never taken from the environment
 
 # Stop unless <python> is the pinned interpreter for <arch> and its OpenSSL reads the system CA file.
 # A build inherits its interpreter's CA path, so a wrong one only shows up as failed HTTPS sends.
@@ -80,6 +81,20 @@ finish() {  # executable
     echo "BUILD FAILED SMOKE TEST: $LABEL (output left writable in $DEST)" >&2
     exit 1
   fi
+  # The smoke test runs hooks, not setup, so it can't see a missing or wrong data file: compare
+  # each one with its source. nuitka.sh sets INPUT_DATA (possibly empty); universal.sh doesn't.
+  local data src dest
+  if [ -n "${INPUT_DATA+set}" ]; then
+    data=$INPUT_DATA
+  else
+    data=$(inputs data) || { echo "BUILD FAILED: inputs.py data failed (output left writable in $DEST)" >&2; exit 1; }
+  fi
+  while IFS=$'\t' read -r src dest; do
+    if [ -n "$dest" ] && ! cmp -s "$src" "$(dirname "$exe")/$dest"; then
+      echo "BUILD FAILED: data file missing or different in bundle: $dest (output left writable in $DEST)" >&2
+      exit 1
+    fi
+  done <<<"$data"
   chmod -R a-w "$DEST"  # like a root-owned MDM install
   mkdir -p "$BENCH/results/$LABEL"
   echo "$SECONDS" > "$BENCH/results/$LABEL/build_seconds"

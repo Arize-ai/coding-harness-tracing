@@ -4,10 +4,20 @@
 # Nuitka can't build universal itself (--macos-target-arch takes arm64 or x86_64), and there is no
 # universal python-build-standalone, so: two single-arch builds, lipo per Mach-O file, re-sign ad hoc.
 # Verification: every Mach-O file is "x86_64 arm64"; inputs.py check and a dry-run span pass
-# natively and under arch -x86_64; minos is 11.0 (arm64) and 10.15 (x86_64).
+# natively and under arch -x86_64; minos is EXPECT_MINOS_ARM64 (default 11.0) and
+# EXPECT_MINOS_X86_64 (default 10.15).
 set -euo pipefail
 exec </dev/null
 HERE=$(cd "$(dirname "$0")" && pwd); BENCH=$(cd "$HERE/.." && pwd); REPO=$(cd "$BENCH/.." && pwd)
+# The pinned interpreter's minos. A deliberate uv or Python bump can change it: see README.md.
+DEFAULT_MINOS_ARM64=11.0 DEFAULT_MINOS_X86_64=10.15
+EXPECT_MINOS_ARM64=${EXPECT_MINOS_ARM64:-$DEFAULT_MINOS_ARM64}
+EXPECT_MINOS_X86_64=${EXPECT_MINOS_X86_64:-$DEFAULT_MINOS_X86_64}
+# Say so in the log when the environment changes what the minos check accepts.
+minos_override=""
+if [ "$EXPECT_MINOS_ARM64" != "$DEFAULT_MINOS_ARM64" ] || [ "$EXPECT_MINOS_X86_64" != "$DEFAULT_MINOS_X86_64" ]; then
+  minos_override=" (override)"
+fi
 LABEL=nuitka-universal
 ARM=$BENCH/builds/nuitka-arm64
 X86=$BENCH/builds/nuitka-x86_64
@@ -60,12 +70,13 @@ codesign --force --sign - --timestamp=none "$EXE"
 for f in "${macho[@]}"; do codesign --verify --strict "$DEST/$f" || fail "codesign --verify --strict: $f"; done
 echo "merged ${#macho[@]} Mach-O file(s) with lipo, copied $(($(listing "$ARM" | wc -l) - ${#macho[@]})) identical file(s), re-signed ad hoc"
 
-echo "-- verify: architectures and minos"
+echo "-- verify: architectures and minos (want $EXPECT_MINOS_ARM64 / $EXPECT_MINOS_X86_64)$minos_override"
 for f in "${macho[@]}"; do
   archs=$(lipo -archs "$DEST/$f") arm=$(minos arm64 "$DEST/$f") x86=$(minos x86_64 "$DEST/$f")
   echo "  $f: $archs, minos arm64 $arm, x86_64 $x86"
   [ "$archs" = "x86_64 arm64" ] || fail "$f is '$archs', want 'x86_64 arm64'"
-  [ "$arm" = 11.0 ] && [ "$x86" = 10.15 ] || fail "$f minos arm64 $arm / x86_64 $x86, want 11.0 / 10.15"
+  [ "$arm" = "$EXPECT_MINOS_ARM64" ] && [ "$x86" = "$EXPECT_MINOS_X86_64" ] ||
+    fail "$f minos arm64 $arm / x86_64 $x86, want $EXPECT_MINOS_ARM64 / $EXPECT_MINOS_X86_64 (EXPECT_MINOS_ARM64 / EXPECT_MINOS_X86_64)"
 done
 
 for mode in native x86_64; do

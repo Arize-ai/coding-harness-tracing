@@ -6,7 +6,8 @@ kept on the tag `spike/binary-packaging-90274`; `reports/` holds its findings. N
 hook code, installers or harness configs, and nothing here runs in CI.
 
 ```
-build/      venv.sh, nuitka.sh, universal.sh, common.sh (pins), inputs.py (what a build must include), entry.py
+build/      venv.sh, nuitka.sh, universal.sh, common.sh (pins), inputs.py (what a build must include), entry.py,
+            selftest.sh (the build gates' own tests)
 timing/     run.sh (drives everything), hooks.py (per-hook timing), first-run.sh, summarize.py,
             harness.py (throwaway HOME + hook runner), lifecycle.py (per-phase timing of one hook)
 checks/     equiv.py: same output as venv312, real HTTPS, dry-run span, session key
@@ -38,7 +39,9 @@ venv, which still has to pass the interpreter check below.
 **uv version.** The interpreter names pin the Python version but not the python-build-standalone
 release behind it; that comes from uv. The numbers in `reports/` and in the PR were taken with uv
 0.11.24 (`UV_VERSION` in `build/common.sh`; another uv gets a warning). Use the same uv, or expect
-to re-baseline.
+to re-baseline. After a deliberate uv or Python bump, `universal.sh` may stop on the minos check:
+check the new values it prints, then either set `EXPECT_MINOS_ARM64` / `EXPECT_MINOS_X86_64` or
+update their defaults in `universal.sh`.
 
 **Why not python.org's Python?** It is the only universal2 CPython, so it looks like the easy way
 to a universal binary. But its OpenSSL is built with `OPENSSLDIR` inside
@@ -82,9 +85,15 @@ table instead of PASS/FAIL.
 |---|---|---|---|
 | interpreter | `common.sh` `check_python`, before every build | Python 3.12.10 for the right arch, and `ssl.get_default_verify_paths().openssl_cafile` is `/etc/ssl/cert.pem` | that the binary can send spans over HTTPS at all, and that every build is timed on the same Python |
 | arch | end of `nuitka.sh` | `lipo -archs` of the executable is `$ARCH` | that the x86_64 half really is x86_64 |
-| inputs | end of every build, and `hooks.py` before timing | `inputs.py check`: `hook --list` matches the hook table, and every hook loads and exits 0 (a crash or signal fails it) | every timing: a binary missing a handler or crashing on start is never timed |
-| universal | `universal.sh` | same files in both halves, non-Mach-O files identical, `codesign --verify --strict`, every Mach-O file `x86_64 arm64`, minos 11.0 / 10.15, inputs check and a dry-run span both natively and under `arch -x86_64` | the universal column: it describes a binary that works on both architectures |
+| inputs | `inputs.py modules` / `data`: `nuitka.sh` before compiling. `inputs.py check`: end of every build, and `hooks.py` before timing. Data in the bundle: end of the three Nuitka builds only | `inputs.py modules` and `data` succeed (a missing data path stops the build unless it's in `EXPECTED_MISSING`, and the previous bundle is kept); `inputs.py check`: `hook --list` matches the hook table, and every hook loads and exits 0 (a crash or signal fails it); every listed data file is in the bundle and identical to its source | every timing: a binary missing a handler or a data file, or crashing on start, is never timed |
+| universal | `universal.sh` | same files in both halves, non-Mach-O files identical, `codesign --verify --strict`, every Mach-O file `x86_64 arm64`, minos `EXPECT_MINOS_ARM64` / `EXPECT_MINOS_X86_64` (default 11.0 / 10.15), inputs check and a dry-run span both natively and under `arch -x86_64` | the universal column: it describes a binary that works on both architectures |
 | spans | `hooks.py` | every Stop, warmups included, logs its dry-run span | the Stop numbers (and, since every timed call is set up the same way, the rest): Stop really builds and sends a trace |
+
+`build/selftest.sh` tests the build gates themselves: in a throwaway copy of the repo it breaks
+each one on purpose (failing `inputs.py`, a missing or changed data file, a wrong minos) and checks
+that the build stops with the expected message, and that the previous bundle survives a stopped
+build. Run it after both single-arch builds: it reuses their bundles and `.workbench/bt-arm64`
+(under a minute here, most of it two arm64 builds).
 
 Beyond the gates, `checks/equiv.py` compares a build with venv312 (run these by hand after a
 change to the build; the driver needs this checkout's `core/`, so use a build-tools Python):

@@ -26,10 +26,20 @@ EXE=$DEST/arize-harness.bin
 
 buildtools "$ARCH"
 SECONDS=0  # build time: the build itself, not setting up the build tools
+# Capture the lists first: a failure inside < <(...) would go unnoticed and build without them.
+# Before clean_dest, so a build that stops here keeps the previous good bundle. finish() reuses
+# INPUT_DATA instead of running inputs.py again.
+modules=$(inputs modules) || { echo "BUILD STOPPED: inputs.py modules failed" >&2; exit 1; }
+INPUT_DATA=$(inputs data) || { echo "BUILD STOPPED: inputs.py data failed" >&2; exit 1; }
 clean_dest "$DEST"
+# if, not [ -n ] && ...: under set -e a false test as the loop's last command ends the script.
 ARGS=()
-while read -r m; do ARGS+=("--include-module=$m"); done < <(inputs modules)
-while IFS=$'\t' read -r src dest; do ARGS+=("--include-data-files=$src=$dest"); done < <(inputs data)
+while read -r m; do
+  if [ -n "$m" ]; then ARGS+=("--include-module=$m"); fi
+done <<<"$modules"
+while IFS=$'\t' read -r src dest; do
+  if [ -n "$src" ]; then ARGS+=("--include-data-files=$src=$dest"); fi
+done <<<"$INPUT_DATA"
 
 # Nuitka finds core/ and tracing/ through PYTHONPATH; run from .workbench so its
 # build directory lands there. No --assume-yes-for-downloads: if Nuitka wants to

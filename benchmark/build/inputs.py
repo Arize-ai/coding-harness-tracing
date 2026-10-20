@@ -5,7 +5,8 @@
                             each hook target in core/hook_table.py iter_hooks(), plus the
                             core.setup.status registration modules (status.py:62)
   inputs.py data            data files found via __file__, as "<abs source>\t<dest in bundle>";
-                            a listed path that doesn't exist is reported on stderr, not skipped silently
+                            a listed path that doesn't exist is reported on stderr, and any such
+                            path not in EXPECTED_MISSING makes it exit 1
   inputs.py hooks           the exact `arize-harness hook --list` output a complete build must print
   inputs.py check EXE       smoke-test a build: `hook --list` must match `hooks` exactly, and every
                             hook must load (--list only prints the table, which is plain data, so a
@@ -27,6 +28,9 @@ from core.hook_table import iter_hooks  # noqa: E402
 # Located via Path(__file__).parent in tracing/{opencode,omp}/constants.py, */install.py
 # and tracing/devin/install.py:113. Dest mirrors the package path so __file__ math still works.
 DATA = ["tracing/opencode/plugin/arize-tracing.ts", "tracing/omp/plugin/arize-tracing.ts", "tracing/devin/skills"]
+# Listed in DATA but absent on purpose: the repo ships no devin skills yet ("This harness ships no
+# skills yet", tracing/devin/install.py). Any other missing path fails `inputs.py data`.
+EXPECTED_MISSING = {"tracing/devin/skills"}
 
 
 def modules():
@@ -43,7 +47,7 @@ def data():
         src = REPO / rel
         if not src.exists():
             print(f"build_inputs: data path missing, not included: {rel}", file=sys.stderr)
-            missing += 1
+            missing += rel not in EXPECTED_MISSING
             continue
         files = [src] if src.is_file() else sorted(p for p in src.rglob("*") if p.is_file())
         for f in files:
@@ -114,7 +118,7 @@ if __name__ == "__main__":
     if what == "modules":
         print("\n".join(modules()))
     elif what == "data":
-        data()
+        sys.exit(1 if data() else 0)
     elif what == "hooks":
         print("\n".join(hooks()))
     elif what == "check" and len(sys.argv) == 3:
