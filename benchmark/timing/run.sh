@@ -4,7 +4,8 @@
 # Per build: first launches of fresh copies (first-run.sh), writable and read-only like a
 # root-owned MDM install. Then all builds together: the five Claude hooks, back to back and
 # after 0.5 s idle, builds alternating (hooks.py, ~10 min for three builds). HOOKS_ONLY=1 skips
-# the first runs and keeps their earlier results. Build first: build/venv.sh, build/nuitka.sh
+# the first runs and keeps their earlier results. A failed first run doesn't stop the script: the
+# build shows as INVALID in the table. Build first: build/venv.sh, build/nuitka.sh
 # (ARCH=arm64 and ARCH=x86_64), build/universal.sh; missing builds are skipped.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,8 +23,8 @@ for row in "${CANDIDATES[@]}"; do
   ARGS+=(--build "$label" "$dir" "$exe")
   [ -n "${HOOKS_ONLY:-}" ] && continue
   echo "== $label: first runs"
-  "$HERE/first-run.sh" "$label" "$dir" "$exe"
-  READONLY=1 "$HERE/first-run.sh" "$label" "$dir" "$exe"
+  "$HERE/first-run.sh" "$label" "$dir" "$exe" || echo "== $label: first run failed, INVALID"
+  READONLY=1 "$HERE/first-run.sh" "$label" "$dir" "$exe" || echo "== $label: first run (read-only) failed, INVALID"
 done
 [ ${#ARGS[@]} -gt 0 ] || { echo "nothing built" >&2; exit 1; }
 echo "== hooks: $((${#ARGS[@]} / 4)) builds"  # 4 words per build: --build label dir exe

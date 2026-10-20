@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Test the build gates themselves: break each one on purpose in a throwaway copy of the repo and
-# check that the build stops with the message it should give.
+# Test the build gates (and the first-run timing gate) themselves: break each one on purpose in a
+# throwaway copy of the repo and check that the build stops with the message it should give.
 #   build/selftest.sh   after ARCH=arm64 and ARCH=x86_64 build/nuitka.sh; exit 1 if any case fails
 # Cases: (a) inputs.py modules fails, and the previous bundle is kept; (b) a DATA path that doesn't
 # exist; (c) a data file removed from the bundle before finish(); (d) a data file changed in the
 # bundle; (e) EXPECT_MINOS_ARM64=99.0 build/universal.sh; (f) tracing/devin/skills alone passes;
 # (g) one hook module left out of inputs.py modules: the smoke test fails on that hook alone;
 # (h) universal.sh with halves recorded as built from different sources; (i) universal.sh after a
-# core/ file changed since both halves were built.
+# core/ file changed since both halves were built; (j) a build whose first launch from a fresh copy
+# fails: first-run.sh exits 1 and records why, and hooks.py and summarize.py mark it INVALID.
 # Each case gets its own copy (no .git, .workbench, builds or results); this checkout is never
 # changed. The arm64 cases reuse .workbench/bt-arm64 (or BUILDTOOLS=<venv>) as is; (e), (h) and (i)
 # run universal.sh, which sets up both build-tools venvs inside its copy.
@@ -128,6 +129,35 @@ d=$(copy i)
 with_halves "$d"
 echo "# selftest" >>"$d/core/hook_table.py"
 expect_fail i "UNIVERSAL FAILED: halves built from other sources than this checkout" universal "$d"
+
+echo "-- (j) a build whose first launch from a fresh copy fails"
+d=$(copy j)
+fake=$d/benchmark/builds/firstfail
+mkdir -p "$fake"
+# The real arm64 build when run in place (inputs.py check, hooks.py); exit 3 when run from a copy,
+# as first-run.sh runs it. Resolved paths: hooks.py resolves the build's, and /var is a symlink.
+cat >"$fake/arize-harness" <<EOF
+#!/bin/sh
+[ "\$(cd "\$(dirname "\$0")" && pwd -P)" = "$(cd "$fake" && pwd -P)" ] && exec "$ARM/arize-harness.bin" "\$@"
+echo "selftest: first launch fails" >&2
+exit 3
+EOF
+chmod +x "$fake/arize-harness"
+expect_fail j "FIRST RUN FAILED: firstfail, 2/2 copies" "$d/benchmark/timing/first-run.sh" firstfail "$fake" arize-harness 2
+expect_fail j "FIRST RUN FAILED: firstfail (read-only), 2/2 copies" \
+  env READONLY=1 "$d/benchmark/timing/first-run.sh" firstfail "$fake" arize-harness 2
+res=$d/benchmark/results/firstfail
+grep -qF "copy 1: exit 3: selftest: first launch fails" "$res/first-run.failed" &&
+  grep -qF "copy 1: exit 3: selftest: first launch fails" "$res/first-run-ro.failed" &&
+  [ ! -s "$res/first-run.txt" ] && ok=0 || ok=1
+result j "$ok" "reasons in first-run.failed and first-run-ro.failed, no times recorded"
+# No -I for hooks.py: it imports harness.py from its own directory, as run.sh runs it.
+expect_fail j "firstfail: inputs check ok, dry-run spans 7/7, first runs failed, gate=fail" \
+  "$BT/bin/python" "$d/benchmark/timing/hooks.py" --quick --results "$d/benchmark/results" --build firstfail "$fake" arize-harness
+"$BT/bin/python" -I "$d/benchmark/timing/summarize.py" "$d/benchmark/results/bench-result.json" >"$TMP/j.md" 2>&1 || true
+grep -qF "INVALID (first run, writable: copy 1: exit 3: selftest: first launch fails; first run, readonly: copy 1:" "$TMP/j.md" &&
+  ok=0 || ok=1
+result j "$ok" "summarize.py: INVALID (first run, writable: ...; first run, readonly: ...)"
 
 echo "selftest: $((cases - failed))/$cases passed"
 [ "$failed" = 0 ]

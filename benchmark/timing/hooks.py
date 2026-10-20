@@ -17,6 +17,8 @@ Pre before a Post, and Pre/Post of the turn's tool before Stop, whose transcript
 Gates, per build. A failed gate marks the build INVALID, since a build that does nothing is fast too:
   inputs  build/inputs.py check passes before timing (every hook loads and exits 0)
   spans   every Stop, warmups included, logs one dry-run span
+  first   no first-run*.failed from first-run.sh (every copy's first launch exited 0), when
+          first runs were taken
 A hook that exits non-zero or hangs (30 s, as in inputs.py check) while being timed also fails its
 build, which then stops being timed.
 
@@ -67,12 +69,16 @@ def footprint(root):
 
 
 def first_runs(results, label):
-    out = {}
-    for key, name in (("writable", "first-run.txt"), ("readonly", "first-run-ro.txt")):
-        f = results / label / name
+    """first-run.sh's times per mode, and the first reason a mode failed (first-run*.failed)."""
+    out, failed = {}, {}
+    for key, name in (("writable", "first-run"), ("readonly", "first-run-ro")):
+        f = results / label / f"{name}.txt"
         runs = [float(x) for x in f.read_text().split()] if f.exists() else []
         out[key] = {"p50": pct(runs, 50), "max": max(runs), "runs": runs} if runs else None
-    return out
+        bad = results / label / f"{name}.failed"
+        if bad.exists():
+            failed[key] = (bad.read_text().strip().splitlines() or ["failed"])[0]
+    return out, failed
 
 
 def read_json(path):
@@ -225,7 +231,8 @@ def main():
         "builds": {},
     }
     for b in builds:
-        ok = checked[b.label] and not b.error and b.stops > 0 and b.spans == b.stops
+        first_run_ms, first_run_failed = first_runs(results, b.label)
+        ok = checked[b.label] and not b.error and b.stops > 0 and b.spans == b.stops and not first_run_failed
         out["builds"][b.label] = {
             "cmd": b.exe,
             "gate": "ok" if ok else "fail",
@@ -235,7 +242,8 @@ def main():
             **footprint(b.root),
             "build_s": read_int(results / b.label / "build_seconds"),
             "build_info": read_json(results / b.label / "build_info.json"),
-            "first_run_ms": first_runs(results, b.label),
+            "first_run_ms": first_run_ms,
+            "first_run_failed": first_run_failed or None,
             "hooks": {
                 mode: {
                     event: {"p50": pct(t, 50), "p95": pct(t, 95), "n": len(t)}
@@ -247,7 +255,7 @@ def main():
         }
         print(
             f"{b.label}: inputs check {out['builds'][b.label]['inputs_check']}, dry-run spans {b.spans}/{b.stops}, "
-            f"gate={out['builds'][b.label]['gate']}",
+            f"first runs {'failed' if first_run_failed else 'ok'}, gate={out['builds'][b.label]['gate']}",
             flush=True,
         )
     results.mkdir(parents=True, exist_ok=True)

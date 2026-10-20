@@ -73,7 +73,8 @@ HOOKS_ONLY=1 benchmark/timing/run.sh  # skip the first runs, keep their earlier 
 - **first run** (`first-run.sh`): the first launch of a fresh copy of the build, five copies,
   writable and read-only (like a root-owned MDM install). This is what a user sees once after an
   install or update, before macOS has scanned the new binaries. venv312's number is never a true
-  first run, because its interpreter lives outside the venv.
+  first run, because its interpreter lives outside the venv. Every launch has to exit 0; one that
+  doesn't marks the build INVALID, and `run.sh` goes on with the rest.
 - **per hook** (`hooks.py`): SessionStart, UserPromptSubmit, PreToolUse, PostToolUse and Stop,
   30 runs each, back to back and after 0.5 s idle, in a throwaway HOME with dry-run on. Builds
   alternate run by run so machine drift hits all of them alike. Before each timed call the untimed
@@ -101,6 +102,7 @@ table instead of PASS/FAIL.
 | universal | `universal.sh` | same files in both halves, non-Mach-O files identical, `codesign --verify --strict`, every Mach-O file `x86_64 arm64`, minos `EXPECT_MINOS_ARM64` / `EXPECT_MINOS_X86_64` (default 11.0 / 10.15), inputs check and a dry-run span both natively and under `arch -x86_64` | the universal column: it describes a binary that works on both architectures |
 | sources | `universal.sh`, before merging | both halves' `build_info.json` exist and have the same `source` as this checkout | that the universal binary is one program, built from the code being timed |
 | spans | `hooks.py` | every Stop, warmups included, logs its dry-run span | the Stop numbers (and, since every timed call is set up the same way, the rest): Stop really builds and sends a trace |
+| first runs | `first-run.sh`, read by `hooks.py` | every copy's first launch, writable and read-only, exits 0 within 30 s; a copy that doesn't is left out of the times and listed in `results/<label>/first-run.failed` (`first-run-ro.failed`) | the first-run rows: a build that crashes on its first launch after an install is never reported as fast |
 
 `build/selftest.sh` tests the build gates themselves: in a throwaway copy of the repo it breaks
 each one on purpose (failing `inputs.py`, a hook module left out of the build, a missing or changed

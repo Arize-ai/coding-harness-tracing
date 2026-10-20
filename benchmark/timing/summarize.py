@@ -3,8 +3,9 @@
 
   timing/summarize.py [results/bench-result.json]
 
-A build gets PASS/FAIL only if its gate is ok: inputs.py check passed and every Stop logged a
-dry-run span. Otherwise it is INVALID, since a build that does nothing is also fast. The budget
+A build gets PASS/FAIL only if its gate is ok: inputs.py check passed, every Stop logged a
+dry-run span and no first run failed. Otherwise it is INVALID, since a build that does nothing
+is also fast. The budget
 rule: back-to-back p95 at most BUDGET_MS slower than venv312 on SessionStart and on Stop. Every
 other number is reported, not judged. Builds made from different sources (build_info.json) get a
 warning, not a verdict: comparing across commits can be deliberate.
@@ -28,7 +29,13 @@ BENCH = Path(__file__).resolve().parent.parent
 
 def verdict(name, r, base):
     if r["gate"] != "ok":
-        why = r["error"] or ("inputs.py check failed" if r["inputs_check"] != "ok" else f"spans {r['spans']}")
+        failed = r.get("first_run_failed") or {}  # absent in results from before it was recorded
+        why = (
+            r["error"]
+            or ("inputs.py check failed" if r["inputs_check"] != "ok" else None)
+            or "; ".join(f"first run, {mode}: {reason}" for mode, reason in failed.items())
+            or f"spans {r['spans']}"
+        )
         return f"INVALID ({why})"
     if name == "venv312":
         return "baseline"
