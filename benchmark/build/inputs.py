@@ -65,8 +65,15 @@ def check(exe):
         """(CompletedProcess or None, problem). problem is None only for exit 0: a crashing build
         prints nothing about loading, so its exit status is the only sign that it failed."""
         try:
-            p = subprocess.run([exe, "hook", *a], cwd=home, env=env, stdin=subprocess.DEVNULL,
-                               capture_output=True, text=True, timeout=30)
+            p = subprocess.run(
+                [exe, "hook", *a],
+                cwd=home,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
         except subprocess.TimeoutExpired as e:
             return None, f"timed out after {e.timeout:g} s"
         if p.returncode == 0:
@@ -95,8 +102,10 @@ def check(exe):
             bad_hooks += 1
             print(f"check: {hook}: {problem}", file=sys.stderr)
     shutil.rmtree(home, ignore_errors=True)
-    print(f"check: {len(listed)} hooks listed, {len(hooks()) - bad_hooks}/{len(hooks())} loaded and exited 0, "
-          f"{failures} failure(s)")
+    print(
+        f"check: {len(listed)} hooks listed, {len(hooks()) - bad_hooks}/{len(hooks())} loaded and exited 0, "
+        f"{failures} failure(s)"
+    )
     return 1 if failures else 0
 
 

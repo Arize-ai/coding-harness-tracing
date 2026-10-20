@@ -3,6 +3,7 @@ transcript lines a turn needs (turn_lines(), also used by checks/equiv.py).
 
 Hooks run as `<cmd> hook claude <event>` with a scrubbed environment.
 """
+
 import json
 import os
 import shutil
@@ -52,28 +53,75 @@ def _ts(seconds):
 
 def turn_lines(tag, tool_ids=(), result_bytes=200, text_bytes=200, t0=0):
     """One Claude v2 turn: prompt, one assistant message per tool + its result, final text."""
-    lines = [_line(type="user", uuid=f"{tag}-user", parentUuid=None, promptId=f"{tag}-prompt",
-                   timestamp=_ts(t0), message={"role": "user", "content": f"prompt {tag}"})]
+    lines = [
+        _line(
+            type="user",
+            uuid=f"{tag}-user",
+            parentUuid=None,
+            promptId=f"{tag}-prompt",
+            timestamp=_ts(t0),
+            message={"role": "user", "content": f"prompt {tag}"},
+        )
+    ]
     parent = f"{tag}-user"
     for i, tool_id in enumerate(tool_ids):
         a, r = f"{tag}-a{i}", f"{tag}-r{i}"
-        lines.append(_line(
-            type="assistant", uuid=a, parentUuid=parent, timestamp=_ts(t0 + 2 * i + 1),
-            message={"id": f"{tag}-m{i}", "type": "message", "role": "assistant", "model": "bench-model",
-                     "content": [{"type": "tool_use", "id": tool_id, "name": "Read",
-                                  "input": {"file_path": f"/bench/project/{tool_id}.py"}}],
-                     "usage": {"input_tokens": 100, "output_tokens": 20}, "stop_reason": "tool_use"}))
-        lines.append(_line(
-            type="user", uuid=r, parentUuid=a, promptId=f"{tag}-prompt", timestamp=_ts(t0 + 2 * i + 2),
-            sourceToolAssistantUUID=a,
-            message={"role": "user", "content": [{"tool_use_id": tool_id, "type": "tool_result",
-                                                  "content": "r" * result_bytes}]}))
+        lines.append(
+            _line(
+                type="assistant",
+                uuid=a,
+                parentUuid=parent,
+                timestamp=_ts(t0 + 2 * i + 1),
+                message={
+                    "id": f"{tag}-m{i}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "bench-model",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": tool_id,
+                            "name": "Read",
+                            "input": {"file_path": f"/bench/project/{tool_id}.py"},
+                        }
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                    "stop_reason": "tool_use",
+                },
+            )
+        )
+        lines.append(
+            _line(
+                type="user",
+                uuid=r,
+                parentUuid=a,
+                promptId=f"{tag}-prompt",
+                timestamp=_ts(t0 + 2 * i + 2),
+                sourceToolAssistantUUID=a,
+                message={
+                    "role": "user",
+                    "content": [{"tool_use_id": tool_id, "type": "tool_result", "content": "r" * result_bytes}],
+                },
+            )
+        )
         parent = r
-    lines.append(_line(
-        type="assistant", uuid=f"{tag}-final", parentUuid=parent, timestamp=_ts(t0 + 2 * len(tool_ids) + 1),
-        message={"id": f"{tag}-mfinal", "type": "message", "role": "assistant", "model": "bench-model",
-                 "content": [{"type": "text", "text": "t" * text_bytes}],
-                 "usage": {"input_tokens": 120, "output_tokens": 5}, "stop_reason": "end_turn"}))
+    lines.append(
+        _line(
+            type="assistant",
+            uuid=f"{tag}-final",
+            parentUuid=parent,
+            timestamp=_ts(t0 + 2 * len(tool_ids) + 1),
+            message={
+                "id": f"{tag}-mfinal",
+                "type": "message",
+                "role": "assistant",
+                "model": "bench-model",
+                "content": [{"type": "text", "text": "t" * text_bytes}],
+                "usage": {"input_tokens": 120, "output_tokens": 5},
+                "stop_reason": "end_turn",
+            },
+        )
+    )
     return lines
 
 
@@ -91,11 +139,9 @@ class Harness:
         self.transcript = self.home / "transcript.jsonl"
         self.transcript.write_text("".join(turn_lines("seed")))
         self.env = {
-            k: v for k, v in os.environ.items()
-            if not k.startswith(("ARIZE_", "PHOENIX_", "CLAUDE_", "PYTHON"))
+            k: v for k, v in os.environ.items() if not k.startswith(("ARIZE_", "PHOENIX_", "CLAUDE_", "PYTHON"))
         }
-        self.env.update(HOME=str(self.home), ARIZE_TRACE_ENABLED="true",
-                        ARIZE_DRY_RUN="true" if dry_run else "false")
+        self.env.update(HOME=str(self.home), ARIZE_TRACE_ENABLED="true", ARIZE_DRY_RUN="true" if dry_run else "false")
         if dry_run:
             self.env["ARIZE_VERBOSE"] = "true"  # the dry-run span line is only logged when verbose
 
@@ -103,8 +149,12 @@ class Harness:
         shutil.rmtree(self.home, ignore_errors=True)
 
     def payload(self, event, **extra):
-        p = {"session_id": SID, "hook_event_name": event, "transcript_path": str(self.transcript),
-             "cwd": "/bench/project"}
+        p = {
+            "session_id": SID,
+            "hook_event_name": event,
+            "transcript_path": str(self.transcript),
+            "cwd": "/bench/project",
+        }
         p.update(extra)
         return p
 
@@ -112,8 +162,13 @@ class Harness:
         """Run one hook to completion; return its wall time in ms."""
         data = json.dumps(payload).encode()
         t = time.perf_counter()
-        proc = subprocess.run(self.cmd + ["hook", "claude", EVENTS[event]], input=data, env=self.env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        proc = subprocess.run(
+            self.cmd + ["hook", "claude", EVENTS[event]],
+            input=data,
+            env=self.env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
         ms = (time.perf_counter() - t) * 1000
         if proc.returncode != 0:
             raise SystemExit(f"{event} exited {proc.returncode}: {proc.stderr.decode()[-500:]}")

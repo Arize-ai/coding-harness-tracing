@@ -56,8 +56,11 @@ class Build:
 def footprint(root):
     """Size, file count and native library count of a build, like `find -type f`."""
     files = [p for p in root.rglob("*") if p.is_file() and not p.is_symlink()]
-    return {"size_bytes": sum(p.stat().st_size for p in files), "files": len(files),
-            "native_libs": sum(p.suffix in (".so", ".dylib") for p in files)}
+    return {
+        "size_bytes": sum(p.stat().st_size for p in files),
+        "files": len(files),
+        "native_libs": sum(p.suffix in (".so", ".dylib") for p in files),
+    }
 
 
 def first_runs(results, label):
@@ -77,8 +80,9 @@ def read_int(path):
 
 
 def inputs_check(build):
-    p = subprocess.run([sys.executable, "-I", str(BENCH / "build" / "inputs.py"), "check", build.exe],
-                       capture_output=True, text=True)
+    p = subprocess.run(
+        [sys.executable, "-I", str(BENCH / "build" / "inputs.py"), "check", build.exe], capture_output=True, text=True
+    )
     print(f"{build.label}: {(p.stdout or p.stderr).strip().splitlines()[-1:]}", flush=True)
     if p.returncode != 0:
         print(p.stderr.strip()[-2000:], file=sys.stderr)
@@ -138,8 +142,10 @@ def time_builds(builds, runs, warmup, idle):
             for b in builds:
                 t = b.times[mode][event]
                 if t:
-                    print(f"{b.label:<17} {mode:<5} {event:<17} p50 {fmt(pct(t, 50)):>6}  p95 {fmt(pct(t, 95)):>6} ms",
-                          flush=True)
+                    print(
+                        f"{b.label:<17} {mode:<5} {event:<17} p50 {fmt(pct(t, 50)):>6}  p95 {fmt(pct(t, 95)):>6} ms",
+                        flush=True,
+                    )
 
 
 def git(*args):
@@ -155,8 +161,14 @@ def pins():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--build", nargs=3, action="append", required=True, metavar=("LABEL", "DIR", "EXE"),
-                    help="a build to time: its label, its directory, the executable inside it")
+    ap.add_argument(
+        "--build",
+        nargs=3,
+        action="append",
+        required=True,
+        metavar=("LABEL", "DIR", "EXE"),
+        help="a build to time: its label, its directory, the executable inside it",
+    )
     ap.add_argument("--runs", type=int, default=30, help="timed runs per event per mode, per build")
     ap.add_argument("--warmup", type=int, default=5, help="untimed b2b runs per event, per build")
     ap.add_argument("--idle", type=float, default=0.5, help="idle seconds before each idle-mode call")
@@ -186,26 +198,47 @@ def main():
         commit += "-dirty"
     python, nuitka = pins()
     out = {
-        "schema": SCHEMA, "commit": commit, "python": python, "nuitka": nuitka,
-        "config": {"runs": runs, "warmup": warmup, "idle_s": a.idle, "events": list(EVENTS),
-                   "order": "builds alternate per run, order rotated each run",
-                   "driver_python": platform.python_version(), "machine": platform.machine(),
-                   "macos": platform.mac_ver()[0]},
+        "schema": SCHEMA,
+        "commit": commit,
+        "python": python,
+        "nuitka": nuitka,
+        "config": {
+            "runs": runs,
+            "warmup": warmup,
+            "idle_s": a.idle,
+            "events": list(EVENTS),
+            "order": "builds alternate per run, order rotated each run",
+            "driver_python": platform.python_version(),
+            "machine": platform.machine(),
+            "macos": platform.mac_ver()[0],
+        },
         "builds": {},
     }
     for b in builds:
         ok = checked[b.label] and not b.error and b.stops > 0 and b.spans == b.stops
         out["builds"][b.label] = {
-            "cmd": b.exe, "gate": "ok" if ok else "fail", "inputs_check": "ok" if checked[b.label] else "fail",
-            "spans": f"{b.spans}/{b.stops}", "error": b.error,
-            **footprint(b.root), "build_s": read_int(results / b.label / "build_seconds"),
+            "cmd": b.exe,
+            "gate": "ok" if ok else "fail",
+            "inputs_check": "ok" if checked[b.label] else "fail",
+            "spans": f"{b.spans}/{b.stops}",
+            "error": b.error,
+            **footprint(b.root),
+            "build_s": read_int(results / b.label / "build_seconds"),
             "first_run_ms": first_runs(results, b.label),
-            "hooks": {mode: {event: {"p50": pct(t, 50), "p95": pct(t, 95), "n": len(t)}
-                             for event, t in b.times[mode].items() if t}
-                      for mode in MODES},
+            "hooks": {
+                mode: {
+                    event: {"p50": pct(t, 50), "p95": pct(t, 95), "n": len(t)}
+                    for event, t in b.times[mode].items()
+                    if t
+                }
+                for mode in MODES
+            },
         }
-        print(f"{b.label}: inputs check {out['builds'][b.label]['inputs_check']}, dry-run spans {b.spans}/{b.stops}, "
-              f"gate={out['builds'][b.label]['gate']}", flush=True)
+        print(
+            f"{b.label}: inputs check {out['builds'][b.label]['inputs_check']}, dry-run spans {b.spans}/{b.stops}, "
+            f"gate={out['builds'][b.label]['gate']}",
+            flush=True,
+        )
     results.mkdir(parents=True, exist_ok=True)
     path = results / "bench-result.json"
     path.write_text(json.dumps(out, indent=2) + "\n")

@@ -58,7 +58,10 @@ def one_run(argv, payload, env, probe):
         raw = os.read(stamp_r, 64)
         os.close(stamp_r)
         t_main = int(raw) if raw else None
-    us = lambda a, b: (b - a) / 1e3
+
+    def us(a, b):
+        return (b - a) / 1e3
+
     return dict(
         status=os.waitstatus_to_exitcode(status),
         spawn=us(t0, t_spawned),
@@ -78,7 +81,10 @@ def summarize(rows):
         v = sorted(r[key] for r in rows if r[key] is not None)
         if not v:
             continue
-        q = lambda p: v[min(len(v) - 1, int(p * (len(v) - 1)))]
+
+        def q(p):
+            return v[min(len(v) - 1, int(p * (len(v) - 1)))]
+
         print(f"{key:<10}{statistics.median(v):>10.0f}{q(.95):>10.0f}{q(.99):>10.0f}{v[-1]:>10.0f}")
     bad = sum(r["status"] != 0 for r in rows)
     if bad:
@@ -110,7 +116,10 @@ def main():
     env = dict(os.environ, HOME=home, ARIZE_DRY_RUN="true")
     try:
         os.chdir(home)  # -I aside, keep the repo's core/ off any implicit sys.path
-        run = lambda _: one_run(argv, payload, env, a.python)
+
+        def run(_):
+            return one_run(argv, payload, env, a.python)
+
         with ThreadPoolExecutor(a.concurrency) as pool:
             list(pool.map(run, range(a.warmup)))
             rows = list(pool.map(run, range(a.runs)))

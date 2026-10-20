@@ -45,11 +45,14 @@ class Sink:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-                sink.received.append({
-                    "at": time.time(), "path": self.path,
-                    "headers": {k: self.headers.get(k) for k in ("Content-Type", "authorization", "space_id")},
-                    "body": json.loads(body),
-                })
+                sink.received.append(
+                    {
+                        "at": time.time(),
+                        "path": self.path,
+                        "headers": {k: self.headers.get(k) for k in ("Content-Type", "authorization", "space_id")},
+                        "body": json.loads(body),
+                    }
+                )
                 if sink.delay:
                     time.sleep(sink.delay)
                 self.send_response(200)
@@ -80,19 +83,33 @@ class Home:
         self.home = Path(tempfile.mkdtemp(prefix="equiv-home-")).resolve()
         cfg = self.home / ".arize" / "harness" / "config.json"
         cfg.parent.mkdir(parents=True)
-        backend = {"target": "arize", "endpoint": endpoint, "api_key": "equiv-fake-key",
-                   "space_id": "equiv-fake-space", "project_name": "equiv"}
+        backend = {
+            "target": "arize",
+            "endpoint": endpoint,
+            "api_key": "equiv-fake-key",
+            "space_id": "equiv-fake-space",
+            "project_name": "equiv",
+        }
         cfg.write_text(json.dumps({"harnesses": {h: backend for h in ("claude-code", "gemini", "codex")}}))
-        self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("ARIZE_", "PHOENIX_", "CLAUDE_", "PYTHON", "GEMINI_", "CODEX_", "OTEL_"))}
-        self.env.update(HOME=str(self.home), ARIZE_TRACE_ENABLED="true", ARIZE_DRY_RUN="false",
-                        CODEX_HOME=str(self.home / ".codex"))
+        self.env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("ARIZE_", "PHOENIX_", "CLAUDE_", "PYTHON", "GEMINI_", "CODEX_", "OTEL_"))
+        }
+        self.env.update(
+            HOME=str(self.home), ARIZE_TRACE_ENABLED="true", ARIZE_DRY_RUN="false", CODEX_HOME=str(self.home / ".codex")
+        )
 
     def run(self, harness, event, payload=None, argv=(), env=None):
         """Run one hook to completion; return (exit time, stderr)."""
-        p = subprocess.run([*self.cmd, "hook", harness, event, *argv], cwd=self.home,
-                           input=json.dumps(payload).encode() if payload is not None else b"",
-                           env=dict(self.env, **(env or {})), capture_output=True, timeout=60)
+        p = subprocess.run(
+            [*self.cmd, "hook", harness, event, *argv],
+            cwd=self.home,
+            input=json.dumps(payload).encode() if payload is not None else b"",
+            env=dict(self.env, **(env or {})),
+            capture_output=True,
+            timeout=60,
+        )
         if p.returncode != 0:
             raise SystemExit(f"{harness} {event} exited {p.returncode}: {p.stderr.decode()[-800:]}")
         return time.time(), p.stdout.decode(), p.stderr.decode()
@@ -124,7 +141,10 @@ def claude(h):
     tr = h.home / "transcript.jsonl"
     tr.write_text("".join(turn_lines("seed")))
     base = {"session_id": SID, "transcript_path": str(tr), "cwd": "/equiv/project"}
-    ev = lambda name, **kw: {**base, "hook_event_name": name, **kw}
+
+    def ev(name, **kw):
+        return {**base, "hook_event_name": name, **kw}
+
     h.run("claude", "session-start", ev("SessionStart", source="startup"))
     h.run("claude", "user-prompt-submit", ev("UserPromptSubmit", prompt="list the files"))
     ids = [f"toolu_equiv_{i}" for i in range(3)]
@@ -144,17 +164,45 @@ def gemini(h, sink):
     seq = [
         ("session-start", {"hook_event_name": "SessionStart", "source": "startup"}),
         ("before-agent", {"hook_event_name": "BeforeAgent", "prompt": "read the readme"}),
-        ("before-model", {"hook_event_name": "BeforeModel", "model_call_id": "m1",
-                          "llm_request": {"model": "gemini-equiv", "messages": [{"role": "user", "content": "read the readme"}]}}),
-        ("after-model", {"hook_event_name": "AfterModel", "model_call_id": "m1",
-                         "llm_request": {"model": "gemini-equiv"},
-                         "llm_response": {"text": "calling read_file",
-                                          "usage_metadata": {"prompt_token_count": 11, "candidates_token_count": 3}}}),
-        ("before-tool", {"hook_event_name": "BeforeTool", "tool_name": "read_file", "tool_call_id": "t1",
-                         "tool_input": {"file_path": "/equiv/project/README.md"}}),
-        ("after-tool", {"hook_event_name": "AfterTool", "tool_name": "read_file", "tool_call_id": "t1",
-                        "tool_input": {"file_path": "/equiv/project/README.md"},
-                        "tool_response": {"llmContent": "# readme"}}),
+        (
+            "before-model",
+            {
+                "hook_event_name": "BeforeModel",
+                "model_call_id": "m1",
+                "llm_request": {"model": "gemini-equiv", "messages": [{"role": "user", "content": "read the readme"}]},
+            },
+        ),
+        (
+            "after-model",
+            {
+                "hook_event_name": "AfterModel",
+                "model_call_id": "m1",
+                "llm_request": {"model": "gemini-equiv"},
+                "llm_response": {
+                    "text": "calling read_file",
+                    "usage_metadata": {"prompt_token_count": 11, "candidates_token_count": 3},
+                },
+            },
+        ),
+        (
+            "before-tool",
+            {
+                "hook_event_name": "BeforeTool",
+                "tool_name": "read_file",
+                "tool_call_id": "t1",
+                "tool_input": {"file_path": "/equiv/project/README.md"},
+            },
+        ),
+        (
+            "after-tool",
+            {
+                "hook_event_name": "AfterTool",
+                "tool_name": "read_file",
+                "tool_call_id": "t1",
+                "tool_input": {"file_path": "/equiv/project/README.md"},
+                "tool_response": {"llmContent": "# readme"},
+            },
+        ),
         ("after-agent", {"hook_event_name": "AfterAgent", "prompt_response": "it is a readme"}),
         ("session-end", {"hook_event_name": "SessionEnd", "reason": "exit"}),
     ]
@@ -162,8 +210,14 @@ def gemini(h, sink):
         before = len(sink.received)
         t0 = time.time()
         t_exit, out, _ = h.run("gemini", event, {**base, **payload})
-        exits.append({"event": event, "hook_s": round(t_exit - t0, 3), "stdout": out.strip(),
-                      "sent_before_exit": len(sink.received) - before})
+        exits.append(
+            {
+                "event": event,
+                "hook_s": round(t_exit - t0, 3),
+                "stdout": out.strip(),
+                "sent_before_exit": len(sink.received) - before,
+            }
+        )
     return exits
 
 
@@ -172,28 +226,50 @@ def codex(h):
     sid, turn = "equiv-codex-thread", "equiv-turn-1"
     folder = h.home / ".codex" / "sessions" / "2026" / "05" / "20"
     folder.mkdir(parents=True)
-    ev = lambda p, ts="2026-05-20T00:00:00.000Z": {"timestamp": ts, "type": "event_msg", "payload": p}
-    resp = lambda p, ts: {"timestamp": ts, "type": "response_item", "payload": p}
+
+    def ev(p, ts="2026-05-20T00:00:00.000Z"):
+        return {"timestamp": ts, "type": "event_msg", "payload": p}
+
+    def resp(p, ts):
+        return {"timestamp": ts, "type": "response_item", "payload": p}
+
     records = [
         ev({"type": "task_started", "turn_id": turn, "started_at": 1779235200}),
         ev({"type": "user_message", "message": "run ls"}),
-        resp({"type": "function_call", "name": "exec_command", "arguments": '{"cmd":"ls"}', "call_id": "c1"},
-             "2026-05-20T00:00:01.000Z"),
+        resp(
+            {"type": "function_call", "name": "exec_command", "arguments": '{"cmd":"ls"}', "call_id": "c1"},
+            "2026-05-20T00:00:01.000Z",
+        ),
         resp({"type": "function_call_output", "call_id": "c1", "output": "a\nb"}, "2026-05-20T00:00:02.000Z"),
         ev({"type": "agent_message", "message": "two files"}, "2026-05-20T00:00:03.000Z"),
-        ev({"type": "task_complete", "turn_id": turn, "last_agent_message": "two files",
-            "completed_at": 1779235204, "duration_ms": 4000}, "2026-05-20T00:00:04.000Z"),
+        ev(
+            {
+                "type": "task_complete",
+                "turn_id": turn,
+                "last_agent_message": "two files",
+                "completed_at": 1779235204,
+                "duration_ms": 4000,
+            },
+            "2026-05-20T00:00:04.000Z",
+        ),
     ]
     (folder / f"rollout-2026-05-20T00-00-00-{sid}.jsonl").write_text("\n".join(map(json.dumps, records)) + "\n")
-    notify = {"type": "agent-turn-complete", "thread-id": sid, "turn-id": turn,
-              "input-messages": ["run ls"], "last-assistant-message": "two files"}
+    notify = {
+        "type": "agent-turn-complete",
+        "thread-id": sid,
+        "turn-id": turn,
+        "input-messages": ["run ls"],
+        "last-assistant-message": "two files",
+    }
     h.run("codex", "notify", argv=[json.dumps(notify)])
 
 
 # --------------------------------------------------------------------------- normalization
 
 ID_KEYS = {"traceId", "spanId", "parentSpanId"}
-TIME_KEYS = re.compile(r"(TimeUnixNano|_time|_start|_ms$|start_time|timestamp|^started_at|ended_at|latency|duration)", re.I)
+TIME_KEYS = re.compile(
+    r"(TimeUnixNano|_time|_start|_ms$|start_time|timestamp|^started_at|ended_at|latency|duration)", re.I
+)
 HEX = re.compile(r"^[0-9a-f]{16}$|^[0-9a-f]{32}$")
 NOW_MS = re.compile(r"^1[78]\d{11}$")  # epoch ms in 2023..2027
 NOW_NS = re.compile(r"^1[78]\d{17}$")
@@ -225,8 +301,10 @@ class Norm:
             # OTLP attribute: {"key": k, "value": {...}} -> normalize the value by its key
             if set(o) == {"key", "value"} and isinstance(o["key"], str):
                 return {"key": o["key"], "value": self(o["value"], o["key"])}
-            return {self.str(k): self(v, k if not key or k not in ("stringValue", "intValue") else key)
-                    for k, v in o.items()}
+            return {
+                self.str(k): self(v, k if not key or k not in ("stringValue", "intValue") else key)
+                for k, v in o.items()
+            }
         if isinstance(o, list):
             return [self(x, key) for x in o]
         if isinstance(o, str):
@@ -252,8 +330,8 @@ def collect(h, sink, extra=None):
     states = n(h.states())
     payloads = [n({"path": r["path"], "headers": r["headers"], "body": r["body"]}) for r in reqs]
     out = {"requests": len(reqs), "payloads": payloads, "states": states}
-    errors = [l for log in h.logs().values() for l in log.splitlines() if "ERROR" in l or "failed" in l]
-    out["log_errors"] = [n.str(re.sub(r"^\S+ \S+ ", "", l)) for l in errors]
+    errors = [line for log in h.logs().values() for line in log.splitlines() if "ERROR" in line or "failed" in line]
+    out["log_errors"] = [n.str(re.sub(r"^\S+ \S+ ", "", line)) for line in errors]
     if extra:
         out.update(extra)
     return out
@@ -275,16 +353,21 @@ def sequence(label, cmd, out_path):
                 exits = gemini(h, sink)
                 n_at_exit = len(sink.received)
                 time.sleep(3.0)  # let every grandchild finish (the sink holds each response 1 s)
-                extra = {"gemini_hooks": exits,
-                         "gemini_slowest_hook_s": max(e["hook_s"] for e in exits),
-                         "gemini_requests_at_last_exit": n_at_exit,
-                         "gemini_requests_after_wait": len(sink.received)}
+                extra = {
+                    "gemini_hooks": exits,
+                    "gemini_slowest_hook_s": max(e["hook_s"] for e in exits),
+                    "gemini_requests_at_last_exit": n_at_exit,
+                    "gemini_requests_after_wait": len(sink.received),
+                }
             result[name] = collect(h, sink, extra)
         finally:
             h.close()
             sink.close()
-        print(f"{label} {name}: {result[name]['requests']} request(s), {len(result[name]['states'])} state file(s), "
-              f"{len(result[name]['log_errors'])} logged error(s)", flush=True)
+        print(
+            f"{label} {name}: {result[name]['requests']} request(s), {len(result[name]['states'])} state file(s), "
+            f"{len(result[name]['log_errors'])} logged error(s)",
+            flush=True,
+        )
     Path(out_path).write_text(json.dumps(result, indent=1, sort_keys=True))
 
 
@@ -313,15 +396,27 @@ def sessionkey(cmd):
     h = Home(cmd, "http://127.0.0.1:9")
     h.env["ARIZE_DRY_RUN"] = "true"
     try:
-        script = ('set -e; p=\'{"hook_event_name":"SessionStart","source":"startup"}\'; '
-                  'echo "$p" | "$@" hook claude session-start; echo "$p" | "$@" hook claude session-start; '
-                  'echo "parent=$$"')
-        p = subprocess.run(["/bin/sh", "-c", script, "sh", *cmd], env=h.env, cwd=h.home, capture_output=True,
-                           text=True, timeout=60)
+        script = (
+            'set -e; p=\'{"hook_event_name":"SessionStart","source":"startup"}\'; '
+            'echo "$p" | "$@" hook claude session-start; echo "$p" | "$@" hook claude session-start; '
+            'echo "parent=$$"'
+        )
+        p = subprocess.run(
+            ["/bin/sh", "-c", script, "sh", *cmd], env=h.env, cwd=h.home, capture_output=True, text=True, timeout=60
+        )
         parent = p.stdout.strip().splitlines()[-1]
         files = sorted(k for k in h.states())
-        print(json.dumps({"driver_pid": os.getpid(), "sh": parent, "state_files": files,
-                          "rc": p.returncode, "stderr": p.stderr[-300:]}))
+        print(
+            json.dumps(
+                {
+                    "driver_pid": os.getpid(),
+                    "sh": parent,
+                    "state_files": files,
+                    "rc": p.returncode,
+                    "stderr": p.stderr[-300:],
+                }
+            )
+        )
     finally:
         h.close()
 
@@ -342,7 +437,7 @@ def dryrun(cmd):
         with open(tr, "a") as f:
             f.write("".join(turn_lines("d", t0=50)))
         h.run("claude", "stop", {**base, "hook_event_name": "Stop"})
-        spans = [l for log in h.logs().values() for l in log.splitlines() if "[dry-run] would send span" in l]
+        spans = [line for log in h.logs().values() for line in log.splitlines() if "[dry-run] would send span" in line]
         print(f"dry-run spans logged: {len(spans)}" + (f" (first: {spans[0].split('] ', 1)[-1]})" if spans else ""))
         return 0 if spans else 1
     finally:
@@ -364,7 +459,7 @@ def https(cmd, endpoint="otlp.arize.com:443", env_extra=None):
         with open(tr, "a") as f:
             f.write("".join(turn_lines("h", t0=50)))
         h.run("claude", "stop", {**base, "hook_event_name": "Stop"}, env=env)
-        lines = [l for log in h.logs().values() for l in log.splitlines() if "send" in l.lower()]
+        lines = [line for log in h.logs().values() for line in log.splitlines() if "send" in line.lower()]
         print("\n".join(lines) or "(no send lines logged: the send succeeded)")
     finally:
         h.close()
