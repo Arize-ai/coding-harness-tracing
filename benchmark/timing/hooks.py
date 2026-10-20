@@ -17,7 +17,8 @@ Pre before a Post, and Pre/Post of the turn's tool before Stop, whose transcript
 Gates, per build. A failed gate marks the build INVALID, since a build that does nothing is fast too:
   inputs  build/inputs.py check passes before timing (every hook loads and exits 0)
   spans   every Stop, warmups included, logs one dry-run span
-A hook that exits non-zero while being timed also fails its build, which then stops being timed.
+A hook that exits non-zero or hangs (30 s, as in inputs.py check) while being timed also fails its
+build, which then stops being timed.
 
 Also recorded per build: size_bytes, files and native_libs (.so/.dylib) of DIR, counting regular
 files only; build_s from results/<label>/build_seconds; first_run_ms from first-run.sh's
@@ -119,7 +120,7 @@ def one_call(b, mode, event, i, gap, timed):
         if gap:
             time.sleep(gap)
         ms = b.harness.run(event, payload)
-    except SystemExit as e:  # Harness.run: the hook exited non-zero
+    except SystemExit as e:  # Harness.run: the hook exited non-zero or timed out
         b.error = f"{mode} {event}: {e}"
         print(f"{b.label}: FAILED, no longer timed: {b.error}", file=sys.stderr, flush=True)
         return

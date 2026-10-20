@@ -22,6 +22,7 @@ EVENTS = {
     "Stop": "stop",
 }
 KB = 1024
+HOOK_TIMEOUT_S = 30  # as in build/inputs.py check: a hung hook fails its build, not the whole run
 
 
 # --------------------------------------------------------------------------- stats
@@ -132,8 +133,9 @@ def turn_lines(tag, tool_ids=(), result_bytes=200, text_bytes=200, t0=0):
 class Harness:
     """A throwaway HOME and one build's Claude hooks, run as `<cmd> hook claude <event>`."""
 
-    def __init__(self, cmd, dry_run=False):
+    def __init__(self, cmd, dry_run=False, timeout=HOOK_TIMEOUT_S):
         self.cmd = list(cmd)
+        self.timeout = timeout
         self.home = Path(tempfile.mkdtemp(prefix="bench-home-"))
         self.state_file = self.home / ".arize" / "harness" / "state" / "claude-code" / f"state_{SID}.json"
         self.log_file = self.home / ".arize" / "harness" / "logs" / "claude-code.log"
@@ -160,16 +162,20 @@ class Harness:
         return p
 
     def run(self, event, payload):
-        """Run one hook to completion; return its wall time in ms."""
+        """Run one hook to completion; return its wall time in ms. SystemExit if it fails or hangs."""
         data = json.dumps(payload).encode()
         t = time.perf_counter()
-        proc = subprocess.run(
-            self.cmd + ["hook", "claude", EVENTS[event]],
-            input=data,
-            env=self.env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        try:
+            proc = subprocess.run(
+                self.cmd + ["hook", "claude", EVENTS[event]],
+                input=data,
+                env=self.env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired:  # run() has killed the hook by now
+            raise SystemExit(f"{event} timed out after {self.timeout:g} s") from None
         ms = (time.perf_counter() - t) * 1000
         if proc.returncode != 0:
             raise SystemExit(f"{event} exited {proc.returncode}: {proc.stderr.decode()[-500:]}")
