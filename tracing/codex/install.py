@@ -3,7 +3,7 @@
 
 Self-contained module that handles:
 - Writing ~/.codex/arize-env.sh (env file)
-- Updating ~/.codex/config.toml (notify + five hook entry points)
+- Updating ~/.codex/config.toml (notify command)
 - Managing the shared config.json harness entry
 - Symlinking skills
 - Migrating legacy v1 installs via tracing.codex.install_legacy
@@ -45,6 +45,7 @@ from tracing.codex.constants import (
     get_codex_home,
 )
 from tracing.codex.install_legacy import cleanup_legacy_install
+from tracing.codex.notify_chain import install_notify, remove_notify
 
 # Hook events from the legacy installer; used only for cleanup
 _HOOK_EVENTS = (
@@ -110,7 +111,7 @@ def _strip_arize_hooks(data: dict) -> bool:
 def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
     """Write the notify-only layout to ~/.codex/config.toml. Idempotent.
 
-    Ensures our ``notify_cmd`` is present exactly once in ``notify = [...]``.
+    Chains our callback with the existing command; preserves desktop ownership.
     Does not touch any existing ``[[hooks.<Event>]]`` entries -- if a prior
     install left some behind, manage them out-of-band or run ``uninstall``.
     """
@@ -120,12 +121,7 @@ def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
 
     data = _toml_load_strict(path)
 
-    existing_notify = data.get("notify", [])
-    if not isinstance(existing_notify, list):
-        existing_notify = [existing_notify] if existing_notify else []
-    if notify_cmd not in existing_notify:
-        existing_notify.append(notify_cmd)
-    data["notify"] = existing_notify
+    data["notify"] = install_notify(data.get("notify"), notify_cmd)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     _toml_write(data, path)
@@ -143,16 +139,14 @@ def _codex_toml_remove(path: Path, notify_cmd: str) -> None:
     data = _toml_load_strict(path)
     changed = False
 
-    existing_notify = data.get("notify", [])
-    if isinstance(existing_notify, list) and notify_cmd in existing_notify:
-        existing_notify.remove(notify_cmd)
-        if existing_notify:
-            data["notify"] = existing_notify
+    existing_notify = data.get("notify")
+    restored = remove_notify(existing_notify, notify_cmd)
+    original = existing_notify if isinstance(existing_notify, list) else ([existing_notify] if existing_notify else [])
+    if restored != original:
+        if restored:
+            data["notify"] = restored
         else:
-            del data["notify"]
-        changed = True
-    elif isinstance(existing_notify, str) and existing_notify == notify_cmd:
-        del data["notify"]
+            data.pop("notify", None)
         changed = True
 
     if _strip_arize_hooks(data):
@@ -210,7 +204,8 @@ def install(with_skills: bool = False) -> None:
     codex_config_file = codex_home / "config.toml"
     codex_env_file = codex_home / "arize-env.sh"
     load_config(str(CONFIG_FILE))
-    _toml_load_strict(codex_config_file)
+    existing_toml = _toml_load_strict(codex_config_file)
+    install_notify(existing_toml.get("notify"), str(venv_bin(NOTIFY_BIN_NAME)))
 
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
