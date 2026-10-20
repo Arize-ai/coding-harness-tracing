@@ -31,6 +31,7 @@ SECONDS=0  # build time: the build itself, not setting up the build tools
 # INPUT_DATA instead of running inputs.py again.
 modules=$(inputs modules) || { echo "BUILD STOPPED: inputs.py modules failed" >&2; exit 1; }
 INPUT_DATA=$(inputs data) || { echo "BUILD STOPPED: inputs.py data failed" >&2; exit 1; }
+read_build_info
 clean_dest "$DEST"
 # if, not [ -n ] && ...: under set -e a false test as the loop's last command ends the script.
 ARGS=()

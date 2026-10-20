@@ -51,6 +51,15 @@ Certificates, and a frozen build keeps that path, so HTTPS sends would fail with
 `CERTIFICATE_VERIFY_FAILED`. uv's interpreters read the system `/etc/ssl/cert.pem`. Nuitka also can't build universal itself
 (`--macos-target-arch` takes `arm64` or `x86_64`), so `universal.sh` merges two single-arch builds.
 
+**What a build was made from.** Every successful build writes `results/<label>/build_info.json`:
+`source`, a sha256 of `core/`, `tracing/`, `benchmark/build/` (not `selftest.sh`),
+`requirements-build.txt` and `pyproject.toml` as they were on disk when the build started (so it
+covers uncommitted edits, and README or timing edits don't change it), plus the commit (`-dirty` if
+those paths have changes), Python, Nuitka and uv versions. `universal.sh` merges only two halves
+with the same `source` as this checkout, so after any change to those files rebuild both halves.
+A stopped build has no `build_info.json`, so it can't be merged either. Builds made before this
+was recorded have none: rebuild them.
+
 ## Time
 
 ```bash
@@ -72,7 +81,9 @@ HOOKS_ONLY=1 benchmark/timing/run.sh  # skip the first runs, keep their earlier 
 
 `summarize.py` turns `bench-result.json` into one column per build. The only judged number is the
 budget: back-to-back p95 at most 25 ms slower than venv312 on SessionStart and Stop. Back to back
-is the floor; idle is closer to a real session, where every hook follows model or tool time.
+is the floor; idle is closer to a real session, where every hook follows model or tool time. A
+source row shows what each build was made from, with a warning when the builds differ or one has
+no record.
 
 `timing/lifecycle.py` splits one hook's wall time into spawn, boot and run.
 
@@ -88,13 +99,15 @@ table instead of PASS/FAIL.
 | arch | end of `nuitka.sh` | `lipo -archs` of the executable is `$ARCH` | that the x86_64 half really is x86_64 |
 | inputs | `inputs.py modules` / `data`: `nuitka.sh` before compiling. `inputs.py check`: end of every build, and `hooks.py` before timing. Data in the bundle: end of the three Nuitka builds only | `inputs.py modules` and `data` succeed (a missing data path stops the build unless it's in `EXPECTED_MISSING`, and the previous bundle is kept); `inputs.py check`: `hook --list` matches the hook table, and every hook loads and exits 0 (a crash or signal fails it); every listed data file is in the bundle and identical to its source | every timing: a binary missing a handler or a data file, or crashing on start, is never timed |
 | universal | `universal.sh` | same files in both halves, non-Mach-O files identical, `codesign --verify --strict`, every Mach-O file `x86_64 arm64`, minos `EXPECT_MINOS_ARM64` / `EXPECT_MINOS_X86_64` (default 11.0 / 10.15), inputs check and a dry-run span both natively and under `arch -x86_64` | the universal column: it describes a binary that works on both architectures |
+| sources | `universal.sh`, before merging | both halves' `build_info.json` exist and have the same `source` as this checkout | that the universal binary is one program, built from the code being timed |
 | spans | `hooks.py` | every Stop, warmups included, logs its dry-run span | the Stop numbers (and, since every timed call is set up the same way, the rest): Stop really builds and sends a trace |
 
 `build/selftest.sh` tests the build gates themselves: in a throwaway copy of the repo it breaks
 each one on purpose (failing `inputs.py`, a hook module left out of the build, a missing or changed
-data file, a wrong minos) and checks that the build stops with the expected message, and that the
-previous bundle survives a stopped build. Run it after both single-arch builds: it reuses their
-bundles and `.workbench/bt-arm64` (about a minute here, most of it three arm64 builds).
+data file, a wrong minos, halves from different sources, a source changed after both halves) and
+checks that the build stops with the expected message, and that the previous bundle survives a
+stopped build. Run it after both single-arch builds: it reuses their bundles and
+`.workbench/bt-arm64`.
 
 Beyond the gates, `checks/equiv.py` compares a build with venv312 (run these by hand after a
 change to the build; the driver needs this checkout's `core/`, so use a build-tools Python):

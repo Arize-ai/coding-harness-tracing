@@ -5,10 +5,12 @@
 # Cases: (a) inputs.py modules fails, and the previous bundle is kept; (b) a DATA path that doesn't
 # exist; (c) a data file removed from the bundle before finish(); (d) a data file changed in the
 # bundle; (e) EXPECT_MINOS_ARM64=99.0 build/universal.sh; (f) tracing/devin/skills alone passes;
-# (g) one hook module left out of inputs.py modules: the smoke test fails on that hook alone.
+# (g) one hook module left out of inputs.py modules: the smoke test fails on that hook alone;
+# (h) universal.sh with halves recorded as built from different sources; (i) universal.sh after a
+# core/ file changed since both halves were built.
 # Each case gets its own copy (no .git, .workbench, builds or results); this checkout is never
-# changed. The arm64 cases reuse .workbench/bt-arm64 (or BUILDTOOLS=<venv>) as is; (e) runs
-# universal.sh, which sets up both build-tools venvs inside its copy.
+# changed. The arm64 cases reuse .workbench/bt-arm64 (or BUILDTOOLS=<venv>) as is; (e), (h) and (i)
+# run universal.sh, which sets up both build-tools venvs inside its copy.
 set -euo pipefail
 exec </dev/null
 HERE=$(cd "$(dirname "$0")" && pwd); BENCH=$(cd "$HERE/.." && pwd); REPO=$(cd "$BENCH/.." && pwd)
@@ -16,7 +18,8 @@ ARM=$BENCH/builds/nuitka-arm64
 X86=$BENCH/builds/nuitka-x86_64
 BT=${BUILDTOOLS:-$REPO/.workbench/bt-arm64}
 for need in "$ARM/arize-harness.bin" "$X86/arize-harness.bin" "$BT/bin/python" \
-  "$BENCH/results/nuitka-arm64/build_seconds" "$BENCH/results/nuitka-x86_64/build_seconds"; do
+  "$BENCH/results/nuitka-arm64/build_seconds" "$BENCH/results/nuitka-x86_64/build_seconds" \
+  "$BENCH/results/nuitka-arm64/build_info.json" "$BENCH/results/nuitka-x86_64/build_info.json"; do
   [ -e "$need" ] || { echo "SELFTEST STOPPED: missing $need (run ARCH=arm64 / ARCH=x86_64 build/nuitka.sh first)" >&2; exit 1; }
 done
 
@@ -51,6 +54,12 @@ expect_fail() {  # case, expected text, command...: exit 1 and the text in its o
   fi
 }
 build_arm64() { env BUILDTOOLS="$BT" ARCH=arm64 "$1/benchmark/build/nuitka.sh"; }  # copy
+with_halves() {  # copy: both single-arch builds and their results, for universal.sh
+  mkdir -p "$1/benchmark/builds" "$1/benchmark/results"
+  cp -R "$ARM" "$X86" "$1/benchmark/builds/"
+  cp -R "$BENCH/results/nuitka-arm64" "$BENCH/results/nuitka-x86_64" "$1/benchmark/results/"
+}
+universal() { env -u BUILDTOOLS "$1/benchmark/build/universal.sh"; }  # copy
 
 echo "-- (a) inputs.py modules fails"
 d=$(copy a)
@@ -77,9 +86,7 @@ expect_fail d "BUILD FAILED: data file missing or different in bundle: tracing/o
 
 echo "-- (e) EXPECT_MINOS_ARM64=99.0 build/universal.sh"
 d=$(copy e)
-mkdir -p "$d/benchmark/builds" "$d/benchmark/results"
-cp -R "$ARM" "$X86" "$d/benchmark/builds/"
-cp -R "$BENCH/results/nuitka-arm64" "$BENCH/results/nuitka-x86_64" "$d/benchmark/results/"
+with_halves "$d"
 # Without BUILDTOOLS: one venv can't serve both arches, so universal.sh sets up its own.
 expect_fail e "(EXPECT_MINOS_ARM64 / EXPECT_MINOS_X86_64)" env -u BUILDTOOLS EXPECT_MINOS_ARM64=99.0 "$d/benchmark/build/universal.sh"
 grep -qF "(want 99.0 / 10.15) (override)" "$TMP/e.log" && seen=0 || seen=1
@@ -107,6 +114,20 @@ result g "$ok" "only the kiro hook failed ($((n - 1))/$n loaded)"
 report=$d/.workbench/nuitka-arm64/compilation-report.xml
 [ -f "$report" ] && ! grep -qF "module name=\"$drop\"" "$report" && ok=0 || ok=1
 result g "$ok" "$drop not in the compilation report"
+
+echo "-- (h) halves recorded as built from different sources"
+d=$(copy h)
+with_halves "$d"
+inject "$d/benchmark/results/nuitka-x86_64/build_info.json" 's/"source": "[0-9a-f]{12}/"source": "000000000000/'
+expect_fail h "UNIVERSAL FAILED: halves built from different sources" universal "$d"
+[ ! -e "$d/benchmark/builds/nuitka-universal" ] && ok=0 || ok=1
+result h "$ok" "stopped before merging (no builds/nuitka-universal)"
+
+echo "-- (i) a core/ file changed after both halves were built"
+d=$(copy i)
+with_halves "$d"
+echo "# selftest" >>"$d/core/hook_table.py"
+expect_fail i "UNIVERSAL FAILED: halves built from other sources than this checkout" universal "$d"
 
 echo "selftest: $((cases - failed))/$cases passed"
 [ "$failed" = 0 ]

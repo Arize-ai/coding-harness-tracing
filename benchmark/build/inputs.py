@@ -12,8 +12,15 @@
                             hook must load (--list only prints the table, which is plain data, so a
                             build missing every handler still passes it) and exit 0: a crash, a
                             signal or a timeout is a failure too. Exit 1 on any failure.
+  inputs.py source          sha256 of the files a build is made from (SOURCE), without git, so it
+                            covers uncommitted edits and works in selftest.sh's copies
+  inputs.py info UV         the build's results/<label>/build_info.json: source, commit (-dirty if
+                            SOURCE has changes, unknown without git), python, nuitka and uv versions
 """
+import hashlib
+import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -31,6 +38,11 @@ DATA = ["tracing/opencode/plugin/arize-tracing.ts", "tracing/omp/plugin/arize-tr
 # Listed in DATA but absent on purpose: the repo ships no devin skills yet ("This harness ships no
 # skills yet", tracing/devin/install.py). Any other missing path fails `inputs.py data`.
 EXPECTED_MISSING = {"tracing/devin/skills"}
+# What a build is made from: universal.sh merges two halves only if their hashes of these match.
+# selftest.sh is left out: it tests the gates and changes no build.
+SOURCE = ["core", "tracing", "benchmark/build", "benchmark/requirements-build.txt", "pyproject.toml"]
+SOURCE_SKIP = {"benchmark/build/selftest.sh"}
+SKIP_DIRS = {"__pycache__", "node_modules"}
 
 
 def modules():
@@ -53,6 +65,49 @@ def data():
         for f in files:
             print(f"{f}\t{f.relative_to(REPO)}")
     return missing
+
+
+def source():
+    """Each file's path and sha256, in order. A symlink is hashed as its target path, not followed:
+    tracing/{claude_code,cursor}/core point back at core/."""
+    h = hashlib.sha256()
+
+    def add(p):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in SOURCE_SKIP or p.suffix == ".pyc" or p.name == ".DS_Store":
+            return
+        if p.is_symlink():
+            h.update(f"L {rel} {os.readlink(p)}\n".encode())
+        elif p.is_file():
+            h.update(f"F {rel} {hashlib.sha256(p.read_bytes()).hexdigest()}\n".encode())
+
+    for rel in SOURCE:
+        top = REPO / rel
+        if not top.is_dir():
+            add(top)
+            continue
+        for d, dirs, files in os.walk(top):  # doesn't descend into symlinked dirs, but lists them
+            dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS)
+            for name in sorted(files + [x for x in dirs if os.path.islink(os.path.join(d, x))]):
+                add(Path(d) / name)
+    return h.hexdigest()
+
+
+def info(uv):
+    def git(*a):
+        p = subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True)
+        return p.stdout.strip() if p.returncode == 0 else None
+
+    commit = git("rev-parse", "HEAD") or "unknown"
+    if commit != "unknown" and git("status", "--porcelain", "--", *SOURCE):
+        commit += "-dirty"
+    try:
+        from importlib.metadata import version
+
+        nuitka = version("nuitka")
+    except Exception:  # venv312 has no Nuitka
+        nuitka = None
+    return {"source": source(), "commit": commit, "python": platform.python_version(), "nuitka": nuitka, "uv": uv}
 
 
 def hooks():
@@ -123,5 +178,9 @@ if __name__ == "__main__":
         print("\n".join(hooks()))
     elif what == "check" and len(sys.argv) == 3:
         sys.exit(check(sys.argv[2]))
+    elif what == "source":
+        print(source())
+    elif what == "info" and len(sys.argv) == 3:
+        print(json.dumps(info(sys.argv[2]), indent=2))
     else:
         sys.exit(__doc__)

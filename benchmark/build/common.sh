@@ -15,7 +15,7 @@ uv_have=$(uv --version | awk '{print $2}')
 REQUIREMENTS=$BENCH/requirements-build.txt
 WORKBENCH=$REPO/.workbench/$LABEL   # build/, spec files, reports: never the repo root
 INPUTS=$HERE/inputs.py
-unset INPUT_DATA  # set by nuitka.sh for finish(); never taken from the environment
+unset INPUT_DATA BUILD_INFO  # set by the build scripts for finish(); never taken from the environment
 
 # Stop unless <python> is the pinned interpreter for <arch> and its OpenSSL reads the system CA file.
 # A build inherits its interpreter's CA path, so a wrong one only shows up as failed HTTPS sends.
@@ -69,8 +69,17 @@ buildtools() {  # arch
 # stray core/ from the cwd. The data listing reports missing paths on stderr itself.
 inputs() { "$PY" -I "$INPUTS" "$@"; }
 
+# What this build is made from (inputs.py info), read before building so an edit made during the
+# build can't be credited to it. finish() writes it next to build_seconds; universal.sh compares it.
+read_build_info() {
+  BUILD_INFO=$(inputs info "$uv_have") || { echo "BUILD STOPPED: inputs.py info failed" >&2; exit 1; }
+}
+build_info_file() { echo "$BENCH/results/$LABEL/build_info.json"; }
+
 clean_dest() {  # earlier builds are read-only
   [ -e "$1" ] && chmod -R u+w "$1" && rm -rf "$1"
+  # Only a build that passes finish() has a build_info.json, so universal.sh never merges a failed one.
+  rm -f "$(build_info_file)"
   mkdir -p "$(dirname "$1")" "$WORKBENCH"
 }
 
@@ -98,5 +107,6 @@ finish() {  # executable
   chmod -R a-w "$DEST"  # like a root-owned MDM install
   mkdir -p "$BENCH/results/$LABEL"
   echo "$SECONDS" > "$BENCH/results/$LABEL/build_seconds"
+  echo "$BUILD_INFO" > "$(build_info_file)"
   echo "built $LABEL in ${SECONDS}s, read-only: $exe"
 }

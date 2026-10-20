@@ -3,7 +3,8 @@
 #   ARCH=arm64 build/nuitka.sh; ARCH=x86_64 build/nuitka.sh; build/universal.sh
 # Nuitka can't build universal itself (--macos-target-arch takes arm64 or x86_64), and there is no
 # universal python-build-standalone, so: two single-arch builds, lipo per Mach-O file, re-sign ad hoc.
-# Verification: every Mach-O file is "x86_64 arm64"; inputs.py check and a dry-run span pass
+# Verification: both halves were built from this checkout's sources (build_info.json "source");
+# every Mach-O file is "x86_64 arm64"; inputs.py check and a dry-run span pass
 # natively and under arch -x86_64; minos is EXPECT_MINOS_ARM64 (default 11.0) and
 # EXPECT_MINOS_X86_64 (default 10.15).
 set -euo pipefail
@@ -44,6 +45,25 @@ for d in "$ARM" "$X86"; do
 done
 buildtools x86_64; PY_X86=$PY
 buildtools arm64   # PY is the native driver from here on
+
+# lipo merges any two builds that pass the checks below, even from different sources, and finish()
+# and inputs.py check compare against this checkout: so both halves must come from it.
+read_build_info
+half() {  # arch -> "<source> <commit>" from its build_info.json
+  local f=$BENCH/results/nuitka-$1/build_info.json
+  [ -f "$f" ] || fail "no $f: the $1 half has no record of its sources (rebuild it: ARCH=$1 build/nuitka.sh)"
+  "$PY" -I -c 'import json, sys; i = json.load(open(sys.argv[1])); print(i["source"], i["commit"])' "$f"
+}
+# One assignment each: in `a=$(..) b=$(..)` only the last substitution's status counts under set -e.
+src_arm=$(half arm64)
+src_x86=$(half x86_64)
+want=$("$PY" -I -c 'import json, sys; print(json.loads(sys.argv[1])["source"])' "$BUILD_INFO")
+short() { echo "${1:0:12} (${1#* })"; }  # "<source> <commit>" -> "<source:12> (<commit>)"
+[ "${src_arm%% *}" = "${src_x86%% *}" ] ||
+  fail "halves built from different sources: arm64 $(short "$src_arm"), x86_64 $(short "$src_x86"); rebuild both"
+[ "${src_arm%% *}" = "$want" ] ||
+  fail "halves built from other sources than this checkout: $(short "$src_arm"), checkout ${want:0:12}; rebuild both"
+echo "-- verify: both halves built from this checkout's sources (${want:0:12})"
 # Build time: both halves plus the merge, not setting up the build tools.
 SECONDS=$(($(cat "$BENCH/results/nuitka-arm64/build_seconds") + $(cat "$BENCH/results/nuitka-x86_64/build_seconds")))
 

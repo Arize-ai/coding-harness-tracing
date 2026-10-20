@@ -21,8 +21,10 @@ A hook that exits non-zero or hangs (30 s, as in inputs.py check) while being ti
 build, which then stops being timed.
 
 Also recorded per build: size_bytes, files and native_libs (.so/.dylib) of DIR, counting regular
-files only; build_s from results/<label>/build_seconds; first_run_ms from first-run.sh's
-results/<label>/first-run.txt (writable) and first-run-ro.txt (readonly).
+files only; build_s from results/<label>/build_seconds; build_info (what the build was made from,
+or null for a build made before it was recorded) from results/<label>/build_info.json; first_run_ms
+from first-run.sh's results/<label>/first-run.txt (writable) and first-run-ro.txt (readonly).
+"commit" is this checkout when timing, not necessarily what the builds were made from.
 """
 import argparse
 import json
@@ -71,6 +73,13 @@ def first_runs(results, label):
         runs = [float(x) for x in f.read_text().split()] if f.exists() else []
         out[key] = {"p50": pct(runs, 50), "max": max(runs), "runs": runs} if runs else None
     return out
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def read_int(path):
@@ -225,6 +234,7 @@ def main():
             "error": b.error,
             **footprint(b.root),
             "build_s": read_int(results / b.label / "build_seconds"),
+            "build_info": read_json(results / b.label / "build_info.json"),
             "first_run_ms": first_runs(results, b.label),
             "hooks": {
                 mode: {

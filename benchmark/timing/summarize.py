@@ -6,7 +6,8 @@
 A build gets PASS/FAIL only if its gate is ok: inputs.py check passed and every Stop logged a
 dry-run span. Otherwise it is INVALID, since a build that does nothing is also fast. The budget
 rule: back-to-back p95 at most BUDGET_MS slower than venv312 on SessionStart and on Stop. Every
-other number is reported, not judged.
+other number is reported, not judged. Builds made from different sources (build_info.json) get a
+warning, not a verdict: comparing across commits can be deliberate.
 """
 import json
 import sys
@@ -42,6 +43,11 @@ def verdict(name, r, base):
 
 def ms(x):
     return "-" if x is None else f"{x:.0f}"
+
+
+def source(r):
+    i = r.get("build_info")
+    return f"{i['source'][:12]} ({i['commit'][:12]}{'-dirty' if i['commit'].endswith('-dirty') else ''})" if i else "?"
 
 
 def first(r, key):
@@ -81,6 +87,7 @@ def main():
             "size / files / .so+.dylib",
             lambda n, r: f"{r['size_bytes'] / 2**20:.0f}M / {r['files']} / {r['native_libs']}",
         ),
+        ("source (commit)", lambda n, r: source(r)),
         ("build time (s)", lambda n, r: ms(r["build_s"])),
         ("first run, writable: p50 / worst (ms)", lambda n, r: first(r, "writable")),
         ("first run, read-only: p50 / worst (ms)", lambda n, r: first(r, "readonly")),
@@ -105,6 +112,12 @@ def main():
         "First runs and idle numbers are reported, not judged."
     )
     print(f"{TURN_TOOLS}-tool turn = UPS + {TURN_TOOLS}×Pre + {TURN_TOOLS}×Post + Stop, idle p50s.")
+    unknown = [n for n, r in builds.items() if not r.get("build_info")]
+    sources = {r["build_info"]["source"] for r in builds.values() if r.get("build_info")}
+    if unknown:
+        print(f"\nWarning: no build_info.json for {', '.join(unknown)}: built before sources were recorded.")
+    if len(sources) > 1:
+        print("\nWarning: these builds were made from different sources; see the source row.")
 
 
 if __name__ == "__main__":

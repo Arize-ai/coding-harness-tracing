@@ -16,6 +16,7 @@ clean_dest "$DEST"
 uv venv -q --managed-python --no-config -p "$(pinned_python arm64)" "$DEST"
 PY=$DEST/bin/python
 check_python "$PY" arm64
+read_build_info
 # -c: the same python-dotenv as the build tools, without installing Nuitka here.
 uv pip install -q --python "$PY" -c "$REQUIREMENTS" \
   --reinstall-package coding-harness-tracing --refresh-package coding-harness-tracing "$REPO"
@@ -24,4 +25,5 @@ echo "-- smoke test: $EXE"
 "$PY" -I "$INPUTS" check "$EXE" || { echo "BUILD FAILED SMOKE TEST: $LABEL" >&2; exit 1; }
 mkdir -p "$BENCH/results/$LABEL"
 echo "$SECONDS" > "$BENCH/results/$LABEL/build_seconds"
+echo "$BUILD_INFO" > "$(build_info_file)"
 echo "built $LABEL in ${SECONDS}s: $EXE"
