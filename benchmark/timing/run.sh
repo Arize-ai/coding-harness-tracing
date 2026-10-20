@@ -26,7 +26,7 @@ for row in "${CANDIDATES[@]}"; do
   READONLY=1 "$HERE/first-run.sh" "$label" "$dir" "$exe"
 done
 [ ${#ARGS[@]} -gt 0 ] || { echo "nothing built" >&2; exit 1; }
-echo "== hooks: ${#ARGS[@]} builds"
+echo "== hooks: $((${#ARGS[@]} / 4)) builds"  # 4 words per build: --build label dir exe
 rc=0
 python3 "$HERE/hooks.py" "$@" "${ARGS[@]}" || rc=$?  # a failed gate still writes the result (INVALID)
 "$HERE/summarize.py" "$HERE/../results/bench-result.json" > "$HERE/../results/table.md"

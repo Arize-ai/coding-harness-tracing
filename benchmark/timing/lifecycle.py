@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-phase process lifecycle timing for one hook invocation (Arize-ai/arize#90274).
 
-hyperfine gives one wall-clock number. This splits it, per run, into:
+timing/hooks.py gives one wall-clock number per call. This splits it, per run, into:
   spawn     parent calls posix_spawn -> posix_spawn returns   (process creation)
   boot      spawn returned -> child's first Python line runs  (exec, code signing, dyld,
                                                                EDR exec checks, interpreter init)
@@ -13,11 +13,11 @@ open, scheduling. Where that gap grows is where the security agent is.
   lifecycle.py [--runs N] [--event E] [--payload FILE] [--concurrency C] [--shell] -- CMD...
 
 CMD is the hook command without "hook claude <event>". Python builds get a probe: pass the
-interpreter (e.g. builds/pbs/bin/python3) and --python, and the first-line timestamp is
+interpreter (e.g. builds/venv312/bin/python3) and --python, and the first-line timestamp is
 written to fd 3. Frozen builds get spawn/total/rusage only. monotonic_ns is system-wide on
 macOS (mach_absolute_time), so parent and child timestamps compare directly.
 
-Runs in a throwaway HOME with ARIZE_DRY_RUN=true, like bench.sh.
+Runs in a throwaway HOME with ARIZE_DRY_RUN=true, like timing/hooks.py.
 """
 import argparse
 import os

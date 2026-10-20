@@ -10,8 +10,7 @@ build/      venv.sh, nuitka.sh, universal.sh, common.sh (pins), inputs.py (what 
 timing/     run.sh (drives everything), hooks.py (per-hook timing), first-run.sh, summarize.py,
             harness.py (throwaway HOME + hook runner), lifecycle.py (per-phase timing of one hook)
 checks/     equiv.py: same output as venv312, real HTTPS, dry-run span, session key
-workload/   per-turn costs on venv312 that packaging doesn't change (concurrency, buffer, transcripts, ...)
-reports/    the spike's results: CHECKS.md, STARTUP.md, WORKLOAD.md
+reports/    the spike's Nuitka correctness checks: CHECKS.md
 ```
 
 Builds go to `builds/`, results to `results/`, build tools and Nuitka's scratch to `.workbench/` at
@@ -24,9 +23,9 @@ macOS only. Needs [uv](https://docs.astral.sh/uv/) 0.11.24, the Xcode command li
 
 ```bash
 benchmark/build/venv.sh               # builds/venv312: the baseline, a venv with this checkout
-ARCH=arm64 benchmark/build/nuitka.sh  # builds/nuitka-arm64        ~25 s
+ARCH=arm64 benchmark/build/nuitka.sh  # builds/nuitka-arm64        ~20 s
 ARCH=x86_64 benchmark/build/nuitka.sh # builds/nuitka-x86_64       ~30 s, re-runs itself under arch -x86_64
-benchmark/build/universal.sh          # builds/nuitka-universal    lipo merge, re-sign, verify
+benchmark/build/universal.sh          # builds/nuitka-universal    ~10 s on top of both halves: lipo merge, re-sign, verify
 ```
 
 Every build comes from one interpreter, named exactly in `build/common.sh`: uv's
@@ -38,14 +37,14 @@ venv, which still has to pass the interpreter check below.
 
 **uv version.** The interpreter names pin the Python version but not the python-build-standalone
 release behind it; that comes from uv. The numbers in `reports/` and in the PR were taken with uv
-0.11.24. Use the same uv, or expect to re-baseline.
+0.11.24 (`UV_VERSION` in `build/common.sh`; another uv gets a warning). Use the same uv, or expect
+to re-baseline.
 
 **Why not python.org's Python?** It is the only universal2 CPython, so it looks like the easy way
 to a universal binary. But its OpenSSL is built with `OPENSSLDIR` inside
 `/Library/Frameworks/Python.framework/...`, which is empty until the user runs Install
-Certificates, and a frozen build keeps that path. In the spike's check 8 rerun its universal build
-failed every HTTPS send with `CERTIFICATE_VERIFY_FAILED` on both architectures. uv's interpreters
-read the system `/etc/ssl/cert.pem`. Nuitka also can't build universal itself
+Certificates, and a frozen build keeps that path, so HTTPS sends would fail with
+`CERTIFICATE_VERIFY_FAILED`. uv's interpreters read the system `/etc/ssl/cert.pem`. Nuitka also can't build universal itself
 (`--macos-target-arch` takes `arm64` or `x86_64`), so `universal.sh` merges two single-arch builds.
 
 ## Time
@@ -71,8 +70,7 @@ HOOKS_ONLY=1 benchmark/timing/run.sh  # skip the first runs, keep their earlier 
 budget: back-to-back p95 at most 25 ms slower than venv312 on SessionStart and Stop. Back to back
 is the floor; idle is closer to a real session, where every hook follows model or tool time.
 
-`timing/lifecycle.py` splits one hook's wall time into spawn, boot and run. `workload/run-all.sh`
-measures per-turn costs on venv312 (see `reports/WORKLOAD.md`).
+`timing/lifecycle.py` splits one hook's wall time into spawn, boot and run.
 
 ## Gates
 
@@ -97,5 +95,6 @@ $PY -I benchmark/checks/equiv.py sequence venv312 $B/venv312/bin/arize-harness /
 $PY -I benchmark/checks/equiv.py sequence nuitka $B/nuitka-arm64/arize-harness.bin /tmp/nuitka.json
 $PY -I benchmark/checks/equiv.py diff /tmp/venv.json /tmp/nuitka.json   # 12 "same" lines
 $PY -I benchmark/checks/equiv.py https $B/nuitka-universal/arize-harness.bin                    # 403 (fake key)
+$PY -I benchmark/checks/equiv.py sessionkey $B/nuitka-universal/arize-harness.bin               # one state file, keyed by the driver's pid
 arch -x86_64 .workbench/bt-x86_64/bin/python -I benchmark/checks/equiv.py https $B/nuitka-universal/arize-harness.bin
 ```

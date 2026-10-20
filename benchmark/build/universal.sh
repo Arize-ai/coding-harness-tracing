@@ -26,10 +26,10 @@ minos() {  # arch, file: LC_BUILD_VERSION minos, or LC_VERSION_MIN_MACOSX versio
 for d in "$ARM" "$X86"; do
   [ -x "$d/arize-harness.bin" ] || fail "no build in $d (run ARCH=arm64 / ARCH=x86_64 build/nuitka.sh first)"
 done
-# Build time: both halves plus the merge.
-SECONDS=$(($(cat "$BENCH/results/nuitka-arm64/build_seconds") + $(cat "$BENCH/results/nuitka-x86_64/build_seconds")))
 buildtools x86_64; PY_X86=$PY
 buildtools arm64   # PY is the native driver from here on
+# Build time: both halves plus the merge, not setting up the build tools.
+SECONDS=$(($(cat "$BENCH/results/nuitka-arm64/build_seconds") + $(cat "$BENCH/results/nuitka-x86_64/build_seconds")))
 
 # Same files on both sides, and nothing but regular files and directories.
 listing() { (cd "$1" && find . ! -type d | sort); }

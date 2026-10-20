@@ -79,7 +79,7 @@ def main():
             rows.append((f"{short} {title}: p50 / p95 (ms)", lambda n, r, m=mode, e=event: hook(r, m, e)))
     rows.append((f"{TURN_TOOLS}-tool turn, idle p50s (est.)", lambda n, r: turn(r)))
 
-    print(f"Python {res['python']}, Nuitka {res['nuitka']}, commit {res['commit'][:12] or '?'}, "
+    print(f"Python {res['python']}, Nuitka {res['nuitka']}, commit {res['commit'][:12] + ('-dirty' if res['commit'].endswith('-dirty') else '') or '?'}, "
           f"{res['config']['runs']} runs per event and mode, {res['config']['warmup']} b2b warmups, "
           f"macOS {res['config']['macos']} {res['config']['machine']}.\n")
     print("| | " + " | ".join(builds) + " |")

@@ -95,8 +95,8 @@ def prepare(h, event, tag):
         return h.payload(event, source="startup")
     h.run("SessionStart", h.payload("SessionStart", source="startup"))
     if event == "UserPromptSubmit":
-        return h.payload(event, prompt="workload")
-    h.run("UserPromptSubmit", h.payload("UserPromptSubmit", prompt="workload"))
+        return h.payload(event, prompt="bench")
+    h.run("UserPromptSubmit", h.payload("UserPromptSubmit", prompt="bench"))
     with open(h.transcript, "a") as f:
         f.write("".join(turn_lines(f"t-{tag}", (tid,))))
     if event == "PreToolUse":
@@ -171,7 +171,7 @@ def main():
     for b in builds:
         checked[b.label] = inputs_check(b)
         if checked[b.label]:
-            b.harness = Harness(None, dry_run=True, cmd=[b.exe])
+            b.harness = Harness([b.exe], dry_run=True)
         else:
             b.error = "inputs.py check failed"
     try:

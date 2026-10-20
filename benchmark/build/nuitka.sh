@@ -5,8 +5,8 @@
 # build/universal.sh merges the two. Modules and data files come from inputs.py, never by hand.
 # Nuitka's build directory and compilation report go to .workbench/nuitka-<arch>/.
 set -euo pipefail
-# Under --quiet, Nuitka's "download ccache?" prompt waits forever on a stdin that is open but not
-# a TTY (CI, agent shells). With /dev/null it takes the default (no) and goes on.
+# Never prompt: under --quiet, a Nuitka prompt (e.g. "download ccache?") waits forever on a stdin
+# that is open but not a TTY (CI, agent shells). With /dev/null it takes the default (no) and goes on.
 exec </dev/null
 ARCH=${ARCH:-arm64}
 case $ARCH in
@@ -24,8 +24,8 @@ EXE=$DEST/arize-harness.bin
 # shellcheck source=common.sh
 . "$HERE/common.sh"
 
-SECONDS=0
 buildtools "$ARCH"
+SECONDS=0  # build time: the build itself, not setting up the build tools
 clean_dest "$DEST"
 ARGS=()
 while read -r m; do ARGS+=("--include-module=$m"); done < <(inputs modules)
@@ -34,10 +34,12 @@ while IFS=$'\t' read -r src dest; do ARGS+=("--include-data-files=$src=$dest"); 
 # Nuitka finds core/ and tracing/ through PYTHONPATH; run from .workbench so its
 # build directory lands there. No --assume-yes-for-downloads: if Nuitka wants to
 # fetch something, that's a finding, not something to accept silently.
+# No ccache: every build compiles from scratch, so build times compare across runs.
 rm -rf "$WORKBENCH/arize-harness.dist"
 (cd "$WORKBENCH" && PYTHONPATH=$REPO "$PY" -m nuitka --mode=standalone \
   --output-dir="$WORKBENCH" --output-folder-name=arize-harness.dist --output-filename=arize-harness.bin \
   --report="$WORKBENCH/compilation-report.xml" --quiet \
+  --disable-cache=ccache \
   "${ARGS[@]}" "$HERE/entry.py")
 
 rm -rf "$DEST"

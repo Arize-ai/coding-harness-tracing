@@ -7,6 +7,11 @@
 PY_VERSION=3.12.10
 PY_ARM64=cpython-$PY_VERSION-macos-aarch64-none
 PY_X86_64=cpython-$PY_VERSION-macos-x86_64-none
+# uv picks the python-build-standalone release behind PY_VERSION, so another uv can mean another
+# interpreter build (and another minos, which universal.sh checks). Warn, don't stop: see README.md.
+UV_VERSION=0.11.24
+uv_have=$(uv --version | awk '{print $2}')
+[ "$uv_have" = "$UV_VERSION" ] || echo "warning: uv $uv_have, the numbers in reports/ were taken with uv $UV_VERSION" >&2
 REQUIREMENTS=$BENCH/requirements-build.txt
 WORKBENCH=$REPO/.workbench/$LABEL   # build/, spec files, reports: never the repo root
 INPUTS=$HERE/inputs.py
