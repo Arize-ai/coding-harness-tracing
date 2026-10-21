@@ -110,6 +110,27 @@ podman machine start
 
 After a restart, run `podman machine start` again. If Podman is not installed, the helper falls back to any `docker` CLI, for example on [Colima](https://github.com/abiosoft/colima). Set `CONTAINER_ENGINE` to pick one yourself.
 
+## Versions and release tags
+
+The package version comes from git tags, through [setuptools-scm](https://setuptools-scm.readthedocs.io/). `pyproject.toml` has no hard-coded version. A tagged commit builds as that tag's version. Any other commit builds as a development version, such as `0.2.1.dev3+g1a2b3c4`. A build with no `.git`, such as GitHub's tarball of `main`, gets the fallback version `0.0.0`.
+
+To see the version your checkout builds as:
+
+```bash
+uvx --from 'setuptools-scm>=8,<9' python -m setuptools_scm
+```
+
+In code, read it with `core.version()`. Don't add another reader.
+
+Only tags of these forms count as releases:
+
+| Form | Example | Builds as |
+| --- | --- | --- |
+| `vX.Y.Z` | `v0.2.0` | `0.2.0` |
+| `vX.Y.Z-rc.N` (pre-release) | `v0.3.0-rc.1` | `0.3.0rc1` |
+
+The part after the `v` must be a valid [PEP 440](https://peps.python.org/pep-0440/) version. A tag that isn't, such as `v0.3.0-customer`, breaks every untagged build after it until a newer valid tag exists. Tags that don't start with `v` and a digit, such as the Go CLI's `cmd/ax-trace/*`, are ignored. So is the plain `v0.1.0-rc6`, which isn't a release of this package.
+
 ## Find the code you need
 
 Shared install, config, and OTLP code lives in `core/`. Each coding assistant lives under `tracing/<harness>/`. User-facing install docs live in `tracing/<harness>/README.md`. The git clone is the source tree. A user install lives under `~/.arize/harness/` and is a different tree.

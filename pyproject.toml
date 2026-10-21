@@ -1,6 +1,7 @@
 [project]
 name = "coding-harness-tracing"
-version = "0.1.0"
+# From git tags via setuptools-scm; see [tool.setuptools_scm].
+dynamic = ["version"]
 requires-python = ">=3.9"
 # python-dotenv parses the credential file for non-interactive installs. It is
 # the only runtime dependency; keep it that way. Imported by core/setup alone,
@@ -119,8 +120,28 @@ warn_redundant_casts = true
 files = ["core"]
 
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=64", "setuptools-scm>=8,<9"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Python modules only, as before setuptools-scm. Its git file finder would
+# otherwise add every tracked file under core/ and tracing/ to the wheel, and
+# the tracked tracing/*/core symlinks would fail the wheel build from the sdist.
+include-package-data = false
 
 [tool.setuptools.packages.find]
 include = ["core*", "tracing*"]
+
+# Only v<PEP 440> release tags count. --match skips the ax-trace Go CLI's
+# cmd/ax-trace/* tags, which setuptools-scm can't parse; --exclude skips the
+# plain v0.1.0-rc6 tag that the same CLI's release put on main. Release tag
+# forms are listed in CONTRIBUTING.md.
+[tool.setuptools_scm]
+version_file = "core/_version.py"
+fallback_version = "0.0.0"
+git_describe_command = "git describe --dirty --tags --long --match v[0-9]* --exclude v0.1.0-rc6"
+
+# uv caches the project's own install; rebuild it when pyproject.toml, the
+# commit or the tags change, so `uv sync` picks up a new tag's version.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]

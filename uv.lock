@@ -155,7 +155,6 @@ wheels = [
 
 [[package]]
 name = "coding-harness-tracing"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "python-dotenv", version = "1.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },

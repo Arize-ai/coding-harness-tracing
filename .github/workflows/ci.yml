@@ -78,6 +78,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # test-in-container.sh computes the package version on the host with uvx,
+      # because the container gets the checkout without .git.
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+
       - name: Smoke-test install.sh in a clean container
         env:
           CONTAINER_ENGINE: podman
