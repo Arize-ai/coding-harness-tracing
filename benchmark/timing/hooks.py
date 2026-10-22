@@ -23,9 +23,10 @@ A hook that exits non-zero or hangs (30 s, as in inputs.py check) while being ti
 build, which then stops being timed.
 
 Also recorded per build: size_bytes, files and native_libs (.so/.dylib) of DIR, counting regular
-files only; build_s from results/<label>/build_seconds; build_info (what the build was made from,
-or null for a build made before it was recorded) from results/<label>/build_info.json; first_run_ms
-from first-run.sh's results/<label>/first-run.txt (writable) and first-run-ro.txt (readonly).
+files only; build_s from benchmark/results/<label>/build_seconds and build_info (what the build was
+made from, or null for a build made before it was recorded) from benchmark/results/<label>/
+build_info.json, where the build scripts write them whatever --results says; first_run_ms from
+first-run.sh's <results>/<label>/first-run.txt (writable) and first-run-ro.txt (readonly).
 "commit" is this checkout when timing, not necessarily what the builds were made from.
 """
 import argparse
@@ -41,6 +42,7 @@ from harness import KB, Harness, fmt, pct, turn_lines
 
 HERE = Path(__file__).resolve().parent
 BENCH = HERE.parent
+BUILD_RECORDS = BENCH / "results"  # build_seconds and build_info.json: the build scripts write them here
 SCHEMA = 1
 DRY_RUN_SPAN = "[dry-run] would send span"
 EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
@@ -176,7 +178,10 @@ def pins():
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # No abbreviations: run.sh has to see --results itself, so --res would split the results apart.
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False
+    )
     ap.add_argument(
         "--build",
         nargs=3,
@@ -189,7 +194,9 @@ def main():
     ap.add_argument("--warmup", type=int, default=5, help="untimed b2b runs per event, per build")
     ap.add_argument("--idle", type=float, default=0.5, help="idle seconds before each idle-mode call")
     ap.add_argument("--quick", action="store_true", help="3 runs, 1 warmup: check the harness works")
-    ap.add_argument("--results", default=str(BENCH / "results"), help="results root")
+    ap.add_argument(
+        "--results", default=str(BENCH / "results"), help="first runs to read, and where bench-result.json goes"
+    )
     a = ap.parse_args()
     runs, warmup = (3, 1) if a.quick else (a.runs, a.warmup)
     results = Path(a.results)
@@ -240,8 +247,8 @@ def main():
             "spans": f"{b.spans}/{b.stops}",
             "error": b.error,
             **footprint(b.root),
-            "build_s": read_int(results / b.label / "build_seconds"),
-            "build_info": read_json(results / b.label / "build_info.json"),
+            "build_s": read_int(BUILD_RECORDS / b.label / "build_seconds"),
+            "build_info": read_json(BUILD_RECORDS / b.label / "build_info.json"),
             "first_run_ms": first_run_ms,
             "first_run_failed": first_run_failed or None,
             "hooks": {

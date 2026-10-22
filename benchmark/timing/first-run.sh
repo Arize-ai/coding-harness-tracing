@@ -6,6 +6,7 @@
 #
 # READONLY=1 makes each copy read-only first, like a root-owned .pkg install where users
 # can't write __pycache__, and writes first-run-ro.txt instead of first-run.txt.
+# BENCH_RESULTS=DIR writes to DIR/<label>/ instead of benchmark/results/<label>/ (run.sh --results).
 #
 # Every copy's run has to exit 0 within 30 s: a build that crashes on its first launch is fast
 # too. A copy that doesn't is left out of the times and its reason goes to first-run.failed
@@ -18,7 +19,7 @@
 # first run; only self-contained builds give a meaningful one.
 set -euo pipefail
 LABEL=$1; BUILD=$2; EXE=$3; TRIALS=${4:-5}
-HERE=$(cd "$(dirname "$0")" && pwd); OUT=$HERE/../results/$LABEL; mkdir -p "$OUT"
+HERE=$(cd "$(dirname "$0")" && pwd); OUT=${BENCH_RESULTS:-$HERE/../results}/$LABEL; mkdir -p "$OUT"
 RESULT=$OUT/first-run.txt FAILED=$OUT/first-run.failed
 if [ "${READONLY:-}" = 1 ]; then RESULT=$OUT/first-run-ro.txt FAILED=$OUT/first-run-ro.failed; fi
 rm -f "$FAILED"

@@ -8,7 +8,9 @@
 # (g) one hook module left out of inputs.py modules: the smoke test fails on that hook alone;
 # (h) universal.sh with halves recorded as built from different sources; (i) universal.sh after a
 # core/ file changed since both halves were built; (j) a build whose first launch from a fresh copy
-# fails: first-run.sh exits 1 and records why, and hooks.py and summarize.py mark it INVALID.
+# fails: first-run.sh exits 1 and records why, and hooks.py and summarize.py mark it INVALID;
+# (k) the same through run.sh --results <dir>: the failure, the JSON and the table all land in <dir>,
+# and the build records still come from benchmark/results.
 # Each case gets its own copy (no .git, .workbench, builds or results); this checkout is never
 # changed. The arm64 cases reuse .workbench/bt-arm64 (or BUILDTOOLS=<venv>) as is; (e), (h) and (i)
 # run universal.sh, which sets up both build-tools venvs inside its copy.
@@ -130,19 +132,23 @@ with_halves "$d"
 echo "# selftest" >>"$d/core/hook_table.py"
 expect_fail i "UNIVERSAL FAILED: halves built from other sources than this checkout" universal "$d"
 
-echo "-- (j) a build whose first launch from a fresh copy fails"
-d=$(copy j)
-fake=$d/benchmark/builds/firstfail
-mkdir -p "$fake"
-# The real arm64 build when run in place (inputs.py check, hooks.py); exit 3 when run from a copy,
-# as first-run.sh runs it. Resolved paths: hooks.py resolves the build's, and /var is a symlink.
-cat >"$fake/arize-harness" <<EOF
+stand_in() {  # dir, exe name
+  # The real arm64 build when run in place (inputs.py check, hooks.py); exit 3 when run from a copy,
+  # as first-run.sh runs it. Resolved paths: hooks.py resolves the build's, and /var is a symlink.
+  mkdir -p "$1"
+  cat >"$1/$2" <<EOF
 #!/bin/sh
-[ "\$(cd "\$(dirname "\$0")" && pwd -P)" = "$(cd "$fake" && pwd -P)" ] && exec "$ARM/arize-harness.bin" "\$@"
+[ "\$(cd "\$(dirname "\$0")" && pwd -P)" = "$(cd "$1" && pwd -P)" ] && exec "$ARM/arize-harness.bin" "\$@"
 echo "selftest: first launch fails" >&2
 exit 3
 EOF
-chmod +x "$fake/arize-harness"
+  chmod +x "$1/$2"
+}
+
+echo "-- (j) a build whose first launch from a fresh copy fails"
+d=$(copy j)
+fake=$d/benchmark/builds/firstfail
+stand_in "$fake" arize-harness
 expect_fail j "FIRST RUN FAILED: firstfail, 2/2 copies" "$d/benchmark/timing/first-run.sh" firstfail "$fake" arize-harness 2
 expect_fail j "FIRST RUN FAILED: firstfail (read-only), 2/2 copies" \
   env READONLY=1 "$d/benchmark/timing/first-run.sh" firstfail "$fake" arize-harness 2
@@ -158,6 +164,32 @@ expect_fail j "firstfail: inputs check ok, dry-run spans 7/7, first runs failed,
 grep -qF "INVALID (first run, writable: copy 1: exit 3: selftest: first launch fails; first run, readonly: copy 1:" "$TMP/j.md" &&
   ok=0 || ok=1
 result j "$ok" "summarize.py: INVALID (first run, writable: ...; first run, readonly: ...)"
+
+echo "-- (k) the same through run.sh --results <dir>"
+# The stand-in is the only build, as nuitka-universal. Its build records go where the build scripts
+# write them; the results directory has a space in it, like a checkout path might.
+d=$(copy k)
+stand_in "$d/benchmark/builds/nuitka-universal" arize-harness.bin
+rec=$d/benchmark/results/nuitka-universal
+mkdir -p "$rec"
+echo 42 >"$rec/build_seconds"
+echo '{"source": "kkkkkkkkkkkkkkkk", "commit": "selftest-k", "python": null, "nuitka": null, "uv": null}' \
+  >"$rec/build_info.json"
+out="$TMP/k results"
+expect_fail k "nuitka-universal: inputs check ok, dry-run spans 7/7, first runs failed, gate=fail" \
+  env -u HOOKS_ONLY "$d/benchmark/timing/run.sh" --quick --idle 0 --results "$out"
+[ -s "$out/nuitka-universal/first-run.failed" ] && [ -s "$out/nuitka-universal/first-run-ro.failed" ] &&
+  [ -s "$out/bench-result.json" ] && ok=0 || ok=1
+result k "$ok" "first-run*.failed and bench-result.json in the --results directory"
+grep -qF "INVALID (first run, writable: copy 1: exit 3: selftest: first launch fails" "$out/table.md" 2>/dev/null &&
+  ok=0 || ok=1
+result k "$ok" "table.md in the --results directory shows INVALID"
+grep -qF "| build time (s) | 42 |" "$out/table.md" 2>/dev/null &&
+  grep -qF "| source (commit) | kkkkkkkkkkkk (selftest-k) |" "$out/table.md" && ok=0 || ok=1
+result k "$ok" "build time and source still read from benchmark/results"
+left=$(cd "$d/benchmark/results" && find . -type f ! -name build_seconds ! -name build_info.json | sort)
+[ -z "$left" ] && ok=0 || ok=1
+result k "$ok" "nothing written to benchmark/results${left:+ (found: $(echo $left))}"
 
 echo "selftest: $((cases - failed))/$cases passed"
 [ "$failed" = 0 ]

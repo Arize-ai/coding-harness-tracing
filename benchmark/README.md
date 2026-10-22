@@ -66,7 +66,12 @@ was recorded have none: rebuild them.
 benchmark/timing/run.sh           # ~10 min; results/bench-result.json and results/table.md
 benchmark/timing/run.sh --quick   # ~1 min: check that everything runs
 HOOKS_ONLY=1 benchmark/timing/run.sh  # skip the first runs, keep their earlier results
+benchmark/timing/run.sh --results DIR  # everything this run writes in DIR instead of results/
 ```
+
+`--results DIR` covers first runs, `bench-result.json` and `table.md`. Build records
+(`build_seconds`, `build_info.json`) are always read from `results/`, where the builds write them.
+With `HOOKS_ONLY=1`, first runs come from DIR too, so a new DIR has none.
 
 `run.sh` times `venv312`, `nuitka-arm64` and `nuitka-universal` (missing builds are skipped):
 
