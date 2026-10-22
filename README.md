@@ -1,12 +1,28 @@
 # Arize Coding Harness Tracing
 
+> [!IMPORTANT]
+> **Certificate security update:** Existing installations should update to pip 26.2.2, certifi 2026.10.19 or later, and the latest coding-harness-tracing package. First install Python 3.11 or later, then run the updater:
+>
+> macOS and Linux:
+> ```bash
+> curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- update
+> ```
+>
+> Windows Command Prompt:
+> ```bat
+> curl.exe -fsSLo "%TEMP%\arize-install.bat" https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.bat
+> call "%TEMP%\arize-install.bat" update
+> ```
+>
+> The updater replaces an older managed Python environment and applies all three updates. See the [Python certificate incident notice](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576) for details.
+
 Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix) with [OpenInference](https://github.com/Arize-ai/openinference) spans. Each harness integration emits spans for prompts, tool calls, model responses, and session lifecycle events.
 
 Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response `LLM` spans, correlated `TOOL` spans, and a foreground subagent `AGENT` subtree when available. See [Claude Code trace structure and current limitations](tracing/claude_code/README.md#trace-structure) for details.
 
 ## Quick Start
 
-You need Python 3.9+ and the harness you want to trace. The commands below are the three most common installs on macOS and Linux. Each one downloads the installer, asks where to send spans (Phoenix or [Arize AX](https://arize.com)), then writes credentials to `~/.arize/harness/config.json`. For Windows commands and the rest of the supported harnesses, see [Supported Harnesses](#supported-harnesses).
+You need Python 3.11+ and the harness you want to trace. The commands below are the three most common installs on macOS and Linux. Each one downloads the installer, asks where to send spans (Phoenix or [Arize AX](https://arize.com)), then writes credentials to `~/.arize/harness/config.json`. For Windows commands and the rest of the supported harnesses, see [Supported Harnesses](#supported-harnesses).
 
 ### Claude Code
 

@@ -16,6 +16,11 @@ INSTALL_BRANCH="${ARIZE_INSTALL_BRANCH:-main}"
 TARBALL_URL="https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/${INSTALL_BRANCH}.tar.gz"
 INSTALL_DIR="${HOME}/.arize/harness"
 VENV_DIR="${INSTALL_DIR}/venv"
+PIP_VERSION="26.2.2"
+PIP_WHEEL="pip-${PIP_VERSION}-py3-none-any.whl"
+PIP_SHA256="fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+PIP_REQUIREMENT="pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/${PIP_WHEEL}#sha256=${PIP_SHA256}"
+CERTIFI_REQUIREMENT="certifi>=2026.10.19"
 # When set, install from local wheels in this directory instead of fetching the
 # repo. Lets a caller that already ships the wheels install with no network at
 # all — and with no remote code execution for a permission layer to object to.
@@ -62,7 +67,7 @@ find_python() {
         if [[ "$p" == /* ]]; then resolved="$p"
         else resolved=$(command -v "$p" 2>/dev/null || true); fi
         [[ -z "$resolved" || ! -f "$resolved" ]] && continue
-        "$resolved" -c "import sys; assert sys.version_info >= (3, 9)" 2>/dev/null && { echo "$resolved"; return 0; }
+        "$resolved" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null && { echo "$resolved"; return 0; }
     done
     return 1
 }
@@ -77,6 +82,34 @@ venv_pip() {
     [[ -x "${VENV_DIR}/bin/pip" ]] && { echo "${VENV_DIR}/bin/pip"; return; }
     [[ -x "${VENV_DIR}/Scripts/pip.exe" ]] && { echo "${VENV_DIR}/Scripts/pip.exe"; return; }
     return 1
+}
+
+bootstrap_pip() {
+    local vp
+    vp=$(venv_python) || { err "Venv Python not found"; return 1; }
+    info "Securing pip ${PIP_VERSION}..."
+    if [[ -n "$WHEEL_DIR" ]]; then
+        local wheel="${WHEEL_DIR}/${PIP_WHEEL}"
+        [[ -f "$wheel" ]] || { err "Missing ${PIP_WHEEL} in ${WHEEL_DIR}"; return 1; }
+        "$vp" - "$wheel" "$PIP_SHA256" <<'PYEOF' || { err "${PIP_WHEEL} failed SHA-256 verification"; return 1; }
+import hashlib
+import pathlib
+import sys
+
+wheel = pathlib.Path(sys.argv[1])
+expected = sys.argv[2]
+sys.exit(hashlib.sha256(wheel.read_bytes()).hexdigest() != expected)
+PYEOF
+        "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$wheel" || {
+            err "Failed to install verified pip ${PIP_VERSION}"
+            return 1
+        }
+    else
+        "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$PIP_REQUIREMENT" || {
+            err "Failed to install verified pip ${PIP_VERSION}"
+            return 1
+        }
+    fi
 }
 
 # -- Repository download ----------------------------------------------------
@@ -155,7 +188,7 @@ _fix_macos_ssl_certs() {
 
     local offline=()
     [[ -n "$WHEEL_DIR" ]] && offline=(--no-index --find-links "$WHEEL_DIR")
-    if ! "$pip" install --quiet "${offline[@]+"${offline[@]}"}" certifi 2>/dev/null; then
+    if ! "$pip" install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT" 2>/dev/null; then
         warn "Could not install certifi — SSL verification may fail on macOS"
         [[ -n "$WHEEL_DIR" ]] && warn "Bundle a certifi wheel in ${WHEEL_DIR} to fix this offline."
         return 0
@@ -201,6 +234,10 @@ pip_install_harness() {
 
 setup_venv() {
     local python_cmd="$1"
+    if venv_python &>/dev/null && ! "$(venv_python)" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null; then
+        info "Recreating venv with Python 3.11+..."
+        rm -rf "$VENV_DIR"
+    fi
     if ! venv_python &>/dev/null; then
         info "Creating venv..."
         "$python_cmd" -m venv "$VENV_DIR" 2>/dev/null || {
@@ -209,6 +246,7 @@ setup_venv() {
             return 1
         }
     fi
+    bootstrap_pip || return 1
     local pip; pip=$(venv_pip) || { err "pip not found in venv"; return 1; }
     info "Installing coding-harness-tracing into venv..."
     pip_install_harness "$pip" || return 1
@@ -247,7 +285,7 @@ install_harness() {
     local cmd="$1" skills="$2"
     harness_dir "$cmd" >/dev/null || { err "Unknown harness: ${cmd}"; usage; exit 1; }
     header "Installing ${cmd} tracing"
-    local python_cmd; python_cmd=$(find_python) || { err "No Python 3.9+ found"; exit 1; }
+    local python_cmd; python_cmd=$(find_python) || { err "No Python 3.11+ found"; exit 1; }
     info "Found Python: ${python_cmd} ($("$python_cmd" --version 2>&1))"
     install_repo
     setup_venv "$python_cmd"
@@ -417,9 +455,7 @@ main() {
                 git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
                     warn "git pull failed — falling back to tarball re-extract"; install_repo_tarball; }
             else install_repo_tarball; fi
-            local pip; pip=$(venv_pip) || { err "Venv not found — run install first"; exit 1; }
-            info "Reinstalling coding-harness-tracing..."
-            pip_install_harness "$pip" -U || exit 1
+            setup_venv "$python_cmd" || exit 1
             local vp; vp=$(venv_python) || { err "venv python not found"; exit 1; }
             info "Migrating legacy config.yaml to config.json (if present)..."
             "$vp" -m core.config migrate || true

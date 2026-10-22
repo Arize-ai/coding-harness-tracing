@@ -184,7 +184,7 @@ class TestTomlLoadStrict:
             codex_toml._toml_load_strict(p)
 
     def test_missing_tomllib_raises_value_error(self, tmp_path, monkeypatch):
-        """No tomllib/tomli available (e.g. py<3.11 without the tomli fallback installed)."""
+        """The parser reports a domain error when its TOML reader is unavailable."""
         monkeypatch.setattr(codex_toml, "_tomllib", None)
         p = tmp_path / "config.toml"
         p.write_text('notify = ["/usr/bin/hook"]\n')
@@ -901,8 +901,7 @@ class TestLegacyOtelCleanup:
         # The real table is gone.
         assert content.count("[otel.exporter.otlp-http]") == 1
         assert "http://127.0.0.1:4318/v1/logs" not in content
-        # And the file is valid TOML again. Use the project's parser helper so
-        # this check also runs on Python 3.9 and 3.10, where tomllib is absent.
+        # And the file is valid TOML again through the project's parser helper.
         codex_toml._toml_load_strict(config_path)
 
     def test_trailing_comment_before_next_table_is_preserved(self, tmp_path):

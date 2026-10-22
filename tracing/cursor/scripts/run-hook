@@ -23,6 +23,7 @@ PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATA_DIR="$HOME/.arize/harness"
 VENV_DIR="$DATA_DIR/cursor-plugin-venv"
 MARKER="$DATA_DIR/.cursor-plugin.pyproject.sha256"
+PIP_REQUIREMENT="pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 
 # --- Find the entry point binary ---
 find_entry_point() {
@@ -37,10 +38,10 @@ find_entry_point() {
     fi
 }
 
-# --- Find Python 3.9+ ---
+# --- Find Python 3.11+ ---
 find_python() {
     for p in python3 python py; do
-        if "$p" -c "import sys; sys.exit(0 if sys.version_info>=(3,9) else 1)" 2>/dev/null; then
+        if "$p" -c "import sys; sys.exit(0 if sys.version_info>=(3,11) else 1)" 2>/dev/null; then
             echo "$p"
             return 0
         fi
@@ -61,7 +62,7 @@ needs_install() {
 # --- Bootstrap venv ---
 bootstrap() {
     PYTHON_CMD=$(find_python) || {
-        echo "[arize] No Python 3.9+ found — tracing will not be available" >&2
+        echo "[arize] No Python 3.11+ found — tracing will not be available" >&2
         return 1
     }
 
@@ -70,6 +71,16 @@ bootstrap() {
     # no usable pip, wipe it and rebuild.
     if [ -d "$VENV_DIR" ] && [ ! -x "$VENV_DIR/bin/pip" ] && [ ! -x "$VENV_DIR/Scripts/pip" ] && [ ! -x "$VENV_DIR/Scripts/pip.exe" ]; then
         echo "[arize] Removing incomplete venv at $VENV_DIR" >&2
+        rm -rf "$VENV_DIR"
+        rm -f "$MARKER"
+    fi
+
+    if [ -x "$VENV_DIR/bin/python" ]; then EXISTING_PYTHON="$VENV_DIR/bin/python"
+    elif [ -x "$VENV_DIR/Scripts/python.exe" ]; then EXISTING_PYTHON="$VENV_DIR/Scripts/python.exe"
+    else EXISTING_PYTHON=""
+    fi
+    if [ -n "$EXISTING_PYTHON" ] && ! "$EXISTING_PYTHON" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null; then
+        echo "[arize] Recreating Cursor tracing venv with Python 3.11+..." >&2
         rm -rf "$VENV_DIR"
         rm -f "$MARKER"
     fi
@@ -94,6 +105,13 @@ bootstrap() {
     fi
     if [ -z "$PIP" ]; then
         echo "[arize] pip not found in venv" >&2
+        return 1
+    fi
+
+    echo "[arize] Securing pip 26.2.2..." >&2
+    if ! "$PIP" install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$PIP_REQUIREMENT" >&2; then
+        echo "[arize] Failed to install verified pip 26.2.2" >&2
+        rm -f "$MARKER"
         return 1
     fi
 

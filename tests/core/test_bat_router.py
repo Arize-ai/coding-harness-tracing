@@ -152,7 +152,7 @@ class TestPipFailureIsFatal:
         invocation site is what stops that happening again, so it is asserted
         rather than left to reviewers.
         """
-        sites = [ln for ln in _bat().splitlines() if "install --quiet" in ln]
+        sites = [ln for ln in _bat().splitlines() if '"%VENV_PIP%" install --quiet' in ln]
         assert len(sites) == 2, f"expected both pip lines inside one helper, found {len(sites)}"
         helper = _bat().split("\n:pip_install_harness", 1)[1].split("\nREM ---", 1)[0]
         for site in sites:
@@ -167,7 +167,7 @@ class TestPipFailureIsFatal:
         """Order matters: bailing out after migration would still leave the
         config rewritten for a package that was never installed."""
         section = _bat().split("\n:cmd_update", 1)[1]
-        reinstall = section.index("call :pip_install_harness")
+        reinstall = section.index("call :setup_venv")
         check = section.index("if !ERRORLEVEL! neq 0 exit /b 1", reinstall)
         migrate = section.index("core.config migrate")
         assert check < migrate, "the failure check must come before the migration"

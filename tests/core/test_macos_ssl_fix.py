@@ -55,7 +55,7 @@ class TestFixMacOSSslCertsDefined:
         # The offline array expands to nothing in repo mode, and to
         # --no-index --find-links "$WHEEL_DIR" when installing from local wheels,
         # so certifi resolves without network in an offline install too.
-        assert 'install --quiet "${offline[@]+"${offline[@]}"}" certifi' in self.text
+        assert 'install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT"' in self.text
 
     def test_certifi_resolves_offline_when_wheels_are_local(self):
         """Otherwise an offline macOS install completes and then fails at runtime
