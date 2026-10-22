@@ -7,11 +7,26 @@
 PY_VERSION=3.12.10
 PY_ARM64=cpython-$PY_VERSION-macos-aarch64-none
 PY_X86_64=cpython-$PY_VERSION-macos-x86_64-none
-# uv picks the python-build-standalone release behind PY_VERSION, so another uv can mean another
+# uv downloads the interpreter and the build tools. Before 0.13.4 its bundled root certificates still
+# trust the distrusted eMudhra/emSign CAs (#175), so an older uv stops the build.
+UV_MIN=0.13.4
+# uv also picks the python-build-standalone release behind PY_VERSION, so another uv can mean another
 # interpreter build (and another minos, which universal.sh checks). Warn, don't stop: see README.md.
-UV_VERSION=0.11.24
+UV_VERSION=0.13.5
 uv_have=$(uv --version | awk '{print $2}')
-[ "$uv_have" = "$UV_VERSION" ] || echo "warning: uv $uv_have, the numbers in reports/ were taken with uv $UV_VERSION" >&2
+version_lt() {  # a b: true if version a is older than b, comparing dot-separated numbers
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    n = split(a, x, "."); m = split(b, y, ".")
+    for (i = 1; i <= (n > m ? n : m); i++) { if (x[i] + 0 < y[i] + 0) exit 0; if (x[i] + 0 > y[i] + 0) exit 1 }
+    exit 1
+  }'
+}
+if version_lt "$uv_have" "$UV_MIN"; then
+  echo "BUILD STOPPED: uv $uv_have is older than $UV_MIN, whose bundled root certificates no longer trust" \
+    "the distrusted eMudhra/emSign CAs (see README.md); update uv" >&2
+  exit 1
+fi
+[ "$uv_have" = "$UV_VERSION" ] || echo "warning: uv $uv_have, the PR's numbers were taken with uv $UV_VERSION" >&2
 REQUIREMENTS=$BENCH/requirements-build.txt
 WORKBENCH=$REPO/.workbench/$LABEL   # build/, spec files, reports: never the repo root
 INPUTS=$HERE/inputs.py

@@ -10,7 +10,8 @@
 # core/ file changed since both halves were built; (j) a build whose first launch from a fresh copy
 # fails: first-run.sh exits 1 and records why, and hooks.py and summarize.py mark it INVALID;
 # (k) the same through run.sh --results <dir>: the failure, the JSON and the table all land in <dir>,
-# and the build records still come from benchmark/results.
+# and the build records still come from benchmark/results; (l) a uv older than UV_MIN on PATH: the
+# build stops before setting anything up.
 # Each case gets its own copy (no .git, .workbench, builds or results); this checkout is never
 # changed. The arm64 cases reuse .workbench/bt-arm64 (or BUILDTOOLS=<venv>) as is; (e), (h) and (i)
 # run universal.sh, which sets up both build-tools venvs inside its copy.
@@ -190,6 +191,22 @@ result k "$ok" "build time and source still read from benchmark/results"
 left=$(cd "$d/benchmark/results" && find . -type f ! -name build_seconds ! -name build_info.json | sort)
 [ -z "$left" ] && ok=0 || ok=1
 result k "$ok" "nothing written to benchmark/results${left:+ (found: $(echo $left))}"
+
+echo "-- (l) a uv older than UV_MIN"
+d=$(copy l)
+fakebin=$TMP/l-bin
+mkdir -p "$fakebin"
+# Reports 0.11.24, and runs the real uv for anything else, so only the version check sees it.
+cat >"$fakebin/uv" <<EOF
+#!/bin/sh
+[ "\$1" = --version ] && { echo "uv 0.11.24 (selftest)"; exit 0; }
+exec "$(command -v uv)" "\$@"
+EOF
+chmod +x "$fakebin/uv"
+expect_fail l "BUILD STOPPED: uv 0.11.24 is older than 0.13.4" env PATH="$fakebin:$PATH" BUILDTOOLS="$BT" ARCH=arm64 \
+  "$d/benchmark/build/nuitka.sh"
+[ ! -e "$d/benchmark/builds" ] && [ ! -e "$d/.workbench" ] && ok=0 || ok=1
+result l "$ok" "stopped before creating builds/ or .workbench/"
 
 echo "selftest: $((cases - failed))/$cases passed"
 [ "$failed" = 0 ]

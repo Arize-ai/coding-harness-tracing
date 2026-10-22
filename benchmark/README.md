@@ -19,8 +19,8 @@ the repo root. All three are git-ignored.
 
 ## Build
 
-macOS only. Needs [uv](https://docs.astral.sh/uv/) 0.11.24, the Xcode command line tools and Rosetta
-(for the x86_64 half).
+macOS only. Needs [uv](https://docs.astral.sh/uv/) 0.13.4 or later, the Xcode command line tools and
+Rosetta (for the x86_64 half).
 
 ```bash
 benchmark/build/venv.sh               # builds/venv312: the baseline, a venv with this checkout
@@ -37,10 +37,18 @@ ordered-set 4.1.0, python-dotenv 1.2.4, plus this checkout) go into `.workbench/
 venv for `nuitka.sh`, which still has to pass the interpreter check below. `universal.sh` needs
 both architectures' venvs, so it stops if `BUILDTOOLS` is set.
 
-**uv version.** The interpreter names pin the Python version but not the python-build-standalone
-release behind it; that comes from uv. The numbers in `reports/` and in the PR were taken with uv
-0.11.24 (`UV_VERSION` in `build/common.sh`; another uv gets a warning). Use the same uv, or expect
-to re-baseline. After a deliberate uv or Python bump, `universal.sh` may stop on the minos check:
+**uv version.** uv downloads the interpreter and the build tools, and before 0.13.4 its bundled root
+certificates still trust the distrusted eMudhra/emSign certificate authorities (the incident behind
+Arize-ai/coding-harness-tracing#175; [uv 0.13.4](https://github.com/astral-sh/uv/releases/tag/0.13.4)
+updates them). So an older uv stops every build (`UV_MIN` in `build/common.sh`). After updating
+from an older uv, reinstall what it downloaded: `uv python install --reinstall` for the two pinned
+interpreters, and remove `.workbench/bt-*` so the build tools are downloaded again.
+
+The interpreter names pin the Python version but not the python-build-standalone release behind
+it; that also comes from uv. The PR's numbers were taken with uv 0.13.5 (`UV_VERSION` in
+`build/common.sh`; another uv gets a warning). Use the same uv, or expect to re-baseline. The
+table in `reports/` is the spike's, taken with an earlier uv. After a deliberate uv or Python
+bump, `universal.sh` may stop on the minos check:
 check the new values it prints, then either set `EXPECT_MINOS_ARM64` / `EXPECT_MINOS_X86_64` or
 update their defaults in `universal.sh`.
 
