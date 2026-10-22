@@ -14,31 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  python-floor:
-    # Keep the legacy required-check context until the repository ruleset can
-    # drop it. This verifies the new boundary instead of claiming 3.10 support.
-    name: Test (Python 3.10)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
-        with:
-          version: "0.13.5"
-          python-version: "3.10"
-          enable-cache: true
-
-      - name: Verify Python 3.10 is rejected
-        shell: bash
-        run: |
-          if output=$(uv sync --python 3.10 --dry-run 2>&1); then
-            echo "Python 3.10 unexpectedly satisfied the project requirement"
-            exit 1
-          fi
-          echo "$output"
-          grep -F "incompatible with the project's Python requirement: \`>=3.11\`" <<< "$output"
-
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
