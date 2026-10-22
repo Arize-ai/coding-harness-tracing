@@ -15,6 +15,8 @@
 > ```
 >
 > The updater replaces an older managed Python environment and applies all three updates. See the [Python certificate incident notice](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576) for details.
+>
+> The secured pip bootstrap connects directly to `files.pythonhosted.org` with pip configuration disabled. Environments that depend on pip configuration for a private certificate authority or proxy should use the documented `--wheel-dir` offline installation path.
 
 Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix) with [OpenInference](https://github.com/Arize-ai/openinference) spans. Each harness integration emits spans for prompts, tool calls, model responses, and session lifecycle events.
 

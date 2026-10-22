@@ -434,6 +434,8 @@ main() {
             ;;
         update)
             header "Updating coding-harness-tracing"
+            local python_cmd
+            python_cmd=$(find_python) || { err "No Python 3.11+ found"; exit 1; }
             # Re-registering runs each harness's installer, which prompts for the
             # project name. With no terminal to answer on that used to die with an
             # EOFError, so fall back to stored values there — and only there, so an

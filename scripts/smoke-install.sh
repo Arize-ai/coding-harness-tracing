@@ -158,6 +158,13 @@ if [[ "$(uname)" == Darwin ]]; then
     echo "certifi installed for the macOS SSL fix"
 fi
 
+step "updating from the local wheelhouse"
+ARIZE_ENV_FILE="$creds" "$installed/install.sh" update --wheel-dir "$work/wheels" --non-interactive ||
+    die "wheel-based update exited $?"
+"$installed/install.sh" status --json > "$work/status-after-update.json" ||
+    { rc=$?; cat "$work/status-after-update.json"; die "status after update exited $rc"; }
+echo "wheel-based update completed and remained healthy"
+
 if "$installed/install.sh" update > "$work/update.log" 2>&1; then
     cat "$work/update.log"
     die "update exited 0. An offline install must refuse to update"
