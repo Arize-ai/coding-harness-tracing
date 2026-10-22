@@ -1,7 +1,7 @@
 [project]
 name = "cursor-tracing"
 version = "1.0.0"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]

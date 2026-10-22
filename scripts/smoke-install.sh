@@ -6,7 +6,7 @@
 #
 #   scripts/smoke-install.sh [harness]      harness defaults to claude
 #
-#   UV_PYTHON=3.9   build and install with this Python, as CI does
+#   UV_PYTHON=3.11  build and install with this Python, as CI does
 #   SMOKE_KEEP=1    skip the uninstall and keep the throwaway HOME
 #   SETUPTOOLS_SCM_PRETEND_VERSION=X   build as version X instead of the
 #                   checkout's git version
@@ -99,10 +99,11 @@ wheel=("$work/wheels"/*.whl)
 
 # --wheel-dir installs with --no-index, so fetch the wheel's dependencies plus
 # certifi (install.sh adds it on macOS, and only warns if missing). Uses an
-# ephemeral pip, since a uv-created venv has none.
-uv run --quiet --python "$py" --with pip --no-project --isolated \
+# fixed ephemeral pip, since a uv-created venv has none. uv fetches this first,
+# so no vulnerable pip participates in the download.
+uv run --quiet --python "$py" --with pip==26.2.2 --no-project --isolated \
     python -m pip download --quiet --disable-pip-version-check \
-    --only-binary :all: -d "$work/wheels" "${wheel[0]}" certifi ||
+    --only-binary :all: -d "$work/wheels" "${wheel[0]}" pip==26.2.2 "certifi>=2026.10.19" ||
     die "could not download the dependency wheels"
 ls -1 "$work/wheels"
 
