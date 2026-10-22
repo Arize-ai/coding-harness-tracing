@@ -114,7 +114,8 @@ install_repo() {
     # documented as running from there and repo mode gets it via the extract.
     if [[ -n "$WHEEL_DIR" ]]; then
         mkdir -p "$INSTALL_DIR"
-        if [[ -f "${BASH_SOURCE[0]}" ]] && ! cmp -s "${BASH_SOURCE[0]}" "${INSTALL_DIR}/install.sh"; then
+        # -ef, not cmp: cmp comes from diffutils, which minimal images lack.
+        if [[ -f "${BASH_SOURCE[0]}" && ! "${BASH_SOURCE[0]}" -ef "${INSTALL_DIR}/install.sh" ]]; then
             cp "${BASH_SOURCE[0]}" "${INSTALL_DIR}/install.sh" && chmod +x "${INSTALL_DIR}/install.sh"
         fi
         return 0
@@ -293,9 +294,9 @@ Flags:
                         alongside it to keep macOS SSL working offline.
   --json                With `status`: emit machine-readable JSON. Exit code is
                         0 all wired up, 1 nothing configured, 2 hooks missing.
-  --non-interactive, -y Ask nothing; read every value from the environment or a
-                        file named by ARIZE_ENV_FILE. Missing required
-                        values are an error.
+  --non-interactive, -y Ask nothing; use defaults, saved values, and settings
+                        from the environment or ARIZE_ENV_FILE. Missing
+                        required values are an error.
 
 Non-interactive install:
   Values come from the environment, or from a dotenv file named with
@@ -309,7 +310,12 @@ Non-interactive install:
   ARIZE_BACKEND                     arize|phoenix (default: inferred — a space
                                     ID means Arize AX, a Phoenix endpoint
                                     means Phoenix)
-  ARIZE_PROJECT_NAME                Project name (default: the harness name)
+  ARIZE_PROJECT_NAME                AX project from ARIZE_ENV_FILE only
+                                    (default: harness/<email>; harness ID
+                                    if no email is available)
+  PHOENIX_PROJECT, PHOENIX_PROJECT_NAME
+                                    Phoenix project from ARIZE_ENV_FILE only
+                                    (default: harness ID; PHOENIX_PROJECT wins)
   ARIZE_USER_ID                     Optional user ID stamped on spans
   ARIZE_OTLP_ENDPOINT               Override otlp.arize.com:443
   ARIZE_LOG_PROMPTS                 Set true to capture prompt text (off here)

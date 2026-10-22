@@ -1,0 +1,545 @@
+"""Tests for ``arize-harness hook`` (core/cli.py) and the hook table (core/hook_table.py)."""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+from core import cli, hook_table
+from tests._pyproject import PYPROJECT, REPO_ROOT, parse_project_scripts
+
+CLAUDE_DIR = REPO_ROOT / "tracing" / "claude_code"
+
+
+def _legacy_hook_scripts(pyproject: Path = PYPROJECT) -> dict[str, str]:
+    scripts = parse_project_scripts(pyproject.read_text())
+    return {name: target for name, target in scripts.items() if name.startswith("arize-hook-")}
+
+
+def _claude_table_scripts() -> dict[str, str]:
+    return {
+        hook_table.legacy_entry_point("claude", event): target
+        for event, target in hook_table.EVENT_HOOKS["claude"].items()
+    }
+
+
+# ---------------------------------------------------------------------------
+# Hook table <-> pyproject parity
+# ---------------------------------------------------------------------------
+
+
+class TestHookTableParity:
+    def test_parser_reads_every_valid_toml_entry(self) -> None:
+        """Any valid TOML entry, including a quoted key, must be visible to the parity tests below."""
+        text = '[project.scripts]\na = "m:f"\nb = \'m:g\'  # comment\n"c.d" = "m:h"\n[tool.x]\ne = "m:i"\n'
+        assert parse_project_scripts(text) == {"a": "m:f", "b": "m:g", "c.d": "m:h"}
+
+    @pytest.mark.parametrize("line", ['arize-hook-x = "m:f" extra', "arize-hook-x = m:f"])
+    def test_parser_rejects_malformed_toml(self, line) -> None:
+        with pytest.raises(ValueError):
+            parse_project_scripts(f"[project.scripts]\n{line}\n")
+
+    def test_parser_raises_without_scripts_table(self) -> None:
+        """A missing table must fail, not compare the parity tests against an empty dict."""
+        with pytest.raises(KeyError):
+            parse_project_scripts('[project]\nname = "x"\n')
+
+    def test_arize_harness_registered(self) -> None:
+        assert parse_project_scripts(PYPROJECT.read_text()).get("arize-harness") == "core.cli:main"
+
+    def test_every_legacy_command_has_a_matching_table_entry(self) -> None:
+        """Checked both ways: a command without a table entry, or an entry without a command, fails."""
+        table = {hook_table.legacy_entry_point(h, e): target for h, e, target in hook_table.iter_hooks()}
+        assert table == _legacy_hook_scripts()
+
+    def test_legacy_names_are_unique(self) -> None:
+        names = [hook_table.legacy_entry_point(h, e) for h, e, _ in hook_table.iter_hooks()]
+        assert len(names) == len(set(names))
+
+    def test_harnesses_are_not_both_single_and_event(self) -> None:
+        assert not set(hook_table.SINGLE_HOOKS) & set(hook_table.EVENT_HOOKS)
+
+
+class TestClaudePluginParity:
+    """The Claude plugin keeps its own hook lists; each must match the table's Claude entries."""
+
+    def test_plugin_pyproject_matches_table(self) -> None:
+        assert _legacy_hook_scripts(CLAUDE_DIR / "pyproject.toml") == _claude_table_scripts()
+
+    def test_run_hook_launchers_match_table(self) -> None:
+        """``run-hook`` writes one launcher per ``<suffix>:<function>`` spec."""
+        text = (CLAUDE_DIR / "scripts" / "run-hook").read_text()
+        spec_block = re.search(r"for spec in(.*?); do", text, re.DOTALL)
+        assert spec_block, "run-hook launcher spec list not found"
+        launchers = {
+            f"arize-hook-{suffix}": f"tracing.claude_code.hooks.handlers:{function}"
+            for suffix, function in re.findall(r"([a-z-]+):([a-z_]+)", spec_block.group(1))
+        }
+        assert launchers == _claude_table_scripts()
+
+    def test_hook_events_constant_matches_table(self) -> None:
+        from tracing.claude_code.constants import HOOK_EVENTS
+
+        assert set(HOOK_EVENTS.values()) == set(_claude_table_scripts())
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_handlers(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Route one event harness and one single-entry harness to a recording handler."""
+    calls: list[dict] = []
+    module = types.ModuleType("fake_hook_handlers")
+
+    def record() -> str:
+        calls.append({"argv": list(sys.argv), "stdin": sys.stdin.read()})
+        return "handler-result"
+
+    module.record = record  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_hook_handlers", module)
+    monkeypatch.setattr(cli, "EVENT_HOOKS", {"claude": {"stop": "fake_hook_handlers:record"}})
+    monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "fake_hook_handlers:record"})
+    monkeypatch.setattr(sys, "argv", ["arize-harness"])
+    return calls
+
+
+class TestDispatch:
+    def test_event_hook_gets_stdin_and_legacy_argv(self, fake_handlers, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO('{"hook_event_name": "Stop"}'))
+        result = cli.main(["hook", "claude", "stop", "extra"])
+        assert result == "handler-result"
+        assert fake_handlers == [{"argv": ["arize-hook-stop", "extra"], "stdin": '{"hook_event_name": "Stop"}'}]
+
+    def test_claude_code_alias(self, fake_handlers, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        cli.main(["hook", "claude-code", "stop"])
+        assert [c["argv"] for c in fake_handlers] == [["arize-hook-stop"]]
+
+    def test_single_entry_harness_passes_everything_through(self, fake_handlers, monkeypatch) -> None:
+        """``hook cursor foo`` runs the Cursor handler with ``foo`` in argv; it is not an unknown event."""
+        monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+        cli.main(["hook", "cursor", "foo", "--bar"])
+        assert fake_handlers == [{"argv": ["arize-hook-cursor", "foo", "--bar"], "stdin": "{}"}]
+
+    def test_codex_notify_payload_stays_at_argv_1(self, monkeypatch, tmp_path) -> None:
+        from tracing.codex.hooks import handlers as codex_handlers
+
+        received: list[dict] = []
+        monkeypatch.setattr(sys, "argv", ["arize-harness"])
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        monkeypatch.setattr(codex_handlers, "_handle_notify", received.append)
+        payload = {"type": "agent-turn-complete", "thread-id": "t1", "turn-id": "u1"}
+
+        assert cli.main(["hook", "codex", "notify", json.dumps(payload)]) is None
+        assert received == [payload]
+
+
+class TestFailuresNeverBlock:
+    @pytest.fixture(autouse=True)
+    def hook_log(self, monkeypatch, tmp_path) -> Path:
+        """Keep load-failure tracebacks out of the developer's real ~/.arize logs."""
+        log = tmp_path / "hook.log"
+        monkeypatch.setenv("ARIZE_LOG_FILE", str(log))
+        return log
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["hook"],
+            ["hook", "nope"],
+            ["hook", "nope", "stop"],
+            ["hook", "claude"],
+            ["hook", "claude", "nope"],
+            ["hook", "gemini", "stop"],
+        ],
+    )
+    def test_unknown_or_missing_names_exit_0_with_one_stderr_line(self, args, capsys) -> None:
+        assert cli.main(args) == 0
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert len(err.strip().splitlines()) == 1
+
+    @pytest.mark.parametrize(
+        "args, message",
+        [
+            (["hook"], "usage: arize-harness"),
+            (["hook", "nope"], "unknown harness '<4-character argument>'"),
+            (["hook", "claude"], "missing event for harness 'claude'"),
+            (["hook", "claude", "nope"], "unknown event '<4-character argument>' for harness 'claude'"),
+            (["hook", "claud"], "unknown harness '<5-character argument>'; did you mean 'claude'?"),
+            (
+                ["hook", "codex", "notfy"],
+                "unknown event '<5-character argument>' for harness 'codex'; did you mean 'notify'?",
+            ),
+            (["hook", "claude-code"], "missing event for harness 'claude'"),
+        ],
+    )
+    def test_dispatch_errors_append_to_arize_log_file(self, args, message, capsys, hook_log) -> None:
+        """Harnesses hide a 0-exit hook's stderr, so a mistyped command must also leave a line in the log."""
+        assert cli.main(args) == 0
+        assert message in capsys.readouterr().err
+        lines = hook_log.read_text().splitlines()
+        assert len(lines) == 1
+        assert lines[0].startswith("[arize:error] ")
+        assert message in lines[0]
+
+    @pytest.mark.parametrize(
+        "args, harness",
+        [
+            (["hook", "claude"], "claude"),
+            (["hook", "claude-code", "nope"], "claude"),
+            (["hook", "gemini", "stop"], "gemini"),
+            (["hook", "codex", "notfy"], "codex"),
+        ],
+    )
+    def test_dispatch_errors_for_known_harness_default_to_its_log(self, args, harness, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("ARIZE_LOG_FILE")
+        log = tmp_path / "logs" / f"{harness}.log"
+        monkeypatch.setattr(cli, "_default_log_file", lambda name: log if name == harness else tmp_path / "wrong.log")
+        assert cli.main(args) == 0
+        assert "[arize:error]" in log.read_text()
+        assert not (tmp_path / "wrong.log").exists()
+
+    @pytest.mark.parametrize("args", [["hook"], ["hook", "nope"], ["hook", "nope", "stop"]])
+    def test_dispatch_errors_without_a_harness_use_fallback_log(self, args, monkeypatch, tmp_path) -> None:
+        import core.constants
+
+        monkeypatch.delenv("ARIZE_LOG_FILE")
+        monkeypatch.setattr(core.constants, "LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr(cli, "_default_log_file", lambda name: pytest.fail(f"looked up a log for {name}"))
+        assert cli.main(args) == 0
+        assert [p.name for p in (tmp_path / "logs").iterdir()] == ["arize-harness.log"]
+        assert "[arize:error]" in (tmp_path / "logs" / "arize-harness.log").read_text()
+
+    @pytest.mark.parametrize("args", [["hook", "codex"], ["hook"]])
+    def test_codex_payload_in_place_of_a_name_is_not_echoed(self, args, capsys, hook_log) -> None:
+        """A Codex notify config missing ``notify`` (or ``codex``) puts the payload where a name belongs."""
+        payload = json.dumps({"type": "agent-turn-complete", "input-messages": ["secret prompt"]})
+        assert cli.main([*args, payload]) == 0
+        err = capsys.readouterr().err
+        assert "secret prompt" not in err
+        assert "secret prompt" not in hook_log.read_text()
+        assert f"<{len(payload)}-character argument>" in err
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["hook", "refactor"],
+            ["hook", "claude", "refactor"],
+            ["hook", "codex", "refactor"],
+        ],
+    )
+    def test_one_word_prompt_in_place_of_a_name_is_not_echoed(self, args, capsys, hook_log) -> None:
+        """A single word that is not a near miss for a real name shows only its length."""
+        assert cli.main(args) == 0
+        err = capsys.readouterr().err
+        assert "refactor" not in err
+        assert "refactor" not in hook_log.read_text()
+        assert "<8-character argument>" in err
+
+    @pytest.mark.parametrize(
+        "args, secret, suggestion",
+        [
+            (["hook", "claude\nSECRET", "stop"], "SECRET", "claude"),
+            (["hook", "close"], "close", "codex"),
+            (["hook", "claude", "stopped"], "stopped", "stop"),
+            (["hook", "codex", "notify me"], "notify me", "notify"),
+        ],
+    )
+    def test_text_resembling_a_name_is_not_echoed(self, args, secret, suggestion, capsys, hook_log) -> None:
+        """Text close to a real name, or a real name with text appended, gets a suggestion, never an echo."""
+        assert cli.main(args) == 0
+        err = capsys.readouterr().err
+        log = hook_log.read_text()
+        assert secret not in err
+        assert secret not in log
+        assert f"did you mean '{suggestion}'?" in err
+        assert len(err.strip().splitlines()) == 1
+        assert len(log.splitlines()) == 1
+
+    @pytest.mark.parametrize("args", [[], ["nope"], ["hooks", "claude", "stop"], ["claude", "stop"], ["--help"]])
+    def test_top_level_misuse_logs_usage_without_arguments(self, args, capsys, hook_log) -> None:
+        """A hook command missing ``hook`` lands here and its stderr is hidden, so the usage line is logged too."""
+        assert cli.main(args) == 0
+        assert "usage: arize-harness" in capsys.readouterr().err
+        lines = hook_log.read_text().splitlines()
+        assert lines == [f"[arize:error] {cli._USAGE}"]
+
+    @pytest.mark.parametrize(
+        "args, broken",
+        [
+            (["hook", "nope"], False),
+            (["hook", "claude", "nope"], False),
+            (["hook", "cursor"], True),
+        ],
+    )
+    def test_unwritable_log_does_not_crash(self, args, broken, monkeypatch, capsys, tmp_path) -> None:
+        """A log path that can't be created still exits 0 with the stderr warning."""
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("")
+        monkeypatch.setenv("ARIZE_LOG_FILE", str(blocker / "hook.log"))
+        if broken:
+            monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "tracing.does_not_exist.handlers:main"})
+        assert cli.main(args) == 0
+        err = capsys.readouterr().err
+        assert len(err.strip().splitlines()) == 1
+        assert "traceback in" not in err
+
+    def test_import_failure_exits_0_with_one_stderr_line(self, monkeypatch, capsys, hook_log) -> None:
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "tracing.does_not_exist.handlers:main"})
+        assert cli.main(["hook", "cursor"]) == 0
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert len(err.strip().splitlines()) == 1
+        assert "tracing.does_not_exist" in err
+        assert str(hook_log) in err
+
+    def test_import_failure_writes_traceback_to_log(self, monkeypatch, hook_log) -> None:
+        """Exit 0 hides stderr from most harnesses, so the log must carry the traceback."""
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "tracing.does_not_exist.handlers:main"})
+        cli.main(["hook", "cursor"])
+        text = hook_log.read_text()
+        assert "could not load hook tracing.does_not_exist.handlers:main" in text
+        assert "Traceback (most recent call last)" in text
+        assert "ModuleNotFoundError" in text
+
+    @pytest.mark.parametrize("harness", sorted({h for h, _event, _target in hook_table.iter_hooks()}))
+    def test_import_failure_defaults_to_harness_log(self, harness, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("ARIZE_LOG_FILE")
+        log = tmp_path / "logs" / f"{harness}.log"
+        monkeypatch.setattr(cli, "_default_log_file", lambda name: log if name == harness else tmp_path / "wrong.log")
+        broken = "tracing.does_not_exist.handlers:main"
+        if harness in hook_table.SINGLE_HOOKS:
+            monkeypatch.setattr(cli, "SINGLE_HOOKS", {harness: broken})
+            monkeypatch.setattr(cli, "EVENT_HOOKS", {})
+            args = ["hook", harness]
+        else:
+            monkeypatch.setattr(cli, "EVENT_HOOKS", {harness: {"stop": broken}})
+            monkeypatch.setattr(cli, "SINGLE_HOOKS", {})
+            args = ["hook", harness, "stop"]
+
+        assert cli.main(args) == 0
+        assert "ModuleNotFoundError" in log.read_text()
+        assert not (tmp_path / "wrong.log").exists()
+
+    def test_default_log_files_match_each_harness_adapter(self) -> None:
+        """The dispatcher's default log must be the file each harness's adapter sets as ARIZE_LOG_FILE."""
+        from core.constants import HARNESSES
+
+        expected = {
+            hook_table.canonical_harness(key): metadata["default_log_file"] for key, metadata in HARNESSES.items()
+        }
+        harnesses = {h for h, _event, _target in hook_table.iter_hooks()}
+        assert {h: cli._default_log_file(h) for h in harnesses} == {h: expected[h] for h in harnesses}
+
+    def test_import_failure_after_stderr_redirect_still_warns_on_stderr(self, monkeypatch, tmp_path, capsys, hook_log):
+        """An adapter may redirect sys.stderr to the log before a later import fails.
+
+        The warning must still reach the harness's stderr, and the log must get
+        the failure once, not once from the warning and again from the traceback.
+        """
+        from core import common
+
+        (tmp_path / "redirecting_hook_handlers.py").write_text(
+            "from core.common import redirect_stderr_to_log_file\n"
+            "redirect_stderr_to_log_file()\n"
+            "import tracing.does_not_exist\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "redirecting_hook_handlers", raising=False)
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "redirecting_hook_handlers:main"})
+        # Start with no redirect active, whatever earlier tests' adapter imports left behind.
+        monkeypatch.setattr(common, "_redirected_log_fh", None)
+        monkeypatch.setattr(common, "_original_stderr", None)
+        try:
+            assert cli.main(["hook", "cursor"]) == 0
+        finally:
+            common.restore_stderr_from_log_file()
+
+        err = capsys.readouterr().err
+        assert len(err.strip().splitlines()) == 1
+        assert "redirecting_hook_handlers" in err
+        assert hook_log.read_text().count("could not load hook") == 1
+
+    def test_log_line_follows_unflushed_redirected_stderr(self, monkeypatch, tmp_path, capsys, hook_log):
+        """A partial line the adapter wrote to its redirected stderr must land before the failure line."""
+        from core import common
+
+        (tmp_path / "partial_line_hook_handlers.py").write_text(
+            "import sys\n"
+            "from core.common import redirect_stderr_to_log_file\n"
+            "redirect_stderr_to_log_file()\n"
+            "sys.stderr.write('adapter partial line ')\n"
+            "import tracing.does_not_exist\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "partial_line_hook_handlers", raising=False)
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "partial_line_hook_handlers:main"})
+        monkeypatch.setattr(common, "_redirected_log_fh", None)
+        monkeypatch.setattr(common, "_original_stderr", None)
+        try:
+            assert cli.main(["hook", "cursor"]) == 0
+        finally:
+            common.restore_stderr_from_log_file()
+        assert hook_log.read_text().startswith("adapter partial line [arize:error] could not load hook")
+
+    def test_sys_exit_during_import_exits_0(self, monkeypatch, tmp_path, capsys) -> None:
+        (tmp_path / "exiting_hook_handlers.py").write_text("import sys\nsys.exit(1)\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "exiting_hook_handlers", raising=False)
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "exiting_hook_handlers:main"})
+        assert cli.main(["hook", "cursor"]) == 0
+        assert len(capsys.readouterr().err.strip().splitlines()) == 1
+
+    def test_missing_function_exits_0(self, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "core.hook_table:no_such_function"})
+        assert cli.main(["hook", "cursor"]) == 0
+        assert len(capsys.readouterr().err.strip().splitlines()) == 1
+
+    def test_handler_exceptions_propagate_like_legacy_commands(self, monkeypatch) -> None:
+        module = types.ModuleType("raising_hook_handlers")
+
+        def boom() -> None:
+            raise RuntimeError("boom")
+
+        module.boom = boom  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "raising_hook_handlers", module)
+        monkeypatch.setattr(cli, "SINGLE_HOOKS", {"cursor": "raising_hook_handlers:boom"})
+        monkeypatch.setattr(sys, "argv", ["arize-harness"])
+        with pytest.raises(RuntimeError, match="boom"):
+            cli.main(["hook", "cursor"])
+
+    @pytest.mark.parametrize("args", [[], ["nope"], ["hooks", "claude", "pre-tool-use"], ["claude", "stop"]])
+    def test_usage_error_exits_0(self, args, capsys) -> None:
+        """Claude Code treats exit 2 as a blocking error, so a mistyped hook command must not return it."""
+        assert cli.main(args) == 0
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert "usage: arize-harness" in err
+
+
+class TestCommonStderrHelpers:
+    """``core.common.original_stderr`` and ``flush_redirected_stderr``, which the dispatcher uses."""
+
+    @pytest.fixture
+    def common(self, monkeypatch, tmp_path):
+        from core import common
+
+        monkeypatch.setattr(common, "_redirected_log_fh", None)
+        monkeypatch.setattr(common, "_original_stderr", None)
+        monkeypatch.setenv("ARIZE_LOG_FILE", str(tmp_path / "hook.log"))
+        yield common
+        common.restore_stderr_from_log_file()
+
+    def test_original_stderr_without_redirect_is_sys_stderr(self, common) -> None:
+        assert common.original_stderr() is sys.stderr
+
+    def test_original_stderr_during_redirect_is_the_replaced_stream(self, common) -> None:
+        before = sys.stderr
+        common.redirect_stderr_to_log_file()
+        assert sys.stderr is not before
+        assert common.original_stderr() is before
+
+    def test_original_stderr_after_restore_is_sys_stderr(self, common) -> None:
+        common.redirect_stderr_to_log_file()
+        common.restore_stderr_from_log_file()
+        assert common.original_stderr() is sys.stderr
+
+    def test_flush_redirected_stderr_writes_a_partial_line(self, common, tmp_path) -> None:
+        common.redirect_stderr_to_log_file()
+        sys.stderr.write("partial")
+        assert (tmp_path / "hook.log").read_text() == ""
+        common.flush_redirected_stderr()
+        assert (tmp_path / "hook.log").read_text() == "partial"
+
+    def test_flush_redirected_stderr_is_a_no_op_without_redirect_or_after_close(self, common) -> None:
+        common.flush_redirected_stderr()
+        common.redirect_stderr_to_log_file()
+        common._redirected_log_fh.close()
+        common.flush_redirected_stderr()
+
+
+class TestList:
+    def test_lists_every_pair(self, capsys) -> None:
+        assert cli.main(["hook", "--list"]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        expected = [h if e is None else f"{h} {e}" for h, e, _ in hook_table.iter_hooks()]
+        assert lines == expected
+        assert len(lines) == len(_legacy_hook_scripts())
+
+
+# ---------------------------------------------------------------------------
+# Startup imports (fresh interpreter)
+# ---------------------------------------------------------------------------
+
+_REPORT_MODULES = """
+import atexit, json, sys
+atexit.register(lambda: sys.__stderr__.write("MODULES=" + json.dumps(sorted(sys.modules)) + "\\n"))
+from core.cli import main
+sys.exit(main(sys.argv[1:]))
+"""
+
+
+def _modules_loaded_by(args: list[str], stdin: str, tmp_path: Path) -> set[str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("ARIZE_", "PHOENIX_", "OTEL_"))}
+    # Gemini, Antigravity and OMP send spans from a detached fork unless
+    # ARIZE_DISABLE_FORK=true; disabling it keeps their imports in this report.
+    env.update(
+        {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "ARIZE_DRY_RUN": "true", "ARIZE_DISABLE_FORK": "true"}
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _REPORT_MODULES, *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    line = next(line for line in result.stderr.splitlines() if line.startswith("MODULES="))
+    return set(json.loads(line[len("MODULES=") :]))
+
+
+def _other_harness_modules(modules: set[str], harness_package: str) -> set[str]:
+    return {m for m in modules if m.startswith("tracing.") and not m.startswith(f"tracing.{harness_package}")}
+
+
+class TestStartupImports:
+    def test_list_imports_no_harness_and_no_dotenv(self, tmp_path) -> None:
+        modules = _modules_loaded_by(["hook", "--list"], "", tmp_path)
+        assert not {m for m in modules if m.startswith("tracing")}
+        assert "dotenv" not in modules
+        assert "core.setup" not in modules
+
+    def test_dispatch_error_imports_no_harness_and_no_common(self, tmp_path) -> None:
+        modules = _modules_loaded_by(["hook", "nope"], "", tmp_path)
+        assert not {m for m in modules if m.startswith("tracing")}
+        assert "core.common" not in modules
+        assert "dotenv" not in modules
+
+    def test_claude_hook_imports_only_claude(self, tmp_path) -> None:
+        payload = {"session_id": "s1", "cwd": str(tmp_path), "hook_event_name": "Stop"}
+        modules = _modules_loaded_by(["hook", "claude", "stop"], json.dumps(payload), tmp_path)
+        assert "tracing.claude_code.hooks.handlers" in modules
+        assert _other_harness_modules(modules, "claude_code") == set()
+        assert "dotenv" not in modules
+        assert "core.setup" not in modules
+
+    def test_gemini_hook_imports_only_gemini(self, tmp_path) -> None:
+        modules = _modules_loaded_by(["hook", "gemini", "before-tool"], "{}", tmp_path)
+        assert "tracing.gemini.hooks.handlers" in modules
+        assert _other_harness_modules(modules, "gemini") == set()
+        assert "dotenv" not in modules

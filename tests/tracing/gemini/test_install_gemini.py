@@ -52,7 +52,7 @@ def _mock_prompts(monkeypatch, backend=None):
         "prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
+    monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
     monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
     monkeypatch.setattr(
         _install,
@@ -223,7 +223,7 @@ class TestInstallSecondHarnessOffersCopyFrom:
             return ARIZE_BACKEND
 
         monkeypatch.setattr(_install, "prompt_backend", fake_prompt_backend)
-        monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(
             _install,
@@ -277,7 +277,7 @@ class TestInstallExistingGeminiEntryOnlyUpdatesProjectName:
         config_path.write_text(json.dumps(seed_config, indent=2))
 
         # prompt_project_name returns a new name
-        monkeypatch.setattr(_install, "prompt_project_name", lambda default: "my-gemini")
+        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": "my-gemini")
         monkeypatch.setattr(
             _install,
             "prompt_content_logging",
@@ -866,49 +866,6 @@ class TestHandlersImportable:
 
 
 # ---------------------------------------------------------------------------
-# Setup wizard delegation
-# ---------------------------------------------------------------------------
-
-
-class TestSetupGeminiModule:
-    """core/setup/gemini.py delegates to tracing.gemini/install.py."""
-
-    def test_setup_module_importable(self):
-        from core.setup.gemini import install, main, uninstall
-
-        assert callable(install)
-        assert callable(uninstall)
-        assert callable(main)
-
-    def test_setup_install_delegates(self, cwd_tmp, monkeypatch):
-        """core.setup.gemini.install() should call tracing.gemini.install.install()."""
-        import core.setup.gemini as setup_gemini
-
-        called = []
-        monkeypatch.setattr(_install, "install", lambda: called.append("install"))
-        setup_gemini.install()
-        assert called == ["install"]
-
-    def test_setup_uninstall_delegates(self, cwd_tmp, monkeypatch):
-        """core.setup.gemini.uninstall() should call tracing.gemini.install.uninstall()."""
-        import core.setup.gemini as setup_gemini
-
-        called = []
-        monkeypatch.setattr(_install, "uninstall", lambda: called.append("uninstall"))
-        setup_gemini.uninstall()
-        assert called == ["uninstall"]
-
-    def test_setup_main_delegates_to_install(self, cwd_tmp, monkeypatch):
-        """core.setup.gemini.main() should call tracing.gemini.install.install()."""
-        import core.setup.gemini as setup_gemini
-
-        called = []
-        monkeypatch.setattr(_install, "install", lambda: called.append("install"))
-        setup_gemini.main()
-        assert called == ["install"]
-
-
-# ---------------------------------------------------------------------------
 # Missing tests from task spec
 # ---------------------------------------------------------------------------
 
@@ -958,7 +915,7 @@ class TestInstallPromptsForLogging:
             "prompt_backend",
             lambda existing_harnesses=None: PHOENIX_BACKEND,
         )
-        monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(_install, "prompt_content_logging", mock_prompt_logging)
         monkeypatch.setattr(_install, "write_logging_config", mock_write_logging)

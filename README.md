@@ -4,6 +4,55 @@ Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://g
 
 Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response `LLM` spans, correlated `TOOL` spans, and a foreground subagent `AGENT` subtree when available. See [Claude Code trace structure and current limitations](tracing/claude_code/README.md#trace-structure) for details.
 
+## Quick Start
+
+You need Python 3.9+ and the harness you want to trace. The commands below are the three most common installs on macOS and Linux. Each one downloads the installer, asks where to send spans (Phoenix or [Arize AX](https://arize.com)), then writes credentials to `~/.arize/harness/config.json`. For Windows commands and the rest of the supported harnesses, see [Supported Harnesses](#supported-harnesses).
+
+### Claude Code
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- claude
+```
+
+The installer registers hooks in `~/.claude/settings.json`. Start a session with `claude`, or `claude -p "hello"`. Spans for that session show up in the project you chose.
+
+To install from the Claude marketplace instead:
+
+```bash
+claude plugin marketplace add Arize-ai/coding-harness-tracing
+claude plugin install claude-code-tracing@coding-harness-tracing
+```
+
+That path skips the wizard, so set backend credentials in `~/.claude/settings.json`. See [Claude Code marketplace](tracing/claude_code/README.md#claude-code-marketplace).
+
+### Codex
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- codex
+```
+
+The installer registers hooks in `~/.codex/config.toml`. Codex will not run them until you trust them once: start `codex`, run `/hooks`, and approve each `arize-hook-codex-*` entry. Then run a session, for example:
+
+```bash
+codex exec "explain what this file does" path/to/file.py
+```
+
+### Cursor
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- cursor
+```
+
+The installer registers hooks in `~/.cursor/hooks.json`, which applies to the Cursor IDE and the Cursor CLI for your user. Use either as usual; agent activity produces spans in the project you chose.
+
+Cursor 2.5+ can install from the marketplace instead. In a Cursor agent chat, run:
+
+```text
+/add-plugin Arize-ai/coding-harness-tracing
+```
+
+The plugin skips the wizard. Run the bundled `manage-cursor-tracing` skill once to write credentials. See [Cursor plugin install](tracing/cursor/README.md#plugin-install).
+
 ## Supported Harnesses
 
 | Harness Integration | Install command | Name |
@@ -13,21 +62,12 @@ Claude Code tracing reconstructs each turn as a `CHAIN` containing per-response 
 | [OpenAI Codex CLI](tracing/codex/README.md) | [macOS / Linux](tracing/codex/README.md#macos--linux) · [Windows](tracing/codex/README.md#windows-powershell) | `codex` |
 | [Cursor IDE / CLI](tracing/cursor/README.md) | [macOS / Linux](tracing/cursor/README.md#macos--linux) · [Windows](tracing/cursor/README.md#windows-powershell) | `cursor` |
 | [Cursor IDE / CLI](tracing/cursor/README.md) | [Cursor Plugin](tracing/cursor/README.md#plugin-install) | `cursor-tracing` |
+| [Devin](tracing/devin/README.md) | [macOS / Linux](tracing/devin/README.md#macos--linux) · [Windows](tracing/devin/README.md#windows-powershell) | `devin` |
 | [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | [macOS / Linux](tracing/copilot/README.md#macos--linux) · [Windows](tracing/copilot/README.md#windows-powershell) | `copilot` |
 | [Gemini CLI](tracing/gemini/README.md) | [macOS / Linux](tracing/gemini/README.md#macos--linux) · [Windows](tracing/gemini/README.md#windows-powershell) | `gemini` |
 | [Kiro CLI](tracing/kiro/README.md) | [macOS / Linux](tracing/kiro/README.md#macos--linux) · [Windows](tracing/kiro/README.md#windows-powershell) | `kiro` |
 | [Google Antigravity CLI / IDE](tracing/antigravity/README.md) | [macOS / Linux](tracing/antigravity/README.md#macos--linux) · [Windows](tracing/antigravity/README.md#windows-powershell) | `antigravity` |
 | [Opencode CLI](tracing/opencode/README.md) | [macOS / Linux](tracing/opencode/README.md#macos--linux) · [Windows](tracing/opencode/README.md#windows-powershell) | `opencode` |
-| [Claude Code / Agent SDK](tracing/claude_code/README.md) | [macOS / Linux](tracing/claude_code/README.md#macos--linux) · [Windows](tracing/claude_code/README.md#windows-powershell) | `claude` |
-| [Claude Code / Agent SDK](tracing/claude_code/README.md) | [Claude Plugin](tracing/claude_code/README.md#claude-code-marketplace) | `claude-code-tracing` |
-| [OpenAI Codex](tracing/codex/README.md) | [macOS / Linux](tracing/codex/README.md#macos--linux) · [Windows](tracing/codex/README.md#windows-powershell) | `codex` |
-| [Cursor](tracing/cursor/README.md) | [macOS / Linux](tracing/cursor/README.md#macos--linux) · [Windows](tracing/cursor/README.md#windows-powershell) | `cursor` |
-| [Cursor](tracing/cursor/README.md) | [Cursor Plugin](tracing/cursor/README.md#plugin-install) | `cursor-tracing` |
-| [Devin](tracing/devin/README.md) | [macOS / Linux](tracing/devin/README.md#macos--linux) · [Windows](tracing/devin/README.md#windows-powershell) | `devin` |
-| [GitHub Copilot](tracing/copilot/README.md) | [macOS / Linux](tracing/copilot/README.md#macos--linux) · [Windows](tracing/copilot/README.md#windows-powershell) | `copilot` |
-| [Gemini](tracing/gemini/README.md) | [macOS / Linux](tracing/gemini/README.md#macos--linux) · [Windows](tracing/gemini/README.md#windows-powershell) | `gemini` |
-| [Kiro](tracing/kiro/README.md) | [macOS / Linux](tracing/kiro/README.md#macos--linux) · [Windows](tracing/kiro/README.md#windows-powershell) | `kiro` |
-| [Opencode](tracing/opencode/README.md) | [macOS / Linux](tracing/opencode/README.md#macos--linux) · [Windows](tracing/opencode/README.md#windows-powershell) | `opencode` |
 | [Oh My Pi (omp)](tracing/omp/README.md) | [macOS / Linux](tracing/omp/README.md#macos--linux) · [Windows](tracing/omp/README.md#windows-powershell) | `omp` |
 
 > **Each install link opens the ready-to-paste command for your OS — copy it and run it in a terminal**
@@ -61,13 +101,23 @@ Prompts depend on the backend:
 
 If you've already configured another harness against the same backend, the installer offers a **copy-from** menu so you can reuse those credentials instead of re-entering them.
 
-#### 3. Project name
+#### 3. User ID (optional)
 
-The project (in Arize/Phoenix) that spans for this harness are grouped under. Defaults to the harness name (e.g. `claude-code`, `codex` etc).
+A free-form identifier attached to every span as `user.id`. Useful when multiple teammates share the same backend. Leave blank to skip. If the entered ID is blank or is not an email address, Arize AX also checks `ARIZE_USER_ID` when choosing the project default.
 
-#### 4. User ID (optional)
+#### 4. Project name
 
-A free-form identifier attached to every span as `user.id`. Useful when multiple teammates share the same backend. Leave blank to skip.
+The project that groups spans for this harness. Arize AX defaults to `harness/<email>`, using the first email address found in this order:
+
+1. The user ID entered during installation.
+2. `ARIZE_USER_ID`. The file named by `ARIZE_ENV_FILE` takes precedence over the process environment.
+3. The saved `harnesses.<harness>.user_id`.
+4. The saved top-level `user_id`.
+5. `git user.email`.
+
+Values that are not email addresses are skipped. If no email is found, the default is the harness name and the installer prints commands that set an email. Phoenix defaults to the harness name. Selecting an email for the project does not change the saved user ID.
+
+Press Enter to accept the default or type another project name. A backend-specific project setting in the file named by `ARIZE_ENV_FILE` overrides the saved project and generated default. Without that file setting, reinstalling keeps the saved project. The installer ignores project variables inherited from the process environment in both interactive and non-interactive mode. A typed project name wins over every default.
 
 #### 5. Content logging
 
@@ -81,7 +131,7 @@ You're only asked these the first time you install a harness — subsequent inst
 
 ### Non-interactive install
 
-Pass `--non-interactive` (or `-y`) to skip every prompt above and take each value from the environment instead. Nothing is asked, and a missing required value is an error rather than a prompt — so this is the mode to use from a script, from CI, or when a coding agent is driving the install itself.
+Pass `--non-interactive` (or `-y`) to skip every prompt above and use the resolution rules below. A missing required value is an error rather than a prompt. Use this mode from a script, from CI, or when a coding agent drives the install.
 
 Values come from the environment, or from a dotenv file named explicitly with `ARIZE_ENV_FILE`. Using a file keeps the API key out of the command line and shell history.
 
@@ -104,8 +154,9 @@ ARIZE_ENV_FILE=~/.arize/onboarding.env ./install.sh claude --non-interactive
 | `ARIZE_API_KEY` + `ARIZE_SPACE_ID` | — | Arize AX credentials. Both required for the Arize backend. |
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | `http://localhost:6006` | Phoenix endpoint and optional API key. |
 | `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. When both are present, or an Arize key appears with only a Phoenix endpoint, the install stops and asks you to set this rather than guess — guessing would discard one backend's credentials. |
-| `ARIZE_PROJECT_NAME` | harness name | Project spans are grouped under. **Read from the dotenv file only** — an environment value is ignored here, since an installed harness exports its own project name into every session and inheriting it would name this harness's project after a different one. |
-| `ARIZE_USER_ID` | — | Optional `user.id` on every span. |
+| `ARIZE_PROJECT_NAME` | `harness/<email>` | Arize AX project. Read only from the file named by `ARIZE_ENV_FILE`, before a saved project or generated default. The installer ignores the process environment value. |
+| `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | harness name | Phoenix project. Read only from the file named by `ARIZE_ENV_FILE`. `PHOENIX_PROJECT` wins when both are set in that file. The installer ignores process environment values. |
+| `ARIZE_USER_ID` | — | Optional `user.id` on every span. Also an email source for the Arize AX project default when the entered install user ID is blank or is not an email address. |
 | `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
 | `ARIZE_LOG_PROMPTS` | `false` | Set `true` to capture prompt text. |
 | `ARIZE_LOG_TOOL_DETAILS` | `false` | Set `true` to capture tool commands, file paths and URLs. |
@@ -119,13 +170,13 @@ In a dotenv file, an unquoted value ends at a whitespace-preceded `#`, so `ARIZE
 
 Content logging is **off by default here**, unlike the interactive wizard where each question defaults to yes. A `[Y/n]` default is a person declining to change an answer they were shown; the same default unattended would capture prompts, commands and file contents that nobody agreed to — and `update` runs non-interactively whenever there is no terminal. Set the `ARIZE_LOG_*` variables you want to `true`.
 
-The API key is never echoed — the installer reports only that it found one, and where it came from. Every resolved value is reported with its source (dotenv path, `$VAR`, or default) so a wrong-credentials install is diagnosable:
+The API key is never echoed. The installer reports only that it found one and where it came from. Resolved settings include their source, such as a dotenv path, `$VAR`, `saved project`, or `default`, so a wrong-credentials install is diagnosable:
 
 ```
 [arize] Backend: Arize AX at otlp.arize.com:443 (from default)
 [arize]   space ID: my-space (from /path/to/.env)
 [arize]   API key: found (from /path/to/.env)
-[arize] Project name: codex (from default)
+[arize] Project name: harness/dev@example.com (from default)
 ```
 
 An API key on its own is rejected as ambiguous, since both backends use one.
@@ -167,6 +218,20 @@ Harnesses:
 
 `hooks: NOT registered` means credentials are saved but the harness was never wired up (or something removed the hooks) — re-run the install for that harness.
 
+### Running a hook by hand
+
+`arize-harness hook` runs the same handler as the matching `arize-hook-*` command. The installers still register the `arize-hook-*` commands, so existing harness configs don't need to change.
+
+```bash
+arize-harness hook --list                  # every harness and event it accepts
+arize-harness hook claude pre-tool-use     # one handler per event: name the event
+arize-harness hook cursor                  # one handler for every event: no event argument
+```
+
+Claude Code, Codex, Copilot, Gemini, and Antigravity take an event name. Cursor, Kiro, OpenCode, OMP, and Devin take none, and any further arguments go to the handler. Event data is passed the way the harness passes it to the hook: as JSON on stdin, except Codex, which takes it as the last argument (`arize-harness hook codex notify '<json>'`).
+
+A mistyped harness or event exits 0, so it never blocks the harness, and is written to the log described under `ARIZE_LOG_FILE` below.
+
 ### Environment variables
 
 Most settings live in `.arize/harness/config.json`, but a small set of env vars affect runtime behavior on every harness. The installers wire most of these for you; set them yourself when you want to override behavior for a single session or debug locally.
@@ -178,7 +243,7 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 | `ARIZE_DRY_RUN` | `false` | Build spans but skip the backend send. Useful for confirming hook wiring without writing data. |
 | `ARIZE_USER_ID` | — | Attached to every span as `user.id`. Mirrors the `user_id` field in `config.json`; env wins if both are set. |
 | `ARIZE_PROJECT_NAME` | per-harness | Overrides `harnesses.<name>.project_name` from `config.json` for a single session. **Arize backend only** — ignored on the Phoenix backend (use `PHOENIX_PROJECT` there). |
-| `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. |
+| `ARIZE_LOG_FILE` | per-harness | Path the harness writes its log to. Adapters default to `~/.arize/harness/logs/<harness>.log`. When this is unset, an `arize-harness` error that names no known harness is logged to `~/.arize/harness/logs/arize-harness.log`. |
 | `ARIZE_TRACE_DEBUG` | `false` | Dump raw hook payloads as JSON under `~/.arize/harness/state/<harness>/debug/`. Codex hooks use this for span-tree inspection. |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Standard OTel attribute string (`team=payments,environment=prod`) added to every span. Overrides `config.json` `attributes`/`harnesses.<name>.attributes` on key collision; set per-harness by placing it in that harness's settings env block. |
 

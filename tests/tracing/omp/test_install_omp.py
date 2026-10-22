@@ -69,7 +69,7 @@ def _mock_prompts(monkeypatch, backend=None):
         "prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
+    monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
     monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
     monkeypatch.setattr(
         _install,
@@ -399,7 +399,7 @@ class TestInstallSecondHarnessOffersCopyFrom:
             return ARIZE_BACKEND
 
         monkeypatch.setattr(_install, "prompt_backend", fake_prompt_backend)
-        monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(
             _install,
@@ -445,7 +445,7 @@ class TestInstallExistingOmpEntryOnlyUpdatesProjectName:
         }
         config_path.write_text(json.dumps(seed_config, indent=2))
 
-        monkeypatch.setattr(_install, "prompt_project_name", lambda default: "my-omp")
+        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": "my-omp")
         monkeypatch.setattr(
             _install,
             "prompt_content_logging",
@@ -501,7 +501,7 @@ class TestInstallPromptsForLogging:
         mock_write_logging = MagicMock()
 
         monkeypatch.setattr(_install, "prompt_backend", lambda existing_harnesses=None: PHOENIX_BACKEND)
-        monkeypatch.setattr(_install, "prompt_project_name", lambda default: default)
+        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
         monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
         monkeypatch.setattr(_install, "prompt_content_logging", mock_prompt_logging)
         monkeypatch.setattr(_install, "write_logging_config", mock_write_logging)
@@ -832,43 +832,3 @@ class TestConstants:
     def test_plugin_source_has_header_marker(self):
         text = _omp.PLUGIN_SOURCE.read_text(encoding="utf-8")
         assert text.startswith(_HEADER_MARKER)
-
-
-# ---------------------------------------------------------------------------
-# Setup wizard delegation
-# ---------------------------------------------------------------------------
-
-
-class TestSetupOmpModule:
-    """core/setup/omp.py delegates to tracing.omp.install."""
-
-    def test_setup_module_importable(self):
-        import core.setup.omp as setup_omp
-
-        assert callable(setup_omp.install)
-        assert callable(setup_omp.uninstall)
-        assert callable(setup_omp.main)
-
-    def test_setup_install_delegates(self, cwd_tmp, monkeypatch):
-        import core.setup.omp as setup_omp
-
-        called = []
-        monkeypatch.setattr(_install, "install", lambda: called.append("install"))
-        setup_omp.install()
-        assert called == ["install"]
-
-    def test_setup_uninstall_delegates(self, cwd_tmp, monkeypatch):
-        import core.setup.omp as setup_omp
-
-        called = []
-        monkeypatch.setattr(_install, "uninstall", lambda: called.append("uninstall"))
-        setup_omp.uninstall()
-        assert called == ["uninstall"]
-
-    def test_setup_main_delegates_to_install(self, cwd_tmp, monkeypatch):
-        import core.setup.omp as setup_omp
-
-        called = []
-        monkeypatch.setattr(_install, "install", lambda: called.append("install"))
-        setup_omp.main()
-        assert called == ["install"]

@@ -1,8 +1,7 @@
 """Tests for Gemini entry points in pyproject.toml.
 
 Mirrors tests/test_copilot_install.py — verifies that all required
-Gemini hook entry points and the setup wizard entry point are declared
-in pyproject.toml [project.scripts].
+Gemini hook entry points are declared in pyproject.toml [project.scripts].
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 
 class TestGeminiEntryPoints:
-    """Verify all 9 Gemini entry points (8 hooks + 1 setup) in pyproject.toml."""
+    """Verify all 8 Gemini hook entry points in pyproject.toml."""
 
     @pytest.fixture(autouse=True)
     def _load_pyproject(self):
@@ -50,9 +49,6 @@ class TestGeminiEntryPoints:
 
     def test_after_tool_entry_point(self):
         assert 'arize-hook-gemini-after-tool = "tracing.gemini.hooks.handlers:after_tool"' in self.text
-
-    def test_setup_entry_point(self):
-        assert 'arize-setup-gemini = "core.setup.gemini:main"' in self.text
 
     def test_exactly_8_hook_entry_points(self):
         """There should be exactly 8 gemini hook entry points."""
@@ -83,7 +79,3 @@ class TestGeminiEntryPoints:
             after_tool,
         ]:
             assert callable(fn)
-
-        from core.setup.gemini import main
-
-        assert callable(main)

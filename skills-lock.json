@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "phoenix-cli": {
+      "source": "Arize-ai/phoenix",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/phoenix-cli/SKILL.md",
+      "computedHash": "23d08f2a33fbe5a106bffa7eec401f7bc947e4ec3dd579bd26bcc22900716038"
+    }
+  }
+}

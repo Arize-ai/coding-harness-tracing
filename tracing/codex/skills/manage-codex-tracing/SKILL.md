@@ -288,6 +288,8 @@ Tell the user:
 
 ### Environment Variables Reference
 
+At runtime, project variables override `harnesses.codex.project_name` in `config.json`. During installation, project overrides come only from the file named by `ARIZE_ENV_FILE`. The installer ignores inherited process project variables. Reinstalling preserves the saved name unless a file setting or typed answer replaces it.
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ARIZE_API_KEY` | For AX | - | Arize AX API key |
@@ -295,7 +297,8 @@ Tell the user:
 | `ARIZE_OTLP_ENDPOINT` | No | `otlp.arize.com:443` | OTLP gRPC endpoint (on-prem Arize) |
 | `PHOENIX_ENDPOINT` | For Phoenix | `http://localhost:6006` | Phoenix collector URL |
 | `PHOENIX_API_KEY` | No | - | Phoenix API key for auth |
-| `ARIZE_PROJECT_NAME` | No | `codex` | Project name in Arize/Phoenix |
+| `ARIZE_PROJECT_NAME` | No | Saved project | Arize AX runtime override. New installs default to `harness/<email>`, or `codex` if no email is available. |
+| `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | No | Saved project | Phoenix runtime override. New installs default to `codex`. `PHOENIX_PROJECT` wins when both are set. |
 | `ARIZE_USER_ID` | No | - | User ID to attach to all spans as `user.id` attribute |
 | `ARIZE_TRACE_ENABLED` | No | `true` | Enable/disable tracing |
 | `ARIZE_DRY_RUN` | No | `false` | Print spans instead of sending |
@@ -316,7 +319,7 @@ Common issues and fixes:
 | No output in terminal | Hooks run in background; check `~/.arize/harness/logs/codex.log` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` in env or `export ARIZE_DRY_RUN=true` |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` in env or `export ARIZE_VERBOSE=true` |
-| Wrong project name | Set `ARIZE_PROJECT_NAME` in `~/.codex/arize-env.sh` (default: `codex`) |
+| Wrong project name | Check `harnesses.codex.project_name` in `~/.arize/harness/config.json`. For a runtime override, set `ARIZE_PROJECT_NAME` for AX or `PHOENIX_PROJECT` for Phoenix in `~/.codex/arize-env.sh`. |
 | Existing `notify` hook | Codex supports only one `notify` — create a wrapper script that calls both |
 | Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.json ~/.arize/harness/state/codex/spans_*.jsonl` |
 | Flat spans only (no children) | The real hooks haven't been trusted yet. Run `codex` → `/hooks` and approve each `arize-hook-codex-*` entry. |

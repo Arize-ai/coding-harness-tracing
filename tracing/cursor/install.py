@@ -52,11 +52,11 @@ def install(with_skills: bool = False) -> None:
     # If this harness has no entry yet, prompt for backend; otherwise just update project_name.
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-    if not existing_entry:
+    if not isinstance(existing_entry, dict) or "target" not in existing_entry:
         existing_harnesses = config.get("harnesses") if config else None
         target, credentials = prompt_backend(existing_harnesses)
-        project_name = prompt_project_name(HARNESS_NAME)
         user_id = prompt_user_id()
+        project_name = prompt_project_name(HARNESS_NAME, target, config, user_id)
         if not dry_run():
             from core.setup import write_config
 
@@ -64,7 +64,7 @@ def install(with_skills: bool = False) -> None:
         else:
             info("would write config.json with backend credentials")
     else:
-        project_name = prompt_project_name(get_value(config, f"harnesses.{HARNESS_NAME}.project_name") or HARNESS_NAME)
+        project_name = prompt_project_name(HARNESS_NAME, existing_entry["target"], config)
         merge_harness_entry(HARNESS_NAME, project_name)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet —

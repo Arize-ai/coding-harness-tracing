@@ -122,7 +122,12 @@ class _CollectorHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
-        self.server._received.append(json.loads(body))
+        if self.headers.get("Content-Type", "").startswith("application/json"):
+            # Arize path: OTLP/JSON
+            self.server._received.append(json.loads(body))
+        else:
+            # Phoenix path: OTLP binary protobuf — record raw bytes
+            self.server._received.append(body)
         self.send_response(200)
         self.end_headers()
 
@@ -143,7 +148,8 @@ class _CollectorHandler(BaseHTTPRequestHandler):
 def mock_collector():
     """Start a real HTTP server on a random port.
 
-    Accepts POST /v1/spans (records body) and GET /health (returns 200).
+    Accepts POST /v1/traces (records the body: parsed JSON for
+    application/json, raw bytes for protobuf) and GET /health (returns 200).
     Yields dict: {"url": "http://127.0.0.1:{port}", "received": [...], "port": int}
     Server is torn down after the test.
     """
