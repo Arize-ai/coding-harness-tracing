@@ -19,7 +19,7 @@ VENV_DIR="${INSTALL_DIR}/venv"
 PIP_VERSION="26.2.2"
 PIP_WHEEL="pip-${PIP_VERSION}-py3-none-any.whl"
 PIP_SHA256="fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
-PIP_REQUIREMENT="pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/${PIP_WHEEL}#sha256=${PIP_SHA256}"
+PIP_WHEEL_URL="https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/${PIP_WHEEL}#sha256=${PIP_SHA256}"
 CERTIFI_REQUIREMENT="certifi>=2026.10.19"
 # When set, install from local wheels in this directory instead of fetching the
 # repo. Lets a caller that already ships the wheels install with no network at
@@ -105,7 +105,7 @@ PYEOF
             return 1
         }
     else
-        "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$PIP_REQUIREMENT" || {
+        "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$PIP_WHEEL_URL" || {
             err "Failed to install verified pip ${PIP_VERSION}"
             return 1
         }

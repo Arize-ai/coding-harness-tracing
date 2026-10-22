@@ -19,7 +19,7 @@ set "VENV_PIP=%VENV_DIR%\Scripts\pip.exe"
 set "PIP_VERSION=26.2.2"
 set "PIP_WHEEL=pip-26.2.2-py3-none-any.whl"
 set "PIP_SHA256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
-set "PIP_REQUIREMENT=pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+set "PIP_WHEEL_URL=https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 REM When set, install from local wheels in this directory instead of fetching the
 REM repo: no network and no remote code execution. Mirrors install.sh --wheel-dir.
 if not defined ARIZE_WHEEL_DIR set "ARIZE_WHEEL_DIR="
@@ -252,11 +252,11 @@ REM --- bootstrap_pip: authenticate pip before any other package download ---
 echo [arize] Securing pip %PIP_VERSION%...
 if defined WHEEL_DIR (
     if not exist "%WHEEL_DIR%\%PIP_WHEEL%" ( echo [arize] Missing %PIP_WHEEL% in %WHEEL_DIR% >&2 & exit /b 1 )
-    "%VENV_PYTHON%" -c "import hashlib,pathlib,sys; sys.exit(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() != sys.argv[2])" "%WHEEL_DIR%\%PIP_WHEEL%" "%PIP_SHA256%"
+    "%VENV_PYTHON%" -c "import hashlib,pathlib,sys; sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)" "%WHEEL_DIR%\%PIP_WHEEL%" "%PIP_SHA256%"
     if !ERRORLEVEL! neq 0 ( echo [arize] %PIP_WHEEL% failed SHA-256 verification >&2 & exit /b 1 )
     "%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "%WHEEL_DIR%\%PIP_WHEEL%"
 ) else (
-    "%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "%PIP_REQUIREMENT%"
+    "%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "%PIP_WHEEL_URL%"
 )
 if !ERRORLEVEL! neq 0 ( echo [arize] Failed to install verified pip %PIP_VERSION% >&2 & exit /b 1 )
 exit /b 0
