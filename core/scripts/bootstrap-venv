@@ -1,0 +1,150 @@
+#!/bin/sh
+# Shared venv bootstrap for Arize tracing plugins (Cursor, Claude Code, ...).
+#
+# Usage: bootstrap-venv <PLUGIN_ROOT> <VENV_DIR> <ENTRY_POINT>
+#   PLUGIN_ROOT  directory containing the plugin's pyproject.toml
+#   VENV_DIR     where the plugin's venv lives (created on first run)
+#   ENTRY_POINT  console-script name to exec (e.g. arize-hook-cursor)
+#
+# Creates a Python 3.9+ venv on first run, reinstalls when the plugin's
+# pyproject.toml changes, then execs the entry point. The host's hook payload
+# arrives on stdin and is inherited through exec, so the dispatcher reads it
+# directly. All diagnostics go to stderr; stdout is reserved for the host's
+# control protocol. Any failure exits 0 so tracing never blocks the host.
+#
+# Hot-path note: once the venv is built and current, the steady-state path
+# execs the entry point WITHOUT spawning a Python interpreter to probe the
+# version or hash pyproject.toml — both are skipped behind a cheap mtime gate.
+# This script runs on every host hook event, so that fast path matters.
+set -e
+
+PLUGIN_ROOT="${1:?usage: bootstrap-venv <plugin-root> <venv-dir> <entry-point>}"
+VENV_DIR="${2:?usage: bootstrap-venv <plugin-root> <venv-dir> <entry-point>}"
+ENTRY_POINT="${3:?usage: bootstrap-venv <plugin-root> <venv-dir> <entry-point>}"
+# The reinstall marker lives beside the venv (its parent dir) so it shares the
+# venv's isolation — callers give each plugin its own VENV_DIR.
+DATA_DIR="${VENV_DIR%/*}"
+MARKER="$DATA_DIR/.pyproject.sha256"
+PYPROJECT="$PLUGIN_ROOT/pyproject.toml"
+
+# --- Locate the installed entry-point binary (pure builtins) ---
+find_entry_point() {
+    if [ -x "$VENV_DIR/bin/$ENTRY_POINT" ]; then
+        echo "$VENV_DIR/bin/$ENTRY_POINT"
+    elif [ -x "$VENV_DIR/Scripts/$ENTRY_POINT" ]; then
+        echo "$VENV_DIR/Scripts/$ENTRY_POINT"
+    elif [ -x "$VENV_DIR/Scripts/${ENTRY_POINT}.exe" ]; then
+        echo "$VENV_DIR/Scripts/${ENTRY_POINT}.exe"
+    else
+        return 1
+    fi
+}
+
+# --- Find Python 3.9+ (only needed when (re)building the venv) ---
+find_python() {
+    for p in python3 python py; do
+        if "$p" -c "import sys; sys.exit(0 if sys.version_info>=(3,9) else 1)" 2>/dev/null; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+pyproject_hash() {
+    "$PYTHON_CMD" -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PYPROJECT" 2>/dev/null
+}
+
+# --- Is a (re)install needed? (slow path only; assumes PYTHON_CMD is set) ---
+needs_install() {
+    [ ! -d "$VENV_DIR" ] && return 0
+    [ ! -f "$MARKER" ] && return 0
+    current=$(pyproject_hash) || return 0
+    stored=$(cat "$MARKER" 2>/dev/null) || return 0
+    [ "$current" != "$stored" ]
+}
+
+# --- Bootstrap venv ---
+bootstrap() {
+    PYTHON_CMD=$(find_python) || {
+        echo "[arize] No Python 3.9+ found — tracing will not be available" >&2
+        return 1
+    }
+
+    # Recover from a half-created venv (e.g. Cursor Cloud where python3-venv
+    # may be only partially available): if VENV_DIR exists but has no usable
+    # pip, wipe it and rebuild from scratch.
+    if [ -d "$VENV_DIR" ] && [ ! -x "$VENV_DIR/bin/pip" ] && [ ! -x "$VENV_DIR/Scripts/pip" ] && [ ! -x "$VENV_DIR/Scripts/pip.exe" ]; then
+        echo "[arize] Removing incomplete venv at $VENV_DIR" >&2
+        rm -rf "$VENV_DIR"
+        rm -f "$MARKER"
+    fi
+
+    if ! needs_install; then
+        # pyproject mtime was newer (so we took the slow path) but the content
+        # is unchanged. Rewrite the marker to bump its mtime, so the cheap
+        # mtime gate keeps short-circuiting instead of re-hashing every event.
+        if [ -f "$MARKER" ]; then
+            _m=$(cat "$MARKER" 2>/dev/null) && printf '%s\n' "$_m" > "$MARKER" 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    echo "[arize] Setting up tracing venv at $VENV_DIR..." >&2
+    mkdir -p "$DATA_DIR"
+
+    # Capture combined output and check Python's real exit status: a
+    # `... | tail` pipeline would report tail's exit code and mask a venv
+    # failure (e.g. missing python3-venv).
+    venv_log=$("$PYTHON_CMD" -m venv "$VENV_DIR" 2>&1) || {
+        echo "[arize] Failed to create venv" >&2
+        printf '%s\n' "$venv_log" | tail -3 >&2
+        return 1
+    }
+
+    # Find pip in the new venv
+    PIP=""
+    if [ -x "$VENV_DIR/bin/pip" ]; then PIP="$VENV_DIR/bin/pip"
+    elif [ -x "$VENV_DIR/Scripts/pip" ]; then PIP="$VENV_DIR/Scripts/pip"
+    elif [ -x "$VENV_DIR/Scripts/pip.exe" ]; then PIP="$VENV_DIR/Scripts/pip.exe"
+    fi
+    if [ -z "$PIP" ]; then
+        echo "[arize] pip not found in venv" >&2
+        return 1
+    fi
+
+    echo "[arize] Installing tracing package from $PLUGIN_ROOT..." >&2
+    if ! "$PIP" install --quiet "$PLUGIN_ROOT" >&2; then
+        echo "[arize] pip install failed" >&2
+        rm -f "$MARKER"
+        return 1
+    fi
+
+    # Save hash marker (mtime now > pyproject's, so future events take the
+    # fast path). If hashing fails, drop the marker so we retry next event.
+    pyproject_hash > "$MARKER" || {
+        echo "[arize] Failed to record pyproject marker" >&2
+        rm -f "$MARKER"
+    }
+
+    echo "[arize] Tracing venv ready" >&2
+}
+
+# --- Main ---
+# Fast path: venv already built and pyproject unchanged since last install.
+# Skips find_python + hashing entirely (pure builtins, no subprocess) — this
+# is the steady state on every hook event.
+EP=$(find_entry_point) || EP=""
+if [ -n "$EP" ] && [ -f "$MARKER" ] && ! [ "$PYPROJECT" -nt "$MARKER" ]; then
+    exec "$EP"
+fi
+
+# Slow path: (re)build the venv if needed (first run or after an update).
+bootstrap || exit 0
+
+EP=$(find_entry_point) || {
+    echo "[arize] Entry point '$ENTRY_POINT' not found in venv" >&2
+    exit 0
+}
+
+exec "$EP"
