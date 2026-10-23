@@ -268,7 +268,7 @@ class TestFailuresNeverBlock:
         assert len(err.strip().splitlines()) == 1
         assert len(log.splitlines()) == 1
 
-    @pytest.mark.parametrize("args", [[], ["nope"], ["hooks", "claude", "stop"], ["claude", "stop"], ["--help"]])
+    @pytest.mark.parametrize("args", [[], ["nope"], ["hooks", "claude", "stop"], ["claude", "stop"], ["-v"]])
     def test_top_level_misuse_logs_usage_without_arguments(self, args, capsys, hook_log) -> None:
         """A hook command missing ``hook`` lands here and its stderr is hidden, so the usage line is logged too."""
         assert cli.main(args) == 0
