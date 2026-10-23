@@ -46,6 +46,16 @@ if ! "$engine" info >/dev/null 2>&1; then
     die "$engine is not running. Start it and retry, or run scripts/smoke-install.sh directly."
 fi
 
+# The container copies the checkout without .git, so compute the version here,
+# on the host, and pass it in. smoke-install.sh builds with it.
+version="${SETUPTOOLS_SCM_PRETEND_VERSION:-}"
+if [[ -z "$version" ]]; then
+    command -v uv >/dev/null || die "uv not found. Install it: https://docs.astral.sh/uv/"
+    version="$(cd "$ROOT" && uv tool run --quiet --from 'setuptools-scm>=8,<9' python -m setuptools_scm)" ||
+        die "could not compute the version from $ROOT"
+fi
+echo "test-in-container: building version $version"
+
 tty_flag=()
 [[ -t 0 && -t 1 ]] && tty_flag=(-it)
 [[ "${SMOKE_SHELL:-}" == 1 && ${#tty_flag[@]} -eq 0 ]] && die "SMOKE_SHELL=1 needs a terminal"
@@ -58,6 +68,7 @@ exec "$engine" run --rm "${tty_flag[@]+"${tty_flag[@]}"}" \
     --security-opt label=disable \
     -v "$ROOT:/src:ro" \
     -e UV_VERSION="$UV_VERSION" \
+    -e SETUPTOOLS_SCM_PRETEND_VERSION="$version" \
     -e SMOKE_SHELL="${SMOKE_SHELL:-}" \
     -e SMOKE_KEEP="${SMOKE_SHELL:+1}" \
     "$image" bash -c '
