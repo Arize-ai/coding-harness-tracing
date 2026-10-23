@@ -172,6 +172,16 @@ class TestPipFailureIsFatal:
         migrate = section.index("core.config migrate")
         assert check < migrate, "the failure check must come before the migration"
 
+    def test_update_forwards_dash_u_to_pip(self):
+        """Without -U, pip keeps an installed 0.1.0 when handed a 0.2.0 wheel."""
+        section = _bat().split("\n:cmd_update", 1)[1]
+        assert "call :setup_venv -U" in section
+        setup = _bat().split("\n:setup_venv", 1)[1].split("\nREM ---", 1)[0]
+        assert 'call :pip_install_harness "%~1"' in setup
+
+    def test_install_does_not_force_upgrade(self):
+        assert _bat().count("call :setup_venv\n") == 1
+
     def test_wheel_mode_does_not_swallow_stderr(self):
         """pip's "No matching distribution found" is the only useful diagnostic,
         and install.sh leaves it visible for the same reason."""
