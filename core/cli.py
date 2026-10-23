@@ -3,12 +3,19 @@
 Usage:
     arize-harness hook <harness> [<event>] [args...]
     arize-harness hook --list
+    arize-harness setup [<harness>] [--backend arize|phoenix] [--non-interactive|-y] [--with-skills]
+    arize-harness uninstall <harness>|--all
+    arize-harness status [--json]
+    arize-harness update [--wheel-dir DIR]
+    arize-harness --version
 
 ``hook`` runs the same handler as the matching ``arize-hook-*`` command, with
 stdin and any remaining arguments passed through untouched. It is invoked on
 every hook event, so it must start fast: keep this module's imports to the
 standard library, and import anything heavier (``core.setup``, which pulls in
-``python-dotenv``) inside the subcommand that needs it.
+``python-dotenv``) inside the subcommand that needs it. The other subcommands
+live in ``core.setup.commands`` and are parsed by argparse there, after
+``hook`` has been ruled out, so a hook command never exits 2.
 """
 
 import importlib
@@ -19,7 +26,14 @@ from typing import Any, Iterable, List, Optional, TextIO
 
 from core.hook_table import ALIASES, EVENT_HOOKS, SINGLE_HOOKS, canonical_harness, iter_hooks, legacy_entry_point
 
-_USAGE = "usage: arize-harness hook <harness> [<event>] [args...] | arize-harness hook --list"
+_USAGE = (
+    "usage: arize-harness hook <harness> [<event>] [args...] | arize-harness hook --list"
+    " | arize-harness {setup,uninstall,status,update} ... | arize-harness --version"
+)
+
+# First arguments handed to core.setup.commands. Anything else that isn't
+# ``hook`` gets the logged usage line and exit 0, like a bad hook command.
+_COMMANDS = frozenset({"setup", "uninstall", "status", "update", "--version", "-h", "--help"})
 
 
 # Default log name for dispatch errors without a recognized harness.
@@ -188,6 +202,15 @@ def main(argv: Optional[List[str]] = None) -> Any:
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] == "hook":
         return _hook(args[1:])
+    if args and args[0] == "--version" and len(args) == 1:
+        from core.runtime import installed_version
+
+        print(f"arize-harness {installed_version()}")
+        return 0
+    if args and args[0] in _COMMANDS:
+        from core.setup.commands import run
+
+        return run(args)
     # Exit 0, not the conventional 2: Claude Code treats a hook's exit 2 as a
     # blocking error (on PreToolUse, it blocks the tool call). Logged as well as
     # printed: a hook command missing ``hook`` lands here, and the harness hides

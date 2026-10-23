@@ -146,20 +146,26 @@ def prompt_backend(
     if non_interactive():
         return _backend_from_env()
 
-    print("Which backend do you want to use?")
-    print("")
-    print("  1) Phoenix (self-hosted)")
-    print("  2) Arize AX (cloud)")
-    print("")
-    choice = input("Enter choice [1/2]: ").strip()
-
-    if choice in ("1", "phoenix", "Phoenix", ""):
-        target = "phoenix"
-    elif choice in ("2", "arize", "ax", "AX"):
-        target = "arize"
+    # ARIZE_BACKEND (set by ``arize-harness setup --backend``) answers the menu;
+    # the copy-from menu and credential prompts below still run.
+    target = _backend_choice()
+    if target:
+        info(f"Backend: {'Phoenix' if target == 'phoenix' else 'Arize AX'} (from {_source_of('ARIZE_BACKEND')})")
     else:
-        err("Invalid choice. Run setup again.")
-        sys.exit(1)
+        print("Which backend do you want to use?")
+        print("")
+        print("  1) Phoenix (self-hosted)")
+        print("  2) Arize AX (cloud)")
+        print("")
+        choice = input("Enter choice [1/2]: ").strip()
+
+        if choice in ("1", "phoenix", "Phoenix", ""):
+            target = "phoenix"
+        elif choice in ("2", "arize", "ax", "AX"):
+            target = "arize"
+        else:
+            err("Invalid choice. Run setup again.")
+            sys.exit(1)
 
     # --- copy-from logic ---
     copied = _try_copy_from(target, existing_harnesses)
@@ -203,6 +209,17 @@ def prompt_backend(
     )
 
 
+def _backend_choice() -> str:
+    """``ARIZE_BACKEND`` as ``"arize"`` or ``"phoenix"``, or ``""`` when unset. Exits on any other value."""
+    target = _env("ARIZE_BACKEND").lower()
+    if target in ("ax", "arize"):
+        return "arize"
+    if target and target != "phoenix":
+        err(f"Unknown ARIZE_BACKEND '{target}' — use 'arize' or 'phoenix'.")
+        sys.exit(1)
+    return target
+
+
 def _backend_from_env() -> tuple[str, dict]:
     """Resolve backend + credentials from the environment, for non-interactive installs.
 
@@ -213,12 +230,7 @@ def _backend_from_env() -> tuple[str, dict]:
     Exits with an actionable message when a required value is missing; this
     path must never fall back to a prompt, because there is nobody to answer it.
     """
-    target = _env("ARIZE_BACKEND").lower()
-    if target in ("ax", "arize"):
-        target = "arize"
-    elif target and target != "phoenix":
-        err(f"Unknown ARIZE_BACKEND '{target}' — use 'arize' or 'phoenix'.")
-        sys.exit(1)
+    target = _backend_choice()
 
     if not target:
         if _env("ARIZE_SPACE_ID") and _env("PHOENIX_ENDPOINT"):
