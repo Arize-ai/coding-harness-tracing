@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -82,7 +83,9 @@ def sandbox(tmp_path):
     return tmp_path, home, bin_dir
 
 
-def _update(sandbox, wheel_dir: Path, pip_config_file: str | None = os.devnull) -> subprocess.CompletedProcess:
+def _update(
+    sandbox, wheel_dir: Path, pip_config_file: str | None = os.devnull, env_extra: dict | None = None
+) -> subprocess.CompletedProcess:
     _, home, bin_dir = sandbox
     env = {
         **{k: v for k, v in os.environ.items() if not k.startswith(("PIP_", "ARIZE_", "PYTHON"))},
@@ -90,6 +93,7 @@ def _update(sandbox, wheel_dir: Path, pip_config_file: str | None = os.devnull) 
         "NO_COLOR": "1",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
     }
+    env.update(env_extra or {})
     if pip_config_file:
         env["PIP_CONFIG_FILE"] = pip_config_file
     return subprocess.run(
@@ -189,3 +193,63 @@ def test_missing_project_wheel_keeps_the_old_venv(sandbox):
 
     assert result.returncode != 0
     assert (venv / "bin" / "python").read_text() == STALE_PYTHON
+
+
+CA_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "PIP_CERT")
+STALE_BUNDLE = "/stale/certifi/cacert.pem"
+RECORDER = """\
+import json, os, sys
+with open({log!r}, "a") as log:
+    log.write(json.dumps({{"argv": sys.orig_argv, "ca": {{k: os.environ.get(k) for k in {ca_vars!r}}}}}) + "\\n")
+"""
+
+
+def _pip_starts(log: Path) -> list[dict]:
+    records = [json.loads(line) for line in log.read_text().splitlines()]
+    return [r for r in records if "pip" in r["argv"][1:3] or r["argv"][1].endswith("/pip")]
+
+
+def test_pip_never_sees_a_ca_bundle_override(sandbox):
+    tmp_path, _, _ = sandbox
+    log = tmp_path / "starts.log"
+    recorder = tmp_path / "recorder"
+    recorder.mkdir()
+    (recorder / "sitecustomize.py").write_text(RECORDER.format(log=str(log), ca_vars=CA_VARS))
+    overrides = {var: STALE_BUNDLE for var in CA_VARS} | {"PYTHONPATH": str(recorder)}
+
+    result = _update(sandbox, _wheelhouse(tmp_path / "v1", "0.1.0"), env_extra=overrides)
+
+    assert result.returncode == 0, result.stderr
+    starts = _pip_starts(log)
+    assert starts
+    assert all(not any(start["ca"].values()) for start in starts)
+
+
+def test_certifi_is_refreshed_before_the_project_installs(sandbox):
+    tmp_path, _, _ = sandbox
+    log = tmp_path / "starts.log"
+    recorder = tmp_path / "recorder"
+    recorder.mkdir()
+    (recorder / "sitecustomize.py").write_text(RECORDER.format(log=str(log), ca_vars=CA_VARS))
+
+    result = _update(sandbox, _wheelhouse(tmp_path / "v1", "0.1.0"), env_extra={"PYTHONPATH": str(recorder)})
+
+    assert result.returncode == 0, result.stderr
+    installs = [" ".join(start["argv"]) for start in _pip_starts(log) if "install" in start["argv"]]
+    certifi_at = next(i for i, cmd in enumerate(installs) if "certifi" in cmd)
+    project_at = next(i for i, cmd in enumerate(installs) if "coding-harness-tracing" in cmd)
+    assert certifi_at < project_at
+
+
+def test_a_stale_sitecustomize_does_not_reach_pip(sandbox):
+    tmp_path, home, _ = sandbox
+    log = tmp_path / "starts.log"
+    venv = home / ".arize" / "harness" / "venv"
+    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+    site_packages = next(venv.glob("lib/python*/site-packages"))
+    (site_packages / "sitecustomize.py").write_text(RECORDER.format(log=str(log), ca_vars=CA_VARS))
+
+    result = _update(sandbox, _wheelhouse(tmp_path / "v1", "0.1.0"))
+
+    assert result.returncode == 0, result.stderr
+    assert not log.exists() or not _pip_starts(log)

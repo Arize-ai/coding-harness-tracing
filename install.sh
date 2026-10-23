@@ -98,6 +98,10 @@ sys.exit(hashlib.sha256(wheel.read_bytes()).hexdigest() != expected)
 PYEOF
 }
 
+# Pip must trust its own vendored certifi, never a bundle named by the environment
+# (an old install's sitecustomize.py pointed these at the pre-distrust bundle).
+run_pip() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u PIP_CERT "$@"; }
+
 # PIP_CONFIG_FILE=/dev/null drops global and venv config, which --isolated keeps.
 bootstrap_pip() {
     local vp
@@ -108,7 +112,7 @@ bootstrap_pip() {
         verify_pip_wheel "$vp" || return 1
         source="${WHEEL_DIR}/${PIP_WHEEL}"
     fi
-    PIP_CONFIG_FILE=/dev/null "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$source" || {
+    run_pip PIP_CONFIG_FILE=/dev/null "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$source" || {
         err "Failed to install verified pip ${PIP_VERSION}"
         return 1
     }
@@ -190,7 +194,7 @@ _fix_macos_ssl_certs() {
 
     local offline=()
     [[ -n "$WHEEL_DIR" ]] && offline=(--no-index --find-links "$WHEEL_DIR")
-    if ! "$pip" install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT" 2>/dev/null; then
+    if ! run_pip "$pip" install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT" 2>/dev/null; then
         err "Could not install ${CERTIFI_REQUIREMENT}"
         [[ -n "$WHEEL_DIR" ]] && err "Bundle a certifi wheel in ${WHEEL_DIR}."
         return 1
@@ -226,10 +230,10 @@ pip_install_harness() {
     if [[ -n "$WHEEL_DIR" ]]; then
         # --no-index so a missing wheel fails loudly instead of quietly reaching
         # PyPI, which would defeat the point of installing offline.
-        "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
+        run_pip "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
             || { err "Failed to install coding-harness-tracing from ${WHEEL_DIR}"; return 1; }
     else
-        "$pip" install --quiet "$@" "$INSTALL_DIR" 2>/dev/null \
+        run_pip "$pip" install --quiet "$@" "$INSTALL_DIR" 2>/dev/null \
             || { err "Failed to install coding-harness-tracing package"; return 1; }
     fi
 }
@@ -252,12 +256,13 @@ setup_venv() {
             return 1
         }
     fi
+    # The old shim would run inside every pip below and re-point it at the stale bundle.
+    [[ "$(uname)" == "Darwin" ]] && rm -f "$VENV_DIR"/lib/python*/site-packages/sitecustomize.py
     bootstrap_pip || return 1
     local pip; pip=$(venv_pip) || { err "pip not found in venv"; return 1; }
+    if [[ "$(uname)" == "Darwin" ]]; then _fix_macos_ssl_certs "$pip" || return 1; fi
     info "Installing coding-harness-tracing into venv..."
     pip_install_harness "$pip" "$@" || return 1
-
-    if [[ "$(uname)" == "Darwin" ]]; then _fix_macos_ssl_certs "$pip" || return 1; fi
 
     info "Venv ready at ${VENV_DIR}"
 }

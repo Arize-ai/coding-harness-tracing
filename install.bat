@@ -235,6 +235,8 @@ if defined WHEEL_DIR (
     call :verify_pip_wheel
     if !ERRORLEVEL! neq 0 exit /b 1
 )
+REM Pip must trust its own vendored certifi, never a bundle named by the environment.
+set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "PIP_CERT="
 if exist "%VENV_PYTHON%" (
     "%VENV_PYTHON%" -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1
     if !ERRORLEVEL! neq 0 ( echo [arize] Recreating venv with Python 3.11+... & rmdir /s /q "%VENV_DIR%" 2>nul )
