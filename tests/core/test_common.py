@@ -12,6 +12,7 @@ import pytest
 from test_otlp_proto import _pb_attrs, _pb_decode
 
 from core.common import (
+    _LOCK_IMPL,
     FileLock,
     StateManager,
     _attrs_to_otlp,
@@ -250,6 +251,127 @@ class TestFileLock:
         released_event.set()
         t.join(timeout=5)
         assert not t.is_alive()
+
+    @pytest.mark.skipif(_LOCK_IMPL != "fcntl", reason="fcntl force-acquire path")
+    def test_force_acquire_waits_when_another_waiter_wins_new_inode(self, tmp_path, monkeypatch):
+        """Losing the race for the replaced lock file waits instead of raising Errno 35 (#150)."""
+        import builtins
+        import fcntl
+
+        lock_path = tmp_path / "test.lock"
+        hold_event = threading.Event()
+        released_event = threading.Event()
+
+        def hold_forever():
+            with FileLock(lock_path, timeout=5.0):
+                hold_event.set()
+                released_event.wait(timeout=10)
+
+        t = threading.Thread(target=hold_forever, daemon=True)
+        t.start()
+        assert hold_event.wait(timeout=5)
+
+        # Another timed-out waiter takes the new inode just after we reopen it,
+        # and holds it for 0.15 s.
+        real_open = builtins.open
+        opens = []
+
+        def racing_open(path, *args, **kwargs):
+            fd = real_open(path, *args, **kwargs)
+            opens.append(path)
+            if len(opens) == 2:
+                rival = real_open(path, "w")
+                fcntl.flock(rival, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                threading.Timer(0.15, rival.close).start()
+            return fd
+
+        monkeypatch.setattr("core.common.open", racing_open, raising=False)
+
+        start = time.monotonic()
+        with FileLock(lock_path, timeout=0.3):
+            assert time.monotonic() - start >= 0.4
+
+        released_event.set()
+        t.join(timeout=5)
+
+    @pytest.mark.skipif(_LOCK_IMPL != "fcntl", reason="fcntl force-acquire path")
+    def test_waiter_on_replaced_inode_does_not_share_lock_with_breaker(self, tmp_path):
+        """A waiter that gets the old, unlinked inode must not enter while the breaker holds the new one."""
+        lock_path = tmp_path / "test.lock"
+        holder_in = threading.Event()
+        intervals = {}
+        errors = []
+
+        def run(name, timeout, hold, ready=None):
+            try:
+                with FileLock(lock_path, timeout=timeout):
+                    entered = time.monotonic()
+                    if ready is not None:
+                        ready.set()
+                    time.sleep(hold)
+                    intervals[name] = (entered, time.monotonic())
+            except Exception as e:  # pragma: no cover - reported below
+                errors.append(e)
+
+        holder = threading.Thread(target=run, args=("holder", 5.0, 0.6, holder_in))
+        holder.start()
+        assert holder_in.wait(timeout=5)
+        # The waiter opens the original inode and polls it until the holder releases.
+        waiter = threading.Thread(target=run, args=("waiter", 5.0, 0.1))
+        waiter.start()
+        time.sleep(0.05)
+        # The breaker times out, replaces the lock file, and holds the new inode.
+        breaker = threading.Thread(target=run, args=("breaker", 0.2, 0.8))
+        breaker.start()
+        for t in (holder, waiter, breaker):
+            t.join(timeout=10)
+
+        assert errors == []
+        w_in, w_out = intervals["waiter"]
+        b_in, b_out = intervals["breaker"]
+        assert w_out <= b_in or b_out <= w_in, "waiter and breaker held the lock at the same time"
+
+    @pytest.mark.skipif(_LOCK_IMPL != "fcntl", reason="fcntl force-acquire path")
+    def test_parallel_state_writers_survive_force_acquire(self, tmp_path):
+        """16 writers that time out together on a stuck lock all write their state (#150)."""
+        state_file = tmp_path / "state_s1.json"
+        lock_path = tmp_path / ".lock_s1"
+        sm = StateManager(state_dir=tmp_path, state_file=state_file, lock_path=lock_path)
+        sm.init_state()
+        hold_event = threading.Event()
+        released_event = threading.Event()
+
+        def hold_forever():
+            with FileLock(lock_path, timeout=5.0):
+                hold_event.set()
+                released_event.wait(timeout=10)
+
+        t = threading.Thread(target=hold_forever, daemon=True)
+        t.start()
+        assert hold_event.wait(timeout=5)
+
+        errors = []
+
+        def writer(i):
+            try:
+                with FileLock(lock_path, timeout=0.3):
+                    data = sm._read_safe()
+                    data[f"tool_{i}_start"] = str(i)
+                    sm._write(data)
+            except Exception as e:
+                errors.append(e)
+
+        writers = [threading.Thread(target=writer, args=(i,)) for i in range(16)]
+        for w in writers:
+            w.start()
+        for w in writers:
+            w.join(timeout=10)
+        released_event.set()
+        t.join(timeout=5)
+
+        assert errors == []
+        data = sm._read()
+        assert sorted(data) == sorted(f"tool_{i}_start" for i in range(16))
 
     def test_creates_parent_directories(self, tmp_path):
         """FileLock creates parent directories if missing."""
