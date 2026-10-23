@@ -179,6 +179,11 @@ class TestPipFailureIsFatal:
         setup = _bat().split("\n:setup_venv", 1)[1].split("\nREM ---", 1)[0]
         assert 'call :pip_install_harness "%~1"' in setup
 
+    def test_setup_venv_clears_ca_bundle_overrides_before_pip(self):
+        setup = _bat().split("\n:setup_venv", 1)[1].split("\nREM ---", 1)[0]
+        cleared = setup.index('set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "PIP_CERT="')
+        assert cleared < setup.index("call :bootstrap_pip")
+
     def test_install_does_not_force_upgrade(self):
         assert _bat().count("call :setup_venv\n") == 1
 
