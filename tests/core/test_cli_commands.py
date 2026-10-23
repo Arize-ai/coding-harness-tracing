@@ -611,21 +611,14 @@ class TestStatusMatchesInstallSh:
 
 
 class TestVersion:
-    def test_prints_the_installed_version(self, capsys) -> None:
-        from importlib.metadata import version
+    # core.version()'s sources and fallback are covered in test_version.py.
+    @pytest.mark.parametrize("argv", [["--version"], ["--version", "status"]])
+    def test_prints_core_version(self, monkeypatch, capsys, argv) -> None:
+        import core
 
-        assert cli.main(["--version"]) == 0
-        assert capsys.readouterr().out == f"arize-harness {version('coding-harness-tracing')}\n"
-
-    def test_falls_back_without_metadata(self, monkeypatch, capsys) -> None:
-        import importlib.metadata
-
-        def missing(name):
-            raise importlib.metadata.PackageNotFoundError(name)
-
-        monkeypatch.setattr(importlib.metadata, "version", missing)
-        assert cli.main(["--version"]) == 0
-        assert capsys.readouterr().out == "arize-harness 0.0.0\n"
+        monkeypatch.setattr(core, "version", lambda: "9.8.7")
+        cli.main(argv)
+        assert capsys.readouterr().out == "arize-harness 9.8.7\n"
 
     def test_does_not_import_core_setup(self, tmp_path) -> None:
         code = "import sys; from core import cli; cli.main(['--version']); print('core.setup' in sys.modules)"

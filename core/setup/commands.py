@@ -19,7 +19,7 @@ import core
 from core import install_table
 from core.config import load_config, migrate_yaml_config
 from core.constants import HARNESSES
-from core.runtime import installed_version, is_binary
+from core.runtime import is_binary
 from core.setup import INSTALL_DIR, VENV_DIR, err, info, is_harness_installed, list_installed_harnesses, print_color
 
 # Printed by install.sh too; the smoke test greps for "no source tree to update".
@@ -346,7 +346,7 @@ def run(argv: List[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.version:
-        print(f"arize-harness {installed_version()}")
+        print(f"arize-harness {core.version()}")
         return 0
     if getattr(args, "func", None) is None:
         parser.print_help()

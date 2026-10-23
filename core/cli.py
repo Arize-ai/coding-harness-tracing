@@ -203,9 +203,9 @@ def main(argv: Optional[List[str]] = None) -> Any:
     if args and args[0] == "hook":
         return _hook(args[1:])
     if args and args[0] == "--version" and len(args) == 1:
-        from core.runtime import installed_version
+        import core
 
-        print(f"arize-harness {installed_version()}")
+        print(f"arize-harness {core.version()}")
         return 0
     if args and args[0] in _COMMANDS:
         from core.setup.commands import run
