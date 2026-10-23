@@ -119,7 +119,7 @@ if defined WHEEL_DIR (
     call :bootstrap_repo
     if !ERRORLEVEL! neq 0 exit /b 1
 )
-call :setup_venv
+call :setup_venv -U
 REM Stop here on failure: migrating config and re-registering hooks against
 REM the package that is still installed would report success for an update
 REM that did not happen.
@@ -229,6 +229,12 @@ goto :eof
 
 REM --- setup_venv ---
 :setup_venv
+REM Verify before any rmdir, so a bad wheelhouse cannot leave hooks with no runtime.
+if defined WHEEL_DIR (
+    set "VERIFY_PY=%FOUND_PYTHON%"
+    call :verify_pip_wheel
+    if !ERRORLEVEL! neq 0 exit /b 1
+)
 if exist "%VENV_PYTHON%" (
     "%VENV_PYTHON%" -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1
     if !ERRORLEVEL! neq 0 ( echo [arize] Recreating venv with Python 3.11+... & rmdir /s /q "%VENV_DIR%" 2>nul )
@@ -242,7 +248,7 @@ if not exist "%VENV_PIP%" ( echo [arize] pip not found in venv >&2 & exit /b 1 )
 call :bootstrap_pip
 if !ERRORLEVEL! neq 0 exit /b 1
 echo [arize] Installing coding-harness-tracing...
-call :pip_install_harness ""
+call :pip_install_harness "%~1"
 if !ERRORLEVEL! neq 0 exit /b 1
 echo [arize] Venv ready at %VENV_DIR%
 goto :eof
@@ -250,15 +256,26 @@ goto :eof
 REM --- bootstrap_pip: authenticate pip before any other package download ---
 :bootstrap_pip
 echo [arize] Securing pip %PIP_VERSION%...
+set "PIP_SOURCE=%PIP_WHEEL_URL%"
 if defined WHEEL_DIR (
-    if not exist "%WHEEL_DIR%\%PIP_WHEEL%" ( echo [arize] Missing %PIP_WHEEL% in %WHEEL_DIR% >&2 & exit /b 1 )
-    "%VENV_PYTHON%" -c "import hashlib,pathlib,sys; sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)" "%WHEEL_DIR%\%PIP_WHEEL%" "%PIP_SHA256%"
-    if !ERRORLEVEL! neq 0 ( echo [arize] %PIP_WHEEL% failed SHA-256 verification >&2 & exit /b 1 )
-    "%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "%WHEEL_DIR%\%PIP_WHEEL%"
-) else (
-    "%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "%PIP_WHEEL_URL%"
+    set "VERIFY_PY="%VENV_PYTHON%""
+    call :verify_pip_wheel
+    if !ERRORLEVEL! neq 0 exit /b 1
+    set "PIP_SOURCE=%WHEEL_DIR%\%PIP_WHEEL%"
 )
-if !ERRORLEVEL! neq 0 ( echo [arize] Failed to install verified pip %PIP_VERSION% >&2 & exit /b 1 )
+REM NUL drops global and venv pip config, which --isolated keeps.
+set "PIP_CONFIG_FILE=NUL"
+"%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "!PIP_SOURCE!"
+set "PIP_RESULT=!ERRORLEVEL!"
+set "PIP_CONFIG_FILE="
+if !PIP_RESULT! neq 0 ( echo [arize] Failed to install verified pip %PIP_VERSION% >&2 & exit /b 1 )
+exit /b 0
+
+REM --- verify_pip_wheel: hash the pip wheel with the interpreter in VERIFY_PY ---
+:verify_pip_wheel
+if not exist "%WHEEL_DIR%\%PIP_WHEEL%" ( echo [arize] Missing %PIP_WHEEL% in %WHEEL_DIR% >&2 & exit /b 1 )
+%VERIFY_PY% -c "import hashlib,pathlib,sys; sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)" "%WHEEL_DIR%\%PIP_WHEEL%" "%PIP_SHA256%"
+if !ERRORLEVEL! neq 0 ( echo [arize] %PIP_WHEEL% failed SHA-256 verification >&2 & exit /b 1 )
 exit /b 0
 
 REM --- pip_install_harness: install the package into the venv ---
