@@ -42,6 +42,9 @@ mempalace.yaml
 entities.json
 *.code-workspace
 
+# Written by setuptools-scm at build time; never committed
+core/_version.py
+
 # Runtime artifacts (generated at install/run time, not versioned)
 state/
 config.json

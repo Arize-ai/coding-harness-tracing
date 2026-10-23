@@ -110,6 +110,10 @@ podman machine start
 
 After a restart, run `podman machine start` again. If Podman is not installed, the helper falls back to any `docker` CLI, for example on [Colima](https://github.com/abiosoft/colima). Set `CONTAINER_ENGINE` to pick one yourself.
 
+## Versions
+
+The package version comes from git tags (setuptools-scm), so don't change a version in your PR. Untagged commits build as development versions like `0.2.1.dev3+g1a2b3c4`, and builds without `.git` report `0.0.0`. In code, read the version with `core.version()`; don't add another reader.
+
 ## Find the code you need
 
 Shared install, config, and OTLP code lives in `core/`. Each coding assistant lives under `tracing/<harness>/`. User-facing install docs live in `tracing/<harness>/README.md`. The git clone is the source tree. A user install lives under `~/.arize/harness/` and is a different tree.

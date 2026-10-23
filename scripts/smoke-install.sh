@@ -12,6 +12,8 @@
 #                   install the wheel into ~/.arize/harness/venv with pip, then
 #                   run `arize-harness setup` and use arize-harness for status,
 #                   update and uninstall --all (default: install.sh)
+#   SETUPTOOLS_SCM_PRETEND_VERSION=X   build as version X instead of the
+#                   checkout's git version
 #
 # Never writes to your ~/.claude, ~/.arize or the checkout. See CONTRIBUTING.md.
 set -euo pipefail
@@ -59,6 +61,25 @@ die() {
 step() { echo; echo "smoke-install: $*"; }
 
 command -v uv >/dev/null || die "uv not found. Install it: https://docs.astral.sh/uv/"
+
+# The build copy below has no .git, so compute the version from the checkout
+# and hand it to the build. Done before the throwaway HOME and PIP_CONFIG_FILE,
+# so a pip mirror still works. test-in-container.sh passes it in already.
+if [[ -z "${SETUPTOOLS_SCM_PRETEND_VERSION:-}" ]]; then
+    SETUPTOOLS_SCM_PRETEND_VERSION="$(cd "$ROOT" && uv tool run --quiet --from 'setuptools-scm>=8,<9' python -m setuptools_scm)" ||
+        die "could not compute the version from $ROOT"
+else
+    # core/_version.py keeps an override exactly as given, while the wheel's
+    # metadata is normalized, so accept only the normalized form.
+    normalized="$(uv tool run --quiet --from 'setuptools-scm>=8,<9' python -c \
+        'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' \
+        "$SETUPTOOLS_SCM_PRETEND_VERSION")" ||
+        die "could not check SETUPTOOLS_SCM_PRETEND_VERSION=$SETUPTOOLS_SCM_PRETEND_VERSION (not a PEP 440 version?)"
+    [[ "$normalized" == "$SETUPTOOLS_SCM_PRETEND_VERSION" ]] ||
+        die "set SETUPTOOLS_SCM_PRETEND_VERSION=$normalized, the normalized form of $SETUPTOOLS_SCM_PRETEND_VERSION"
+fi
+export SETUPTOOLS_SCM_PRETEND_VERSION
+echo "smoke-install: building version $SETUPTOOLS_SCM_PRETEND_VERSION"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/smoke-install.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
@@ -155,6 +176,13 @@ echo "$HARNESS is configured and its hooks are registered"
 [[ ! -e "$installed/pyproject.toml" && ! -e "$installed/.git" ]] ||
     die "$installed holds a source tree. Wheel mode must not fetch the repo"
 echo "no source tree in $installed"
+
+# -I: read the venv's install only, never the cwd or PYTHON* settings.
+reported="$("$installed/venv/bin/python" -I -c "import core; print(core.version())")" ||
+    die "core.version() failed in the installed venv"
+[[ "$reported" == "$SETUPTOOLS_SCM_PRETEND_VERSION" ]] ||
+    die "installed package reports version $reported, but $SETUPTOOLS_SCM_PRETEND_VERSION was built"
+echo "installed package reports version $reported, as built"
 
 if [[ "$(uname)" == Darwin ]]; then
     "$installed/venv/bin/python" -c "import certifi" 2>/dev/null ||
