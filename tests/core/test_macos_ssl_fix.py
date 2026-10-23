@@ -4,7 +4,7 @@ Validates:
 - _fix_macos_ssl_certs() helper is defined and correctly structured
 - The helper is called with the Darwin guard in setup_venv()
 - The sitecustomize.py heredoc content is correct
-- The helper uses graceful error handling (return 0)
+- A failed certifi install stops setup; later best-effort steps return 0
 - .gitignore has the new runtime artifact entries
 """
 
@@ -55,15 +55,15 @@ class TestFixMacOSSslCertsDefined:
         # The offline array expands to nothing in repo mode, and to
         # --no-index --find-links "$WHEEL_DIR" when installing from local wheels,
         # so certifi resolves without network in an offline install too.
-        assert 'install --quiet "${offline[@]+"${offline[@]}"}" certifi' in self.text
+        assert 'install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT"' in self.text
 
     def test_certifi_resolves_offline_when_wheels_are_local(self):
         """Otherwise an offline macOS install completes and then fails at runtime
         with CERTIFICATE_VERIFY_FAILED on the first span export."""
         assert 'offline=(--no-index --find-links "$WHEEL_DIR")' in self.text
 
-    def test_warns_on_certifi_failure(self):
-        assert "Could not install certifi" in self.text
+    def test_reports_certifi_failure(self):
+        assert 'err "Could not install ${CERTIFI_REQUIREMENT}"' in self.text
 
     def test_gets_certifi_where(self):
         assert "import certifi; print(certifi.where())" in self.text
@@ -84,7 +84,7 @@ class TestFixMacOSSslCertsDefined:
 
 
 class TestGracefulErrorHandling:
-    """_fix_macos_ssl_certs() must use return 0 for all failure paths."""
+    """Only the certifi install is fatal; the best-effort steps after it return 0."""
 
     @pytest.fixture(autouse=True)
     def _load(self):
@@ -101,12 +101,10 @@ class TestGracefulErrorHandling:
     def test_venv_python_failure_returns_zero(self):
         assert "venv_python 2>/dev/null) || return 0" in self.body
 
-    def test_certifi_install_failure_returns_zero(self):
-        """The warn + return 0 block after certifi install failure."""
-        after_warn = self.body.split("Could not install certifi")[1]
-        # return 0 should be within the next 2 lines after the warn
-        next_lines = after_warn.split("\n")[0:3]
-        assert any("return 0" in line for line in next_lines)
+    def test_certifi_install_failure_returns_one(self):
+        """A stale certifi would let update report success while hooks fail SSL."""
+        after_err = self.body.split("Could not install")[1]
+        assert "return 1" in after_err.splitlines()[2]
 
     def test_certifi_where_failure_returns_zero(self):
         assert 'certifi.where())" 2>/dev/null) || return 0' in self.body
@@ -117,9 +115,8 @@ class TestGracefulErrorHandling:
     def test_site_dir_failure_returns_zero(self):
         assert 'getsitepackages()[0])" 2>/dev/null) || return 0' in self.body
 
-    def test_no_exit_1_in_function(self):
-        """The helper must never cause the script to abort."""
-        assert "return 1" not in self.body
+    def test_no_exit_in_function(self):
+        """Failure propagates through setup_venv's return, never an exit here."""
         assert "exit 1" not in self.body
 
 
@@ -205,6 +202,10 @@ class TestDarwinGuardInSetupVenv:
         for line in self.body.splitlines():
             if "_fix_macos_ssl_certs" in line:
                 assert "Darwin" in line, "_fix_macos_ssl_certs must be guarded by Darwin check"
+
+    def test_ssl_failure_propagates_out_of_setup_venv(self):
+        line = next(ln for ln in self.body.splitlines() if "_fix_macos_ssl_certs" in ln)
+        assert "|| return 1" in line
 
     def test_passes_pip_to_all_ssl_calls(self):
         """Every _fix_macos_ssl_certs call must receive $pip as its argument."""

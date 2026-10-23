@@ -16,6 +16,10 @@ set "INSTALL_DIR=%USERPROFILE%\.arize\harness"
 set "VENV_DIR=%INSTALL_DIR%\venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 set "VENV_PIP=%VENV_DIR%\Scripts\pip.exe"
+set "PIP_VERSION=26.2.2"
+set "PIP_WHEEL=pip-26.2.2-py3-none-any.whl"
+set "PIP_SHA256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+set "PIP_WHEEL_URL=https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 REM When set, install from local wheels in this directory instead of fetching the
 REM repo: no network and no remote code execution. Mirrors install.sh --wheel-dir.
 if not defined ARIZE_WHEEL_DIR set "ARIZE_WHEEL_DIR="
@@ -66,7 +70,7 @@ if "%COMMAND%"=="uninstall" goto :cmd_uninstall
 
 REM --- Install a harness ---
 call :find_python
-if "%FOUND_PYTHON%"=="" ( echo [arize] Error: Python 3.9+ is required >&2 & exit /b 1 )
+if "%FOUND_PYTHON%"=="" ( echo [arize] Error: Python 3.11+ is required >&2 & exit /b 1 )
 echo [arize] Found Python: %FOUND_PYTHON%
 call :bootstrap_repo
 if %ERRORLEVEL% neq 0 exit /b 1
@@ -88,13 +92,12 @@ REM --- cmd_update ---
 :cmd_update
 if not exist "%INSTALL_DIR%" ( echo [arize] Not installed at %INSTALL_DIR% >&2 & exit /b 1 )
 call :find_python
-if "%FOUND_PYTHON%"=="" ( echo [arize] Error: Python 3.9+ is required >&2 & exit /b 1 )
+if "%FOUND_PYTHON%"=="" ( echo [arize] Error: Python 3.11+ is required >&2 & exit /b 1 )
 REM Re-registering runs each harness's installer, which prompts for the project
 REM name. With no console to answer on that dies with an EOFError, so fall back
 REM to stored values there — and only there, so an interactive update keeps
 REM every prompt it has today. cmd has no -t test; ask Python instead.
 %FOUND_PYTHON% -c "import sys; sys.exit(0 if sys.stdin.isatty() else 1)" >nul 2>&1 || set "ARIZE_NONINTERACTIVE=1"
-set "_UPDATE_NEED_VENV=0"
 if not defined WHEEL_DIR if not exist "%INSTALL_DIR%\.git" if not exist "%INSTALL_DIR%\pyproject.toml" (
     echo [arize] This looks like an offline install with no source tree to update. >&2
     echo [arize] Re-run the installer that created it, or pass --wheel-dir with a newer wheel. >&2
@@ -110,26 +113,17 @@ if defined WHEEL_DIR (
         rmdir /s /q "%INSTALL_DIR%" 2>nul
         call :bootstrap_repo
         if !ERRORLEVEL! neq 0 exit /b 1
-        set "_UPDATE_NEED_VENV=1"
     )
 ) else (
     rmdir /s /q "%INSTALL_DIR%" 2>nul
     call :bootstrap_repo
     if !ERRORLEVEL! neq 0 exit /b 1
-    set "_UPDATE_NEED_VENV=1"
 )
-REM Re-create venv if it was wiped along with INSTALL_DIR
-if "!_UPDATE_NEED_VENV!"=="1" (
-    call :setup_venv
-    if !ERRORLEVEL! neq 0 exit /b 1
-) else if exist "%VENV_PIP%" (
-    echo [arize] Reinstalling package...
-    call :pip_install_harness "-U"
-    REM Stop here on failure: migrating config and re-registering hooks against
-    REM the package that is still installed would report success for an update
-    REM that did not happen.
-    if !ERRORLEVEL! neq 0 exit /b 1
-)
+call :setup_venv -U
+REM Stop here on failure: migrating config and re-registering hooks against
+REM the package that is still installed would report success for an update
+REM that did not happen.
+if !ERRORLEVEL! neq 0 exit /b 1
 REM Migrate legacy config.yaml -> config.json (no-op if nothing to migrate)
 if exist "%VENV_PYTHON%" "%VENV_PYTHON%" -m core.config migrate
 if exist "%VENV_PYTHON%" (
@@ -171,18 +165,18 @@ REM ===================================================================
 REM  Helpers
 REM ===================================================================
 
-REM --- find_python: locate Python >= 3.9 (try py -3, python3, python, then known paths) ---
+REM --- find_python: locate Python >= 3.11 (try py -3, python3, python, then known paths) ---
 :find_python
 set "FOUND_PYTHON="
 REM Try py -3 first (Windows Python Launcher — ensures Python 3)
-where py >nul 2>&1 && ( py -3 -c "import sys; assert sys.version_info >= (3, 9)" >nul 2>&1 && ( set "FOUND_PYTHON=py -3" & goto :eof ) )
+where py >nul 2>&1 && ( py -3 -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1 && ( set "FOUND_PYTHON=py -3" & goto :eof ) )
 REM Then python3 and python on PATH
 for %%P in (python3 python) do (
-    where %%P >nul 2>&1 && ( %%P -c "import sys; assert sys.version_info >= (3, 9)" >nul 2>&1 && ( set "FOUND_PYTHON=%%P" & goto :eof ) )
+    where %%P >nul 2>&1 && ( %%P -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1 && ( set "FOUND_PYTHON=%%P" & goto :eof ) )
 )
-for %%V in (313 312 311 310 39) do (
+for %%V in (315 314 313 312 311) do (
     for %%D in ("%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe" "C:\Python%%V\python.exe") do (
-        if exist %%~D ( %%~D -c "import sys; assert sys.version_info >= (3, 9)" >nul 2>&1 && ( set "FOUND_PYTHON=%%~D" & goto :eof ) )
+        if exist %%~D ( %%~D -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1 && ( set "FOUND_PYTHON=%%~D" & goto :eof ) )
     )
 )
 goto :eof
@@ -235,16 +229,56 @@ goto :eof
 
 REM --- setup_venv ---
 :setup_venv
-if exist "%VENV_PYTHON%" ( "%VENV_PYTHON%" -c "import core" >nul 2>&1 && ( echo [arize] Venv ready & goto :eof ) )
-echo [arize] Creating venv...
-%FOUND_PYTHON% -m venv "%VENV_DIR%" >nul 2>&1
-if !ERRORLEVEL! neq 0 ( echo [arize] Failed to create venv >&2 & exit /b 1 )
+REM Verify before any rmdir, so a bad wheelhouse cannot leave hooks with no runtime.
+if defined WHEEL_DIR (
+    set "VERIFY_PY=%FOUND_PYTHON%"
+    call :verify_pip_wheel
+    if !ERRORLEVEL! neq 0 exit /b 1
+)
+REM Pip must trust its own vendored certifi, never a bundle named by the environment.
+set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "PIP_CERT="
+if exist "%VENV_PYTHON%" (
+    "%VENV_PYTHON%" -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1
+    if !ERRORLEVEL! neq 0 ( echo [arize] Recreating venv with Python 3.11+... & rmdir /s /q "%VENV_DIR%" 2>nul )
+)
+if not exist "%VENV_PYTHON%" (
+    echo [arize] Creating venv...
+    %FOUND_PYTHON% -m venv "%VENV_DIR%" >nul 2>&1
+    if !ERRORLEVEL! neq 0 ( echo [arize] Failed to create venv >&2 & exit /b 1 )
+)
 if not exist "%VENV_PIP%" ( echo [arize] pip not found in venv >&2 & exit /b 1 )
+call :bootstrap_pip
+if !ERRORLEVEL! neq 0 exit /b 1
 echo [arize] Installing coding-harness-tracing...
-call :pip_install_harness ""
+call :pip_install_harness "%~1"
 if !ERRORLEVEL! neq 0 exit /b 1
 echo [arize] Venv ready at %VENV_DIR%
 goto :eof
+
+REM --- bootstrap_pip: authenticate pip before any other package download ---
+:bootstrap_pip
+echo [arize] Securing pip %PIP_VERSION%...
+set "PIP_SOURCE=%PIP_WHEEL_URL%"
+if defined WHEEL_DIR (
+    set "VERIFY_PY="%VENV_PYTHON%""
+    call :verify_pip_wheel
+    if !ERRORLEVEL! neq 0 exit /b 1
+    set "PIP_SOURCE=%WHEEL_DIR%\%PIP_WHEEL%"
+)
+REM NUL drops global and venv pip config, which --isolated keeps.
+set "PIP_CONFIG_FILE=NUL"
+"%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "!PIP_SOURCE!"
+set "PIP_RESULT=!ERRORLEVEL!"
+set "PIP_CONFIG_FILE="
+if !PIP_RESULT! neq 0 ( echo [arize] Failed to install verified pip %PIP_VERSION% >&2 & exit /b 1 )
+exit /b 0
+
+REM --- verify_pip_wheel: hash the pip wheel with the interpreter in VERIFY_PY ---
+:verify_pip_wheel
+if not exist "%WHEEL_DIR%\%PIP_WHEEL%" ( echo [arize] Missing %PIP_WHEEL% in %WHEEL_DIR% >&2 & exit /b 1 )
+%VERIFY_PY% -c "import hashlib,pathlib,sys; sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)" "%WHEEL_DIR%\%PIP_WHEEL%" "%PIP_SHA256%"
+if !ERRORLEVEL! neq 0 ( echo [arize] %PIP_WHEEL% failed SHA-256 verification >&2 & exit /b 1 )
+exit /b 0
 
 REM --- pip_install_harness: install the package into the venv ---
 REM Extra args are passed through to pip (-U for update).

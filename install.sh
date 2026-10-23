@@ -16,6 +16,11 @@ INSTALL_BRANCH="${ARIZE_INSTALL_BRANCH:-main}"
 TARBALL_URL="https://github.com/Arize-ai/coding-harness-tracing/archive/refs/heads/${INSTALL_BRANCH}.tar.gz"
 INSTALL_DIR="${HOME}/.arize/harness"
 VENV_DIR="${INSTALL_DIR}/venv"
+PIP_VERSION="26.2.2"
+PIP_WHEEL="pip-${PIP_VERSION}-py3-none-any.whl"
+PIP_SHA256="fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+PIP_WHEEL_URL="https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/${PIP_WHEEL}#sha256=${PIP_SHA256}"
+CERTIFI_REQUIREMENT="certifi>=2026.10.19"
 # When set, install from local wheels in this directory instead of fetching the
 # repo. Lets a caller that already ships the wheels install with no network at
 # all — and with no remote code execution for a permission layer to object to.
@@ -62,7 +67,7 @@ find_python() {
         if [[ "$p" == /* ]]; then resolved="$p"
         else resolved=$(command -v "$p" 2>/dev/null || true); fi
         [[ -z "$resolved" || ! -f "$resolved" ]] && continue
-        "$resolved" -c "import sys; assert sys.version_info >= (3, 9)" 2>/dev/null && { echo "$resolved"; return 0; }
+        "$resolved" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null && { echo "$resolved"; return 0; }
     done
     return 1
 }
@@ -77,6 +82,40 @@ venv_pip() {
     [[ -x "${VENV_DIR}/bin/pip" ]] && { echo "${VENV_DIR}/bin/pip"; return; }
     [[ -x "${VENV_DIR}/Scripts/pip.exe" ]] && { echo "${VENV_DIR}/Scripts/pip.exe"; return; }
     return 1
+}
+
+verify_pip_wheel() {
+    local vp="$1" wheel="${WHEEL_DIR}/${PIP_WHEEL}"
+    [[ -f "$wheel" ]] || { err "Missing ${PIP_WHEEL} in ${WHEEL_DIR}"; return 1; }
+    "$vp" - "$wheel" "$PIP_SHA256" <<'PYEOF' || { err "${PIP_WHEEL} failed SHA-256 verification"; return 1; }
+import hashlib
+import pathlib
+import sys
+
+wheel = pathlib.Path(sys.argv[1])
+expected = sys.argv[2]
+sys.exit(hashlib.sha256(wheel.read_bytes()).hexdigest() != expected)
+PYEOF
+}
+
+# Pip must trust its own vendored certifi, never a bundle named by the environment
+# (an old install's sitecustomize.py pointed these at the pre-distrust bundle).
+run_pip() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u PIP_CERT "$@"; }
+
+# PIP_CONFIG_FILE=/dev/null drops global and venv config, which --isolated keeps.
+bootstrap_pip() {
+    local vp
+    vp=$(venv_python) || { err "Venv Python not found"; return 1; }
+    info "Securing pip ${PIP_VERSION}..."
+    local source="$PIP_WHEEL_URL"
+    if [[ -n "$WHEEL_DIR" ]]; then
+        verify_pip_wheel "$vp" || return 1
+        source="${WHEEL_DIR}/${PIP_WHEEL}"
+    fi
+    run_pip PIP_CONFIG_FILE=/dev/null "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$source" || {
+        err "Failed to install verified pip ${PIP_VERSION}"
+        return 1
+    }
 }
 
 # -- Repository download ----------------------------------------------------
@@ -155,10 +194,10 @@ _fix_macos_ssl_certs() {
 
     local offline=()
     [[ -n "$WHEEL_DIR" ]] && offline=(--no-index --find-links "$WHEEL_DIR")
-    if ! "$pip" install --quiet "${offline[@]+"${offline[@]}"}" certifi 2>/dev/null; then
-        warn "Could not install certifi — SSL verification may fail on macOS"
-        [[ -n "$WHEEL_DIR" ]] && warn "Bundle a certifi wheel in ${WHEEL_DIR} to fix this offline."
-        return 0
+    if ! run_pip "$pip" install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT" 2>/dev/null; then
+        err "Could not install ${CERTIFI_REQUIREMENT}"
+        [[ -n "$WHEEL_DIR" ]] && err "Bundle a certifi wheel in ${WHEEL_DIR}."
+        return 1
     fi
 
     local certifi_where site_dir sc
@@ -191,16 +230,24 @@ pip_install_harness() {
     if [[ -n "$WHEEL_DIR" ]]; then
         # --no-index so a missing wheel fails loudly instead of quietly reaching
         # PyPI, which would defeat the point of installing offline.
-        "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
+        run_pip "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
             || { err "Failed to install coding-harness-tracing from ${WHEEL_DIR}"; return 1; }
     else
-        "$pip" install --quiet "$@" "$INSTALL_DIR" 2>/dev/null \
+        run_pip "$pip" install --quiet "$@" "$INSTALL_DIR" 2>/dev/null \
             || { err "Failed to install coding-harness-tracing package"; return 1; }
     fi
 }
 
+# Extra args after the interpreter go to pip (`-U` for update).
 setup_venv() {
-    local python_cmd="$1"
+    local python_cmd="$1"; shift
+    # Hash-check with the interpreter the old venv would be replaced by, before
+    # anything is deleted, so a bad wheelhouse cannot leave hooks with no runtime.
+    [[ -z "$WHEEL_DIR" ]] || verify_pip_wheel "$python_cmd" || return 1
+    if venv_python &>/dev/null && ! "$(venv_python)" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null; then
+        info "Recreating venv with Python 3.11+..."
+        rm -rf "$VENV_DIR"
+    fi
     if ! venv_python &>/dev/null; then
         info "Creating venv..."
         "$python_cmd" -m venv "$VENV_DIR" 2>/dev/null || {
@@ -209,11 +256,13 @@ setup_venv() {
             return 1
         }
     fi
+    # The old shim would run inside every pip below and re-point it at the stale bundle.
+    [[ "$(uname)" == "Darwin" ]] && rm -f "$VENV_DIR"/lib/python*/site-packages/sitecustomize.py
+    bootstrap_pip || return 1
     local pip; pip=$(venv_pip) || { err "pip not found in venv"; return 1; }
+    if [[ "$(uname)" == "Darwin" ]]; then _fix_macos_ssl_certs "$pip" || return 1; fi
     info "Installing coding-harness-tracing into venv..."
-    pip_install_harness "$pip" || return 1
-
-    [[ "$(uname)" == "Darwin" ]] && _fix_macos_ssl_certs "$pip"
+    pip_install_harness "$pip" "$@" || return 1
 
     info "Venv ready at ${VENV_DIR}"
 }
@@ -247,7 +296,7 @@ install_harness() {
     local cmd="$1" skills="$2"
     harness_dir "$cmd" >/dev/null || { err "Unknown harness: ${cmd}"; usage; exit 1; }
     header "Installing ${cmd} tracing"
-    local python_cmd; python_cmd=$(find_python) || { err "No Python 3.9+ found"; exit 1; }
+    local python_cmd; python_cmd=$(find_python) || { err "No Python 3.11+ found"; exit 1; }
     info "Found Python: ${python_cmd} ($("$python_cmd" --version 2>&1))"
     install_repo
     setup_venv "$python_cmd"
@@ -290,8 +339,8 @@ Flags:
   --branch NAME         Install from a specific git branch (default: main)
   --wheel-dir DIR       Install from local wheels in DIR instead of downloading
                         the repo. No network and no remote code execution; also
-                        settable as ARIZE_WHEEL_DIR. Bundle a certifi wheel
-                        alongside it to keep macOS SSL working offline.
+                        settable as ARIZE_WHEEL_DIR. macOS also needs a
+                        certifi wheel alongside it.
   --json                With `status`: emit machine-readable JSON. Exit code is
                         0 all wired up, 1 nothing configured, 2 hooks missing.
   --non-interactive, -y Ask nothing; use defaults, saved values, and settings
@@ -396,6 +445,8 @@ main() {
             ;;
         update)
             header "Updating coding-harness-tracing"
+            local python_cmd
+            python_cmd=$(find_python) || { err "No Python 3.11+ found"; exit 1; }
             # Re-registering runs each harness's installer, which prompts for the
             # project name. With no terminal to answer on that used to die with an
             # EOFError, so fall back to stored values there — and only there, so an
@@ -417,9 +468,7 @@ main() {
                 git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
                     warn "git pull failed — falling back to tarball re-extract"; install_repo_tarball; }
             else install_repo_tarball; fi
-            local pip; pip=$(venv_pip) || { err "Venv not found — run install first"; exit 1; }
-            info "Reinstalling coding-harness-tracing..."
-            pip_install_harness "$pip" -U || exit 1
+            setup_venv "$python_cmd" -U || exit 1
             local vp; vp=$(venv_python) || { err "venv python not found"; exit 1; }
             info "Migrating legacy config.yaml to config.json (if present)..."
             "$vp" -m core.config migrate || true
