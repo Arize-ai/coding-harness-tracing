@@ -119,4 +119,6 @@ Errors are always logged. For routine hook activity, add `export ARIZE_VERBOSE=t
 
 **No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded. Check `~/.arize/harness/logs/codex.log` for backend/auth errors. Confirm the hooks are trusted via `/hooks`.
 
+**Another `notify` command is already configured.** Codex supports one `notify` command, so the installer leaves the existing value unchanged and reports a conflict. Remove that entry before installing Arize, or configure a wrapper as the sole `notify` command and have it invoke both integrations.
+
 **Disable temporarily.** Untrust the entries via `codex` → `/hooks`, or set `ARIZE_TRACE_ENABLED=false` in `~/.codex/arize-env.sh` and restart Codex. Full uninstall: `./install.sh uninstall codex`.
