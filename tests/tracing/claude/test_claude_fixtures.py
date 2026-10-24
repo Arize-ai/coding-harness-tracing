@@ -20,6 +20,7 @@ FORBIDDEN_MARKERS = (
 
 def test_fixture_set_is_present():
     assert {path.name for path in FIXTURES} == {
+        "async_subagent_main.jsonl",
         "main_tool_cycle.jsonl",
         "subagent_agent.jsonl",
         "subagent_main.jsonl",
