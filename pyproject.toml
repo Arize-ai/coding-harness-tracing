@@ -1,7 +1,6 @@
 [project]
 name = "coding-harness-tracing"
 dynamic = ["version"]
-version = "0.1.0"
 requires-python = ">=3.11"
 # python-dotenv parses the credential file for non-interactive installs. It is
 # the only runtime dependency. Imported by core/setup alone,
