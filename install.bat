@@ -24,6 +24,9 @@ REM When set, install from local wheels in this directory instead of fetching th
 REM repo: no network and no remote code execution. Mirrors install.sh --wheel-dir.
 if not defined ARIZE_WHEEL_DIR set "ARIZE_WHEEL_DIR="
 set "WHEEL_DIR=%ARIZE_WHEEL_DIR%"
+REM Every download (git, PowerShell, curl, pip) trusts the OS store, never a
+REM bundle named by the environment, so clear these before the first fetch.
+set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "CURL_CA_BUNDLE=" & set "PIP_CERT=" & set "GIT_SSL_CAINFO="
 
 REM --- Parse arguments ---
 set "COMMAND="
@@ -246,8 +249,6 @@ exit /b 1
 
 REM --- build_venv: create a fresh venv at VENV_DIR; extra arg goes to pip (-U) ---
 :build_venv
-REM Every download trusts the OS store, never a bundle named by the environment.
-set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "CURL_CA_BUNDLE=" & set "PIP_CERT=" & set "GIT_SSL_CAINFO="
 echo [arize] Creating venv...
 %FOUND_PYTHON% -m venv "%VENV_DIR%" >nul 2>&1
 if !ERRORLEVEL! neq 0 ( echo [arize] Failed to create venv >&2 & exit /b 1 )

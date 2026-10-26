@@ -181,12 +181,17 @@ class TestPipFailureIsFatal:
         build = _bat().split("\n:build_venv", 1)[1].split("\nREM ---", 1)[0]
         assert 'call :pip_install_harness "%~1"' in build
 
-    def test_build_venv_clears_ca_bundle_overrides_before_pip(self):
-        setup = _bat().split("\n:build_venv", 1)[1].split("\nREM ---", 1)[0]
-        cleared = setup.index(
-            'set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "CURL_CA_BUNDLE=" & set "PIP_CERT="'
+    def test_ca_bundle_overrides_are_cleared_before_any_download(self):
+        """An old install's sitecustomize.py named a stale bundle in these
+        variables. git, PowerShell and curl honor them just as pip does, so the
+        repo fetch is exposed unless they are cleared before the first download,
+        which in a top-down batch file means before the first network command."""
+        bat = _bat()
+        cleared = bat.index(
+            'set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "CURL_CA_BUNDLE=" & set "PIP_CERT=" & set "GIT_SSL_CAINFO="'
         )
-        assert cleared < setup.index("call :bootstrap_pip")
+        for download in ("git -C", "git clone", "Invoke-WebRequest", "curl -sSfL", "call :bootstrap_pip"):
+            assert cleared < bat.index(download), f"{download} runs before CA overrides are cleared"
 
     def test_install_does_not_force_upgrade(self):
         assert _bat().count("call :setup_venv\n") == 1
