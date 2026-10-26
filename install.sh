@@ -20,7 +20,10 @@ PIP_VERSION="26.2.2"
 PIP_WHEEL="pip-${PIP_VERSION}-py3-none-any.whl"
 PIP_SHA256="fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 PIP_WHEEL_URL="https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/${PIP_WHEEL}#sha256=${PIP_SHA256}"
-CERTIFI_REQUIREMENT="certifi>=2026.10.19"
+CERTIFI_VERSION="2026.10.23"
+CERTIFI_WHEEL="certifi-${CERTIFI_VERSION}-py3-none-any.whl"
+CERTIFI_SHA256="e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1"
+CERTIFI_WHEEL_URL="https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/${CERTIFI_WHEEL}#sha256=${CERTIFI_SHA256}"
 # When set, install from local wheels in this directory instead of fetching the
 # repo. Lets a caller that already ships the wheels install with no network at
 # all — and with no remote code execution for a permission layer to object to.
@@ -84,10 +87,11 @@ venv_pip() {
     return 1
 }
 
-verify_pip_wheel() {
-    local vp="$1" wheel="${WHEEL_DIR}/${PIP_WHEEL}"
-    [[ -f "$wheel" ]] || { err "Missing ${PIP_WHEEL} in ${WHEEL_DIR}"; return 1; }
-    "$vp" - "$wheel" "$PIP_SHA256" <<'PYEOF' || { err "${PIP_WHEEL} failed SHA-256 verification"; return 1; }
+# Hash-check a wheel in WHEEL_DIR before anything is installed from it.
+verify_wheel() {
+    local vp="$1" name="$2" expected="$3" wheel="${WHEEL_DIR}/$2"
+    [[ -f "$wheel" ]] || { err "Missing ${name} in ${WHEEL_DIR}"; return 1; }
+    "$vp" - "$wheel" "$expected" <<'PYEOF' || { err "${name} failed SHA-256 verification"; return 1; }
 import hashlib
 import pathlib
 import sys
@@ -97,28 +101,13 @@ expected = sys.argv[2]
 sys.exit(hashlib.sha256(wheel.read_bytes()).hexdigest() != expected)
 PYEOF
 }
+verify_pip_wheel()     { verify_wheel "$1" "$PIP_WHEEL" "$PIP_SHA256"; }
+verify_certifi_wheel() { verify_wheel "$1" "$CERTIFI_WHEEL" "$CERTIFI_SHA256"; }
 
-verify_certifi_wheel() {
-    "$1" - "$WHEEL_DIR" <<'PYEOF' || { err "No usable ${CERTIFI_REQUIREMENT} wheel in ${WHEEL_DIR}; add it and retry. Existing venv unchanged."; return 1; }
-import pathlib, re, sys, zipfile
-for wheel in pathlib.Path(sys.argv[1]).glob("certifi-*.whl"):
-    version = re.fullmatch(r"certifi-(\d+)\.(\d+)\.(\d+)-py3-none-any\.whl", wheel.name)
-    if not version or tuple(map(int, version.groups())) < (2026, 10, 19):
-        continue
-    try:
-        with zipfile.ZipFile(wheel) as archive:
-            metadata = f"certifi-{'.'.join(version.groups())}.dist-info/METADATA"
-            if archive.testzip() is None and metadata in archive.namelist():
-                sys.exit(0)
-    except (OSError, zipfile.BadZipFile):
-        continue
-sys.exit(1)
-PYEOF
-}
-
-# Pip must trust its own vendored certifi, never a bundle named by the environment
+# Every download trusts the OS store, never a bundle named by the environment
 # (an old install's sitecustomize.py pointed these at the pre-distrust bundle).
-run_pip() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u CURL_CA_BUNDLE -u PIP_CERT "$@"; }
+# Wraps pip, curl, wget and git alike.
+run_pip() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u CURL_CA_BUNDLE -u PIP_CERT -u GIT_SSL_CAINFO "$@"; }
 
 # PIP_CONFIG_FILE=/dev/null drops global and venv config, which --isolated keeps.
 bootstrap_pip() {
@@ -141,13 +130,13 @@ git_sync_harness_repo() {
     local branch="$1"
     [[ -d "${INSTALL_DIR}/.git" ]] || return 1
     info "Syncing with origin/${branch}..."
-    git -C "$INSTALL_DIR" fetch --depth 1 origin "$branch" 2>/dev/null \
+    run_pip git -C "$INSTALL_DIR" fetch --depth 1 origin "$branch" 2>/dev/null \
         && git -C "$INSTALL_DIR" checkout -B "$branch" FETCH_HEAD 2>/dev/null && return 0
-    git -C "$INSTALL_DIR" fetch origin "$branch" 2>/dev/null \
+    run_pip git -C "$INSTALL_DIR" fetch origin "$branch" 2>/dev/null \
         && git -C "$INSTALL_DIR" checkout -B "$branch" FETCH_HEAD 2>/dev/null && return 0
     warn "git fetch/checkout failed — trying pull --ff-only"
-    git -C "$INSTALL_DIR" pull --ff-only origin "$branch" 2>/dev/null && return 0
-    git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null && return 0
+    run_pip git -C "$INSTALL_DIR" pull --ff-only origin "$branch" 2>/dev/null && return 0
+    run_pip git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null && return 0
     return 1
 }
 
@@ -155,8 +144,8 @@ install_repo_tarball() {
     local tarball_url="${1:-$TARBALL_URL}"
     info "Downloading coding-harness-tracing tarball..."
     local tmp_tar; tmp_tar="$(mktemp)"
-    if command_exists curl; then curl -sSfL "$tarball_url" -o "$tmp_tar"
-    elif command_exists wget; then wget -qO "$tmp_tar" "$tarball_url"
+    if command_exists curl; then run_pip curl -sSfL "$tarball_url" -o "$tmp_tar"
+    elif command_exists wget; then run_pip wget -qO "$tmp_tar" "$tarball_url"
     else rm -f "$tmp_tar"; err "Neither curl nor wget found — cannot download"; exit 1; fi
     mkdir -p "$INSTALL_DIR"
     tar xzf "$tmp_tar" --strip-components=1 -C "$INSTALL_DIR"
@@ -203,18 +192,21 @@ run_harness_py() {
 # system keychain, so urllib (used by every arize-hook-*) fails with
 # "CERTIFICATE_VERIFY_FAILED" against https://otlp.arize.com.
 #
-# Fix: install certifi into the venv and write a sitecustomize.py that sets
+# Fix: install the pinned certifi into the venv and write a sitecustomize.py that sets
 # SSL_CERT_FILE before any hook code runs. Idempotent — safe to call repeatedly.
 _fix_macos_ssl_certs() {
     local pip="$1"
     local vp
     vp=$(venv_python 2>/dev/null) || return 0
 
-    local offline=()
-    [[ -n "$WHEEL_DIR" ]] && offline=(--no-index --find-links "$WHEEL_DIR")
-    if ! run_pip "$pip" install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT" 2>/dev/null; then
-        err "Could not install ${CERTIFI_REQUIREMENT}"
-        [[ -n "$WHEEL_DIR" ]] && err "Bundle a certifi wheel in ${WHEEL_DIR}."
+    local source="$CERTIFI_WHEEL_URL"
+    if [[ -n "$WHEEL_DIR" ]]; then
+        verify_certifi_wheel "$vp" || return 1
+        source="${WHEEL_DIR}/${CERTIFI_WHEEL}"
+    fi
+    if ! run_pip "$pip" install --quiet --no-deps --upgrade "$source"; then
+        err "Could not install ${CERTIFI_WHEEL}"
+        [[ -n "$WHEEL_DIR" ]] && err "Bundle it in ${WHEEL_DIR}."
         return 1
     fi
 
@@ -256,34 +248,40 @@ pip_install_harness() {
     fi
 }
 
-# Extra args after the interpreter go to pip (`-U` for update).
-setup_venv() {
+# Build a fresh venv at VENV_DIR. Extra args go to pip (`-U` for update).
+build_venv() {
     local python_cmd="$1"; shift
-    # Hash-check with the interpreter the old venv would be replaced by, before
-    # anything is deleted, so a bad wheelhouse cannot leave hooks with no runtime.
-    [[ -z "$WHEEL_DIR" ]] || verify_pip_wheel "$python_cmd" || return 1
-    [[ -z "$WHEEL_DIR" || "$(uname)" != "Darwin" ]] || verify_certifi_wheel "$python_cmd" || return 1
-    if venv_python &>/dev/null && ! "$(venv_python)" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null; then
-        info "Recreating venv with Python 3.11+..."
-        rm -rf "$VENV_DIR"
-    fi
-    if ! venv_python &>/dev/null; then
-        info "Creating venv..."
-        "$python_cmd" -m venv "$VENV_DIR" 2>/dev/null || {
-            err "Failed to create venv with $python_cmd"
-            err "You may need to install the venv module: apt install python3-venv (Debian/Ubuntu)"
-            return 1
-        }
-    fi
-    # The old shim would run inside every pip below and re-point it at the stale bundle.
-    [[ "$(uname)" == "Darwin" ]] && rm -f "$VENV_DIR"/lib/python*/site-packages/sitecustomize.py
+    info "Creating venv..."
+    "$python_cmd" -m venv "$VENV_DIR" 2>/dev/null || {
+        err "Failed to create venv with $python_cmd"
+        err "You may need to install the venv module: apt install python3-venv (Debian/Ubuntu)"
+        return 1
+    }
     bootstrap_pip || return 1
     local pip; pip=$(venv_pip) || { err "pip not found in venv"; return 1; }
     if [[ "$(uname)" == "Darwin" ]]; then _fix_macos_ssl_certs "$pip" || return 1; fi
     info "Installing coding-harness-tracing into venv..."
     pip_install_harness "$pip" "$@" || return 1
+    local vp; vp=$(venv_python) || return 1
+    "$vp" -c "import core" 2>/dev/null || { err "Installed package does not import"; return 1; }
+}
 
-    info "Venv ready at ${VENV_DIR}"
+# The previous venv is set aside, never deleted, until the new one is built and
+# imports. A failed download or wheelhouse puts it straight back, so hooks keep
+# their runtime. Always rebuilt: a venv is never upgraded in place, so nothing
+# from an older install (pip, certifi, sitecustomize.py) can survive.
+setup_venv() {
+    local previous="${VENV_DIR}.previous"
+    rm -rf "$previous"
+    [[ -e "$VENV_DIR" ]] && mv "$VENV_DIR" "$previous"
+    if build_venv "$@"; then
+        rm -rf "$previous"
+        info "Venv ready at ${VENV_DIR}"
+        return 0
+    fi
+    rm -rf "$VENV_DIR"
+    [[ -e "$previous" ]] && { mv "$previous" "$VENV_DIR"; err "Previous venv restored unchanged."; }
+    return 1
 }
 
 # -- Harness name mapping ----------------------------------------------------
@@ -484,7 +482,7 @@ main() {
                 info "Updating from local wheels in ${WHEEL_DIR}..."
             elif [[ -d "${INSTALL_DIR}/.git" ]]; then
                 info "Pulling latest changes..."
-                git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
+                run_pip git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
                     warn "git pull failed — falling back to tarball re-extract"; install_repo_tarball; }
             else install_repo_tarball; fi
             setup_venv "$python_cmd" -U || exit 1

@@ -2,7 +2,7 @@
 
 Validates:
 - _fix_macos_ssl_certs() helper is defined and correctly structured
-- The helper is called with the Darwin guard in setup_venv()
+- The helper is called with the Darwin guard in build_venv()
 - The sitecustomize.py heredoc content is correct
 - A failed certifi install stops setup; later best-effort steps return 0
 - .gitignore has the new runtime artifact entries
@@ -51,19 +51,15 @@ class TestFixMacOSSslCertsDefined:
     def test_calls_venv_python(self):
         assert "venv_python" in self.text
 
-    def test_installs_certifi(self):
-        # The offline array expands to nothing in repo mode, and to
-        # --no-index --find-links "$WHEEL_DIR" when installing from local wheels,
-        # so certifi resolves without network in an offline install too.
-        assert 'install --quiet "${offline[@]+"${offline[@]}"}" "$CERTIFI_REQUIREMENT"' in self.text
-
-    def test_certifi_resolves_offline_when_wheels_are_local(self):
-        """Otherwise an offline macOS install completes and then fails at runtime
-        with CERTIFICATE_VERIFY_FAILED on the first span export."""
-        assert 'offline=(--no-index --find-links "$WHEEL_DIR")' in self.text
+    def test_installs_the_pinned_certifi_wheel(self):
+        """certifi is the trust anchor every hook inherits, so it is installed by
+        hash-pinned URL (or the same file from WHEEL_DIR), never resolved from an index."""
+        assert 'install --quiet --no-deps --upgrade "$source"' in self.text
+        assert 'local source="$CERTIFI_WHEEL_URL"' in self.text
+        assert 'verify_certifi_wheel "$vp" || return 1\n        source="${WHEEL_DIR}/${CERTIFI_WHEEL}"' in self.text
 
     def test_reports_certifi_failure(self):
-        assert 'err "Could not install ${CERTIFI_REQUIREMENT}"' in self.text
+        assert 'err "Could not install ${CERTIFI_WHEEL}"' in self.text
 
     def test_gets_certifi_where(self):
         assert "import certifi; print(certifi.where())" in self.text
@@ -116,7 +112,7 @@ class TestGracefulErrorHandling:
         assert 'getsitepackages()[0])" 2>/dev/null) || return 0' in self.body
 
     def test_no_exit_in_function(self):
-        """Failure propagates through setup_venv's return, never an exit here."""
+        """Failure propagates through build_venv's return, never an exit here."""
         assert "exit 1" not in self.body
 
 
@@ -171,30 +167,29 @@ class TestSitecustomizeContent:
 
 
 # ---------------------------------------------------------------------------
-# Darwin guard in setup_venv()
+# Darwin guard in build_venv()
 # ---------------------------------------------------------------------------
 
 
-class TestDarwinGuardInSetupVenv:
+class TestDarwinGuardInBuildVenv:
     """Verify _fix_macos_ssl_certs is called with the Darwin guard."""
 
     @pytest.fixture(autouse=True)
     def _load(self):
         self.text = _read_install_sh()
-        # Extract setup_venv body
         match = re.search(
-            r"^setup_venv\s*\(\)\s*\{(.+?)^\}",
+            r"^build_venv\s*\(\)\s*\{(.+?)^\}",
             self.text,
             re.MULTILINE | re.DOTALL,
         )
-        assert match, "setup_venv() body not found"
+        assert match, "build_venv() body not found"
         self.body = match.group(1)
 
     def test_darwin_guard_present(self):
         assert '$(uname)" == "Darwin"' in self.body
 
     def test_calls_fix_macos_ssl_certs(self):
-        """SSL fix must be called from setup_venv()."""
+        """SSL fix must be called from build_venv()."""
         assert "_fix_macos_ssl_certs" in self.body
 
     def test_darwin_guard_wraps_all_ssl_calls(self):
@@ -203,7 +198,7 @@ class TestDarwinGuardInSetupVenv:
             if "_fix_macos_ssl_certs" in line:
                 assert "Darwin" in line, "_fix_macos_ssl_certs must be guarded by Darwin check"
 
-    def test_ssl_failure_propagates_out_of_setup_venv(self):
+    def test_ssl_failure_propagates_out_of_build_venv(self):
         line = next(ln for ln in self.body.splitlines() if "_fix_macos_ssl_certs" in ln)
         assert "|| return 1" in line
 
@@ -215,8 +210,8 @@ class TestDarwinGuardInSetupVenv:
 
     def test_ssl_fix_before_venv_ready_message(self):
         """SSL fix runs before the final info message."""
-        ssl_idx = self.body.rfind("_fix_macos_ssl_certs")
-        ready_idx = self.body.find("Venv ready")
+        ssl_idx = self.text.rfind("_fix_macos_ssl_certs")
+        ready_idx = self.text.find("Venv ready")
         assert ssl_idx < ready_idx, "_fix_macos_ssl_certs must be called before 'Venv ready' message"
 
 
@@ -226,13 +221,13 @@ class TestDarwinGuardInSetupVenv:
 
 
 class TestFunctionPlacement:
-    """Verify _fix_macos_ssl_certs is defined before setup_venv."""
+    """Verify _fix_macos_ssl_certs is defined before build_venv."""
 
-    def test_helper_defined_before_setup_venv(self):
+    def test_helper_defined_before_build_venv(self):
         text = _read_install_sh()
         helper_idx = text.find("_fix_macos_ssl_certs()")
-        setup_idx = text.find("setup_venv()")
-        assert helper_idx < setup_idx, "_fix_macos_ssl_certs must be defined before setup_venv"
+        setup_idx = text.find("build_venv()")
+        assert helper_idx < setup_idx, "_fix_macos_ssl_certs must be defined before build_venv"
 
     def test_helper_in_venv_setup_section(self):
         """The helper should be in the 'Venv setup' section."""

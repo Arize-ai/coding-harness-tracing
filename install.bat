@@ -228,32 +228,38 @@ echo [arize] Extracted to %INSTALL_DIR%
 goto :eof
 
 REM --- setup_venv ---
+REM The previous venv is set aside, never deleted, until the new one is built and
+REM imports. A failed download or wheelhouse puts it straight back, so hooks keep
+REM their runtime. Always rebuilt, so nothing from an older install survives.
 :setup_venv
-REM Verify before any rmdir, so a bad wheelhouse cannot leave hooks with no runtime.
-if defined WHEEL_DIR (
-    set "VERIFY_PY=%FOUND_PYTHON%"
-    call :verify_pip_wheel
-    if !ERRORLEVEL! neq 0 exit /b 1
+if exist "%VENV_DIR%.previous" rmdir /s /q "%VENV_DIR%.previous" 2>nul
+if exist "%VENV_DIR%" move "%VENV_DIR%" "%VENV_DIR%.previous" >nul
+call :build_venv "%~1"
+if !ERRORLEVEL! equ 0 (
+    if exist "%VENV_DIR%.previous" rmdir /s /q "%VENV_DIR%.previous" 2>nul
+    echo [arize] Venv ready at %VENV_DIR%
+    exit /b 0
 )
-REM Pip must trust its own vendored certifi, never a bundle named by the environment.
-set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "CURL_CA_BUNDLE=" & set "PIP_CERT="
-if exist "%VENV_PYTHON%" (
-    "%VENV_PYTHON%" -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1
-    if !ERRORLEVEL! neq 0 ( echo [arize] Recreating venv with Python 3.11+... & rmdir /s /q "%VENV_DIR%" 2>nul )
-)
-if not exist "%VENV_PYTHON%" (
-    echo [arize] Creating venv...
-    %FOUND_PYTHON% -m venv "%VENV_DIR%" >nul 2>&1
-    if !ERRORLEVEL! neq 0 ( echo [arize] Failed to create venv >&2 & exit /b 1 )
-)
+if exist "%VENV_DIR%" rmdir /s /q "%VENV_DIR%" 2>nul
+if exist "%VENV_DIR%.previous" ( move "%VENV_DIR%.previous" "%VENV_DIR%" >nul & echo [arize] Previous venv restored unchanged. >&2 )
+exit /b 1
+
+REM --- build_venv: create a fresh venv at VENV_DIR; extra arg goes to pip (-U) ---
+:build_venv
+REM Every download trusts the OS store, never a bundle named by the environment.
+set "SSL_CERT_FILE=" & set "REQUESTS_CA_BUNDLE=" & set "CURL_CA_BUNDLE=" & set "PIP_CERT=" & set "GIT_SSL_CAINFO="
+echo [arize] Creating venv...
+%FOUND_PYTHON% -m venv "%VENV_DIR%" >nul 2>&1
+if !ERRORLEVEL! neq 0 ( echo [arize] Failed to create venv >&2 & exit /b 1 )
 if not exist "%VENV_PIP%" ( echo [arize] pip not found in venv >&2 & exit /b 1 )
 call :bootstrap_pip
 if !ERRORLEVEL! neq 0 exit /b 1
 echo [arize] Installing coding-harness-tracing...
 call :pip_install_harness "%~1"
 if !ERRORLEVEL! neq 0 exit /b 1
-echo [arize] Venv ready at %VENV_DIR%
-goto :eof
+"%VENV_PYTHON%" -c "import core" >nul 2>&1
+if !ERRORLEVEL! neq 0 ( echo [arize] Installed package does not import >&2 & exit /b 1 )
+exit /b 0
 
 REM --- bootstrap_pip: authenticate pip before any other package download ---
 :bootstrap_pip
@@ -265,8 +271,8 @@ if defined WHEEL_DIR (
     if !ERRORLEVEL! neq 0 exit /b 1
     set "PIP_SOURCE=%WHEEL_DIR%\%PIP_WHEEL%"
 )
-REM NUL drops global and venv pip config, which --isolated keeps.
-set "PIP_CONFIG_FILE=NUL"
+REM pip skips every config file only when PIP_CONFIG_FILE equals os.devnull exactly, which is lowercase nul on Windows.
+set "PIP_CONFIG_FILE=nul"
 "%VENV_PYTHON%" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "!PIP_SOURCE!"
 set "PIP_RESULT=!ERRORLEVEL!"
 set "PIP_CONFIG_FILE="

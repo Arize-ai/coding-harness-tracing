@@ -1,7 +1,7 @@
 # Arize Coding Harness Tracing
 
 > [!IMPORTANT]
-> **Certificate security update:** Existing installations should update to pip 26.2.2, certifi 2026.10.19 or later, and the latest coding-harness-tracing package. First install Python 3.11 or later, then run the updater:
+> **Certificate security update:** Existing installations should update to pip 26.2.2, certifi 2026.10.23, and the latest coding-harness-tracing package. First install Python 3.11 or later, then run the updater:
 >
 > macOS and Linux:
 > ```bash

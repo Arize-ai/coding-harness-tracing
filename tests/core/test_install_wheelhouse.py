@@ -19,22 +19,33 @@ INSTALL_SH = ROOT / "install.sh"
 PIP_WHEEL = "pip-26.2.2-py3-none-any.whl"
 STALE_PYTHON = "#!/bin/sh\nexit 1\n"
 PIP_SHA256 = "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+CERTIFI_WHEEL = "certifi-2026.10.23-py3-none-any.whl"
+CERTIFI_SHA256 = "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1"
+CACHE = Path(__file__).parent / ".wheel-cache"
 
 
-def _pip_wheel_bytes() -> bytes | None:
+def _pinned_wheel(name: str, sha256: str, url_var: str) -> bytes:
+    """The real wheel install.sh pins, from ensurepip, a test cache or its URL.
+    Cached because every test spends it, and the hash check makes the cache safe."""
     import ensurepip
     import re
     import urllib.request
 
-    bundled = Path(ensurepip.__file__).parent / "_bundled" / PIP_WHEEL
-    if bundled.is_file():
-        return bundled.read_bytes()
-    url = re.search(r'PIP_WHEEL_URL="([^"#]*)', INSTALL_SH.read_text())
+    for candidate in (Path(ensurepip.__file__).parent / "_bundled" / name, CACHE / name):
+        if candidate.is_file() and hashlib.sha256(candidate.read_bytes()).hexdigest() == sha256:
+            return candidate.read_bytes()
+    url = re.search(rf'{url_var}="([^"#]*)', INSTALL_SH.read_text()).group(1)
+    url = url.replace("${PIP_WHEEL}", PIP_WHEEL).replace("${CERTIFI_WHEEL}", CERTIFI_WHEEL)
     try:
-        with urllib.request.urlopen(url.group(1).replace("${PIP_WHEEL}", PIP_WHEEL), timeout=30) as response:
-            return response.read()
+        with urllib.request.urlopen(url, timeout=30) as response:
+            data = response.read()
     except OSError:
-        return None
+        pytest.skip(f"{name} is neither bundled nor downloadable")
+    if hashlib.sha256(data).hexdigest() != sha256:
+        pytest.skip(f"{name} download did not match its pinned hash")
+    CACHE.mkdir(exist_ok=True)
+    (CACHE / name).write_bytes(data)
+    return data
 
 
 def _build_wheel(directory: Path, name: str, version: str, files: dict[str, str]) -> None:
@@ -54,20 +65,12 @@ def _build_wheel(directory: Path, name: str, version: str, files: dict[str, str]
         wheel.writestr(f"{dist_info}/RECORD", "\n".join(record) + "\n")
 
 
-def _wheelhouse(directory: Path, project_version: str, certifi_version: str | None = "2026.10.19") -> Path:
-    pip_wheel = _pip_wheel_bytes()
-    if pip_wheel is None or hashlib.sha256(pip_wheel).hexdigest() != PIP_SHA256:
-        pytest.skip(f"{PIP_WHEEL} is neither bundled nor downloadable")
+def _wheelhouse(directory: Path, project_version: str, certifi: bool = True) -> Path:
     directory.mkdir()
-    (directory / PIP_WHEEL).write_bytes(pip_wheel)
+    (directory / PIP_WHEEL).write_bytes(_pinned_wheel(PIP_WHEEL, PIP_SHA256, "PIP_WHEEL_URL"))
     _build_wheel(directory, "coding_harness_tracing", project_version, {"core/__init__.py": ""})
-    if certifi_version:
-        _build_wheel(
-            directory,
-            "certifi",
-            certifi_version,
-            {"certifi/__init__.py": "def where():\n    return '/dev/null'\n"},
-        )
+    if certifi:
+        (directory / CERTIFI_WHEEL).write_bytes(_pinned_wheel(CERTIFI_WHEEL, CERTIFI_SHA256, "CERTIFI_WHEEL_URL"))
     return directory
 
 
@@ -130,9 +133,14 @@ def test_update_installs_a_newer_project_wheel(sandbox):
     assert _installed_version(home, "coding-harness-tracing") == "0.2.0"
 
 
-def test_update_stops_when_the_certifi_refresh_fails(sandbox):
+def test_update_stops_when_only_an_unpinned_certifi_is_offered(sandbox):
+    """A newer or older certifi than the pinned one is not evidence of safety."""
     tmp_path, home, _ = sandbox
-    stale = _update(sandbox, _wheelhouse(tmp_path / "v1", "0.1.0", certifi_version="2026.2.25"))
+    wheels = _wheelhouse(tmp_path / "v1", "0.1.0", certifi=False)
+    _build_wheel(wheels, "certifi", "2026.2.25", {"certifi/__init__.py": "def where():\n    return '/dev/null'\n"})
+
+    stale = _update(sandbox, wheels)
+
     assert stale.returncode != 0
     assert "Update complete" not in stale.stdout
 
@@ -183,20 +191,22 @@ def test_corrupt_pip_wheel_keeps_the_old_venv(sandbox):
     assert (venv / "bin" / "python").read_text() == STALE_PYTHON
 
 
-@pytest.mark.parametrize("wheel_state", ["missing", "outdated", "corrupt"])
-def test_unusable_certifi_wheel_keeps_the_old_venv(sandbox, wheel_state):
+@pytest.mark.parametrize(
+    ("wheel_state", "message"),
+    [("missing", f"Missing {CERTIFI_WHEEL}"), ("corrupt", f"{CERTIFI_WHEEL} failed SHA-256 verification")],
+)
+def test_unusable_certifi_wheel_keeps_the_old_venv(sandbox, wheel_state, message):
     tmp_path, home, _ = sandbox
     venv = _stale_venv(home)
-    version = {"missing": None, "outdated": "2026.2.25", "corrupt": "2026.10.19"}[wheel_state]
-    wheels = _wheelhouse(tmp_path / "v1", "0.1.0", certifi_version=version)
+    wheels = _wheelhouse(tmp_path / "v1", "0.1.0", certifi=wheel_state != "missing")
     if wheel_state == "corrupt":
-        next(wheels.glob("certifi-*.whl")).write_bytes(b"tampered")
+        (wheels / CERTIFI_WHEEL).write_bytes(b"tampered")
 
     result = _update(sandbox, wheels)
 
     assert result.returncode != 0
     assert (venv / "bin" / "python").read_text() == STALE_PYTHON
-    assert f"certifi>=2026.10.19 wheel in {wheels}" in result.stderr
+    assert message in result.stderr
 
 
 def test_missing_project_wheel_keeps_the_old_venv(sandbox):
@@ -211,7 +221,7 @@ def test_missing_project_wheel_keeps_the_old_venv(sandbox):
     assert (venv / "bin" / "python").read_text() == STALE_PYTHON
 
 
-CA_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT")
+CA_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT", "GIT_SSL_CAINFO")
 STALE_BUNDLE = "/stale/certifi/cacert.pem"
 RECORDER = """\
 import json, os, sys
@@ -269,3 +279,51 @@ def test_a_stale_sitecustomize_does_not_reach_pip(sandbox):
 
     assert result.returncode == 0, result.stderr
     assert not log.exists() or not _pip_starts(log)
+
+
+def _snapshot(directory: Path) -> dict[str, bytes]:
+    return {str(p.relative_to(directory)): p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+
+
+def _git_backed_install(tmp_path: Path, home: Path) -> Path:
+    """An online install: INSTALL_DIR is a clone whose origin is local, so the
+    repo refresh succeeds without network and the first download is pip's."""
+    install_dir = home / ".arize" / "harness"
+    install_dir.rmdir()
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "pyproject.toml").write_text("[project]\nname = 'coding-harness-tracing'\nversion = '0.1.0'\n")
+    git = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    for cmd in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-q", "-m", "seed"]):
+        subprocess.run(["git", "-C", str(seed), *cmd], check=True, env={**os.environ, **git})
+    subprocess.run(["git", "clone", "-q", "--bare", str(seed), str(tmp_path / "origin.git")], check=True)
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "origin.git"), str(install_dir)], check=True)
+    return install_dir
+
+
+def test_failed_online_download_leaves_the_install_untouched(sandbox):
+    tmp_path, home, bin_dir = sandbox
+    _git_backed_install(tmp_path, home)
+    venv = _stale_venv(home)
+    before = _snapshot(venv)
+    unreachable = {"HTTPS_PROXY": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9", "NO_PROXY": ""}
+    env = {
+        **{k: v for k, v in os.environ.items() if not k.startswith(("PIP_", "ARIZE_", "PYTHON"))},
+        "HOME": str(home),
+        "NO_COLOR": "1",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        **unreachable,
+    }
+
+    result = subprocess.run(
+        ["bash", str(INSTALL_SH), "update", "--non-interactive"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+
+    assert result.returncode != 0
+    assert "Failed to install verified pip" in result.stderr
+    assert _snapshot(venv) == before

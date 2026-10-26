@@ -103,7 +103,7 @@ wheel=("$work/wheels"/*.whl)
 # so no vulnerable pip participates in the download.
 uv run --quiet --python "$py" --with pip==26.2.2 --no-project --isolated \
     python -m pip download --quiet --disable-pip-version-check \
-    --only-binary :all: -d "$work/wheels" "${wheel[0]}" pip==26.2.2 "certifi>=2026.10.19" ||
+    --only-binary :all: -d "$work/wheels" "${wheel[0]}" pip==26.2.2 certifi==2026.10.23 ||
     die "could not download the dependency wheels"
 ls -1 "$work/wheels"
 
