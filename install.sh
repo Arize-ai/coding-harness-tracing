@@ -107,7 +107,7 @@ verify_certifi_wheel() { verify_wheel "$1" "$CERTIFI_WHEEL" "$CERTIFI_SHA256"; }
 # Every download trusts the OS store, never a bundle named by the environment
 # (an old install's sitecustomize.py pointed these at the pre-distrust bundle).
 # Wraps pip, curl, wget and git alike.
-run_pip() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u CURL_CA_BUNDLE -u PIP_CERT -u GIT_SSL_CAINFO "$@"; }
+without_ca_overrides() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u CURL_CA_BUNDLE -u PIP_CERT -u GIT_SSL_CAINFO "$@"; }
 
 # PIP_CONFIG_FILE=/dev/null drops global and venv config, which --isolated keeps.
 bootstrap_pip() {
@@ -119,7 +119,7 @@ bootstrap_pip() {
         verify_pip_wheel "$vp" || return 1
         source="${WHEEL_DIR}/${PIP_WHEEL}"
     fi
-    run_pip PIP_CONFIG_FILE=/dev/null "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$source" || {
+    without_ca_overrides PIP_CONFIG_FILE=/dev/null "$vp" -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$source" || {
         err "Failed to install verified pip ${PIP_VERSION}"
         return 1
     }
@@ -130,13 +130,13 @@ git_sync_harness_repo() {
     local branch="$1"
     [[ -d "${INSTALL_DIR}/.git" ]] || return 1
     info "Syncing with origin/${branch}..."
-    run_pip git -C "$INSTALL_DIR" fetch --depth 1 origin "$branch" 2>/dev/null \
+    without_ca_overrides git -C "$INSTALL_DIR" fetch --depth 1 origin "$branch" 2>/dev/null \
         && git -C "$INSTALL_DIR" checkout -B "$branch" FETCH_HEAD 2>/dev/null && return 0
-    run_pip git -C "$INSTALL_DIR" fetch origin "$branch" 2>/dev/null \
+    without_ca_overrides git -C "$INSTALL_DIR" fetch origin "$branch" 2>/dev/null \
         && git -C "$INSTALL_DIR" checkout -B "$branch" FETCH_HEAD 2>/dev/null && return 0
     warn "git fetch/checkout failed — trying pull --ff-only"
-    run_pip git -C "$INSTALL_DIR" pull --ff-only origin "$branch" 2>/dev/null && return 0
-    run_pip git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null && return 0
+    without_ca_overrides git -C "$INSTALL_DIR" pull --ff-only origin "$branch" 2>/dev/null && return 0
+    without_ca_overrides git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null && return 0
     return 1
 }
 
@@ -144,8 +144,8 @@ install_repo_tarball() {
     local tarball_url="${1:-$TARBALL_URL}"
     info "Downloading coding-harness-tracing tarball..."
     local tmp_tar; tmp_tar="$(mktemp)"
-    if command_exists curl; then run_pip curl -sSfL "$tarball_url" -o "$tmp_tar"
-    elif command_exists wget; then run_pip wget -qO "$tmp_tar" "$tarball_url"
+    if command_exists curl; then without_ca_overrides curl -sSfL "$tarball_url" -o "$tmp_tar"
+    elif command_exists wget; then without_ca_overrides wget -qO "$tmp_tar" "$tarball_url"
     else rm -f "$tmp_tar"; err "Neither curl nor wget found — cannot download"; exit 1; fi
     mkdir -p "$INSTALL_DIR"
     tar xzf "$tmp_tar" --strip-components=1 -C "$INSTALL_DIR"
@@ -193,28 +193,27 @@ run_harness_py() {
 # "CERTIFICATE_VERIFY_FAILED" against https://otlp.arize.com.
 #
 # Fix: install the pinned certifi into the venv and write a sitecustomize.py that sets
-# SSL_CERT_FILE before any hook code runs. Idempotent — safe to call repeatedly.
+# SSL_CERT_FILE before any hook code runs. Every step is fatal: a venv whose
+# hooks cannot verify TLS is not an install worth keeping.
 _fix_macos_ssl_certs() {
     local pip="$1"
     local vp
-    vp=$(venv_python 2>/dev/null) || return 0
+    vp=$(venv_python) || { err "Venv Python not found"; return 1; }
 
     local source="$CERTIFI_WHEEL_URL"
     if [[ -n "$WHEEL_DIR" ]]; then
         verify_certifi_wheel "$vp" || return 1
         source="${WHEEL_DIR}/${CERTIFI_WHEEL}"
     fi
-    if ! run_pip "$pip" install --quiet --no-deps --upgrade "$source"; then
+    if ! without_ca_overrides "$pip" install --quiet --no-deps --upgrade "$source"; then
         err "Could not install ${CERTIFI_WHEEL}"
         [[ -n "$WHEEL_DIR" ]] && err "Bundle it in ${WHEEL_DIR}."
         return 1
     fi
 
-    local certifi_where site_dir sc
-    certifi_where=$("$vp" -c "import certifi; print(certifi.where())" 2>/dev/null) || return 0
-    [[ -z "$certifi_where" ]] && return 0
-
-    site_dir=$("$vp" -c "import site; print(site.getsitepackages()[0])" 2>/dev/null) || return 0
+    local site_dir sc
+    "$vp" -c "import certifi; certifi.where()" 2>/dev/null || { err "certifi did not install into the venv"; return 1; }
+    site_dir=$("$vp" -c "import site; print(site.getsitepackages()[0])" 2>/dev/null) || { err "Venv site-packages not found"; return 1; }
     sc="${site_dir}/sitecustomize.py"
 
     cat > "$sc" <<'PYEOF'
@@ -240,10 +239,10 @@ pip_install_harness() {
     if [[ -n "$WHEEL_DIR" ]]; then
         # --no-index so a missing wheel fails loudly instead of quietly reaching
         # PyPI, which would defeat the point of installing offline.
-        run_pip "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
+        without_ca_overrides "$pip" install --quiet "$@" --no-index --find-links "$WHEEL_DIR" coding-harness-tracing \
             || { err "Failed to install coding-harness-tracing from ${WHEEL_DIR}"; return 1; }
     else
-        run_pip "$pip" install --quiet "$@" "$INSTALL_DIR" 2>/dev/null \
+        without_ca_overrides "$pip" install --quiet "$@" "$INSTALL_DIR" 2>/dev/null \
             || { err "Failed to install coding-harness-tracing package"; return 1; }
     fi
 }
@@ -482,7 +481,7 @@ main() {
                 info "Updating from local wheels in ${WHEEL_DIR}..."
             elif [[ -d "${INSTALL_DIR}/.git" ]]; then
                 info "Pulling latest changes..."
-                run_pip git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
+                without_ca_overrides git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
                     warn "git pull failed — falling back to tarball re-extract"; install_repo_tarball; }
             else install_repo_tarball; fi
             setup_venv "$python_cmd" -U || exit 1

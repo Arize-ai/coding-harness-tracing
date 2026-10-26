@@ -4,7 +4,7 @@ Validates:
 - _fix_macos_ssl_certs() helper is defined and correctly structured
 - The helper is called with the Darwin guard in build_venv()
 - The sitecustomize.py heredoc content is correct
-- A failed certifi install stops setup; later best-effort steps return 0
+- Every step of the SSL fix is fatal; nothing is skipped quietly
 - .gitignore has the new runtime artifact entries
 """
 
@@ -61,8 +61,8 @@ class TestFixMacOSSslCertsDefined:
     def test_reports_certifi_failure(self):
         assert 'err "Could not install ${CERTIFI_WHEEL}"' in self.text
 
-    def test_gets_certifi_where(self):
-        assert "import certifi; print(certifi.where())" in self.text
+    def test_checks_certifi_imports(self):
+        assert "import certifi; certifi.where()" in self.text
 
     def test_gets_site_packages_dir(self):
         assert "import site; print(site.getsitepackages()[0])" in self.text
@@ -79,8 +79,8 @@ class TestFixMacOSSslCertsDefined:
 # ---------------------------------------------------------------------------
 
 
-class TestGracefulErrorHandling:
-    """Only the certifi install is fatal; the best-effort steps after it return 0."""
+class TestFailurePropagation:
+    """Every failure in _fix_macos_ssl_certs propagates as return 1."""
 
     @pytest.fixture(autouse=True)
     def _load(self):
@@ -94,22 +94,18 @@ class TestGracefulErrorHandling:
         assert match, "_fix_macos_ssl_certs() body not found"
         self.body = match.group(1)
 
-    def test_venv_python_failure_returns_zero(self):
-        assert "venv_python 2>/dev/null) || return 0" in self.body
-
-    def test_certifi_install_failure_returns_one(self):
-        """A stale certifi would let update report success while hooks fail SSL."""
-        after_err = self.body.split("Could not install")[1]
-        assert "return 1" in after_err.splitlines()[2]
-
-    def test_certifi_where_failure_returns_zero(self):
-        assert 'certifi.where())" 2>/dev/null) || return 0' in self.body
-
-    def test_empty_certifi_where_returns_zero(self):
-        assert '[[ -z "$certifi_where" ]] && return 0' in self.body
-
-    def test_site_dir_failure_returns_zero(self):
-        assert 'getsitepackages()[0])" 2>/dev/null) || return 0' in self.body
+    def test_every_step_is_fatal(self):
+        """A missing interpreter, a certifi that did not land, or no site-packages
+        each leave hooks unable to verify TLS, so none may be skipped quietly."""
+        assert "return 0" not in self.body
+        for probe in (
+            "Venv Python not found",
+            "certifi did not install",
+            "site-packages not found",
+            "Could not install",
+        ):
+            assert probe in self.body
+        assert self.body.count("return 1") == 5
 
     def test_no_exit_in_function(self):
         """Failure propagates through build_venv's return, never an exit here."""
