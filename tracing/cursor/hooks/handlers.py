@@ -17,7 +17,6 @@ from core.common import send_span as _send_span_to_backend
 from tracing.cursor.hooks.adapter import (
     SCOPE_NAME,
     SERVICE_NAME,
-    STATE_DIR,
     active_turn_add_response,
     active_turn_add_thought_hash,
     active_turn_clear,
@@ -73,29 +72,13 @@ def send_span(payload: dict) -> bool:
     for rs in payload.get("resourceSpans", []):
         for ss in rs.get("scopeSpans", []):
             for span in ss.get("spans", []):
-                attrs = span.setdefault("attributes", [])
-                attrs.append(attr)
-                parent_session_id = _parent_session_id(attrs)
-                if parent_session_id:
-                    attrs.append({"key": "parent.session.id", "value": {"stringValue": parent_session_id}})
+                span.setdefault("attributes", []).append(attr)
     return _send_span_to_backend(payload)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _parent_session_file(conversation_id: str):
-    return STATE_DIR / f"parent_session_{sanitize(conversation_id)}"
-
-
-def _parent_session_id(attrs: list) -> str:
-    session_id = next((a["value"].get("stringValue", "") for a in attrs if a.get("key") == "session.id"), "")
-    if not session_id:
-        return ""
-    f = _parent_session_file(session_id)
-    return f.read_text().strip() if f.exists() else ""
 
 
 def _print_permissive(event: str) -> None:
@@ -1180,11 +1163,6 @@ def _handle_session_start(input_json, conversation_id, gen_id, trace_id, now_ms)
     generation_id as sessionStart would resolve no parent at all and become
     disconnected trace roots instead of children of the session.
     """
-    parent_session_id = os.environ.get("ARIZE_PARENT_SESSION_ID", "")
-    if parent_session_id and conversation_id:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        _parent_session_file(conversation_id).write_text(parent_session_id)
-
     if _is_cursor_ide_hook_payload(input_json):
         log("sessionStart: skipped standalone IDE session trace")
         return
