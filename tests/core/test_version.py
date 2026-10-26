@@ -253,12 +253,24 @@ class TestBuilds:
         assert _installed_version(tmp_path / "dist", tmp_path) == "0.2.0"
 
     def test_wheel_holds_python_modules_only(self, repo, tmp_path):
-        """setuptools-scm's git file finder must not add tracked data files to the wheel."""
+        """The wheel built from the sdist holds the .py modules plus exactly the SHARE_FILES, and one core.
+
+        setuptools-scm's git file finder must not add other tracked files.
+        """
+        from core.setup.share import SHARE_FILES, package_glob
+
         _build(repo, tmp_path / "dist")
         (wheel,) = (tmp_path / "dist").glob("*.whl")
         names = zipfile.ZipFile(wheel).namelist()
         assert "core/_version.py" in names
-        assert [n for n in names if not n.endswith(".py") and ".dist-info/" not in n] == []
+        shipped = {
+            p.relative_to(repo).as_posix()
+            for sub, patterns in SHARE_FILES.items()
+            for pattern in patterns
+            for p in package_glob(repo / "tracing" / sub, pattern)
+        }
+        assert {n for n in names if not n.endswith(".py") and ".dist-info/" not in n} == shipped
+        assert [n for n in names if re.match(r"tracing/[^/]+/core/", n)] == []
 
     def test_commit_after_tag_builds_next_dev_version(self, repo, tmp_path):
         _git(repo, "tag", "-a", "v0.2.0", "-m", "v0.2.0")

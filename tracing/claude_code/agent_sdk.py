@@ -10,7 +10,7 @@ Usage::
 
 The returned ``ClaudeAgentOptions`` is pre-configured with:
 
-  - ``plugins=[{"type": "local", "path": "<install-dir>/tracing/claude_code"}]``
+  - ``plugins=[{"type": "local", "path": "<install-dir>/share/claude_code"}]``
     so the SDK loads the local plugin and fires our hooks.
   - ``setting_sources=["user"]`` so user-level settings (including the
     Arize env vars written by ``install.py``) are honored.
@@ -43,7 +43,7 @@ def claude_options(**overrides: Any) -> Any:
             "claude_agent_sdk is required for Agent SDK tracing. " "Install with: pip install claude-agent-sdk"
         ) from exc
 
-    plugin_path = str(core.setup.INSTALL_DIR / "tracing" / "claude_code")
+    plugin_path = str(core.setup.harness_dir("claude-code"))
     default_plugins = [{"type": "local", "path": plugin_path}]
     default_sources = ["user"]
 

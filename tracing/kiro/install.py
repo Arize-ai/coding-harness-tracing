@@ -31,6 +31,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.kiro.constants import (
     AGENT_SKELETON,
     DEFAULT_AGENT_NAME,
@@ -51,6 +52,7 @@ def install(with_skills: bool = False, agent_name: str | None = None) -> None:
         return
 
     ensure_shared_runtime()
+    install_share(HARNESS_NAME)
 
     # Per-harness state dir
     state_dir = INSTALL_DIR / "state" / HARNESS_NAME
@@ -99,6 +101,7 @@ def uninstall() -> None:
     _unregister_all_kiro_hooks()
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
+    remove_share(HARNESS_NAME)
     info("Kiro tracing uninstalled")
 
 

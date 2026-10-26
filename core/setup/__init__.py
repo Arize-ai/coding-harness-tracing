@@ -872,17 +872,18 @@ def list_installed_harnesses() -> list[str]:
 
 
 def harness_dir(harness: str) -> Path:
-    """Return the absolute path of <install-dir>/tracing/<harness>/.
+    """Return the absolute path of <install-dir>/share/<harness>/.
 
     Maps a harness alias (e.g. ``claude-code``) to its directory name
-    (``claude_code``) under ``~/.arize/harness/tracing/``.
+    (``claude_code``) under ``~/.arize/harness/share/``, where
+    ``core.setup.share.install_share`` copies the harness's files.
     """
     sub_name = harness.replace("-", "_")
-    return INSTALL_DIR / "tracing" / sub_name
+    return INSTALL_DIR / "share" / sub_name
 
 
 def symlink_skills(harness: str, target_dir: Path | None = None) -> None:
-    """Symlink <install-dir>/tracing/<harness>/skills/* into target_dir/.agents/skills/.
+    """Symlink <install-dir>/share/<harness>/skills/* into target_dir/.agents/skills/.
 
     target_dir defaults to the current working directory. Idempotent (skip
     existing links pointing at the right target). Does nothing if the harness

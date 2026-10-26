@@ -31,6 +31,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.gemini.constants import EVENTS, HARNESS_NAME, HOOK_NAME, HOOK_TIMEOUT_MS
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,7 @@ def _uninstall_hooks() -> None:
 def install() -> None:
     """Install Gemini tracing hooks and register in config.json."""
     ensure_shared_runtime()
+    install_share(HARNESS_NAME)
 
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
@@ -203,6 +205,7 @@ def uninstall() -> None:
 
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
+    remove_share(HARNESS_NAME)
     info("Gemini tracing uninstalled")
 
 

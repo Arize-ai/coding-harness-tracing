@@ -32,6 +32,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.copilot.constants import HARNESS_NAME, HOOK_EVENTS, HOOKS_DIR, HOOKS_FILE
 
 # ---------------------------------------------------------------------------
@@ -125,6 +126,7 @@ def _uninstall_hooks(hooks_dir: Path) -> None:
 def install() -> None:
     """Install Copilot tracing hooks (VS Code + CLI) and register in config.json."""
     ensure_shared_runtime()
+    install_share(HARNESS_NAME)
 
     # If this harness has no backend config yet, prompt; otherwise reuse.
     config = load_config()
@@ -169,6 +171,7 @@ def uninstall() -> None:
 
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
+    remove_share(HARNESS_NAME)
     info("Copilot tracing uninstalled")
 
 

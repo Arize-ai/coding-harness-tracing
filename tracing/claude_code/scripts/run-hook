@@ -12,6 +12,19 @@ set -e
 
 HOOK_NAME="${1:?usage: run-hook <entry-point-name>}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT not set}"
+
+# --- Binary install: no Python, run the arize-harness binary instead ---
+# Setup writes the binary's full path to $PLUGIN_ROOT/runtime on a binary
+# install only (core/setup/share.py).
+if [ -f "$PLUGIN_ROOT/runtime" ]; then
+    RUNTIME=$(cat "$PLUGIN_ROOT/runtime")
+    if [ ! -x "$RUNTIME" ]; then
+        echo "[arize] arize-harness not found at $RUNTIME — tracing will not be available" >&2
+        exit 0
+    fi
+    exec "$RUNTIME" hook claude "${HOOK_NAME#arize-hook-}"
+fi
+
 DATA_DIR="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA not set}"
 VENV_DIR="$DATA_DIR/venv"
 MARKER="$DATA_DIR/.bootstrap.sha256"

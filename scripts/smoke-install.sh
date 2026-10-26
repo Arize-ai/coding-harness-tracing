@@ -144,6 +144,14 @@ echo "$HARNESS is configured and its hooks are registered"
     die "$installed holds a source tree. Wheel mode must not fetch the repo"
 echo "no source tree in $installed"
 
+# The harness's plugin, skill and data files come from the wheel, copied to share/.
+case "$HARNESS" in claude) share_sub=claude_code ;; devin) share_sub= ;; *) share_sub="$HARNESS" ;; esac
+if [[ -n "$share_sub" ]]; then
+    [[ -n "$(ls -A "$installed/share/$share_sub" 2>/dev/null)" ]] ||
+        die "$installed/share/$share_sub is missing or empty after setup"
+    echo "share/$share_sub populated from the wheel"
+fi
+
 # -I: read the venv's install only, never the cwd or PYTHON* settings.
 reported="$("$installed/venv/bin/python" -I -c "import core; print(core.version())")" ||
     die "core.version() failed in the installed venv"

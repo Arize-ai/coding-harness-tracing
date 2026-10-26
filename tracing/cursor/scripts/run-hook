@@ -20,6 +20,19 @@ set -e
 HOOK_NAME="arize-hook-cursor"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# --- Binary install: no Python, run the arize-harness binary instead ---
+# Setup writes the binary's full path to $PLUGIN_ROOT/runtime on a binary
+# install only (core/setup/share.py).
+if [ -f "$PLUGIN_ROOT/runtime" ]; then
+    RUNTIME=$(cat "$PLUGIN_ROOT/runtime")
+    if [ ! -x "$RUNTIME" ]; then
+        echo "[arize] arize-harness not found at $RUNTIME — tracing will not be available" >&2
+        exit 0
+    fi
+    exec "$RUNTIME" hook cursor
+fi
+
 DATA_DIR="$HOME/.arize/harness"
 VENV_DIR="$DATA_DIR/cursor-plugin-venv"
 MARKER="$DATA_DIR/.cursor-plugin.pyproject.sha256"
