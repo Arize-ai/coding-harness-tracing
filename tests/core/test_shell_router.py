@@ -67,8 +67,8 @@ class TestShellSyntax:
         text = _read_install_sh()
         assert "set -euo pipefail" in text, "Missing strict mode"
 
-    def test_line_count_under_500(self):
-        """Router should stay under 500 lines, well under the old 1919.
+    def test_line_count_under_515(self):
+        """Router should stay under 515 lines, well under the old 1919.
 
         The cap is a ratchet against bash creeping back in: logic here is not
         unit-testable, not type-checked, and has to be mirrored in install.bat
@@ -78,11 +78,13 @@ class TestShellSyntax:
         parsing and the pip invocation both run before the venv exists, so they
         cannot move to Python. Raised from 460 for the hash-verified pip bootstrap,
         which must run before project code is installed and work from the single
-        downloaded installer. If you raise it again, change this rationale too.
+        downloaded installer. Raised from 500 so offline certifi wheels can be
+        checked before replacing an existing venv. If you raise it again,
+        change this rationale too.
         """
         text = _read_install_sh()
         lines = text.strip().splitlines()
-        assert len(lines) <= 500, f"install.sh has {len(lines)} lines — should be under 500"
+        assert len(lines) <= 515, f"install.sh has {len(lines)} lines — should be under 515"
 
 
 # ---------------------------------------------------------------------------

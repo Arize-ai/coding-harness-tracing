@@ -183,6 +183,22 @@ def test_corrupt_pip_wheel_keeps_the_old_venv(sandbox):
     assert (venv / "bin" / "python").read_text() == STALE_PYTHON
 
 
+@pytest.mark.parametrize("wheel_state", ["missing", "outdated", "corrupt"])
+def test_unusable_certifi_wheel_keeps_the_old_venv(sandbox, wheel_state):
+    tmp_path, home, _ = sandbox
+    venv = _stale_venv(home)
+    version = {"missing": None, "outdated": "2026.2.25", "corrupt": "2026.10.19"}[wheel_state]
+    wheels = _wheelhouse(tmp_path / "v1", "0.1.0", certifi_version=version)
+    if wheel_state == "corrupt":
+        next(wheels.glob("certifi-*.whl")).write_bytes(b"tampered")
+
+    result = _update(sandbox, wheels)
+
+    assert result.returncode != 0
+    assert (venv / "bin" / "python").read_text() == STALE_PYTHON
+    assert f"certifi>=2026.10.19 wheel in {wheels}" in result.stderr
+
+
 def test_missing_project_wheel_keeps_the_old_venv(sandbox):
     tmp_path, home, _ = sandbox
     venv = _stale_venv(home)
@@ -195,7 +211,7 @@ def test_missing_project_wheel_keeps_the_old_venv(sandbox):
     assert (venv / "bin" / "python").read_text() == STALE_PYTHON
 
 
-CA_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "PIP_CERT")
+CA_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT")
 STALE_BUNDLE = "/stale/certifi/cacert.pem"
 RECORDER = """\
 import json, os, sys

@@ -98,9 +98,27 @@ sys.exit(hashlib.sha256(wheel.read_bytes()).hexdigest() != expected)
 PYEOF
 }
 
+verify_certifi_wheel() {
+    "$1" - "$WHEEL_DIR" <<'PYEOF' || { err "No usable ${CERTIFI_REQUIREMENT} wheel in ${WHEEL_DIR}; add it and retry. Existing venv unchanged."; return 1; }
+import pathlib, re, sys, zipfile
+for wheel in pathlib.Path(sys.argv[1]).glob("certifi-*.whl"):
+    version = re.fullmatch(r"certifi-(\d+)\.(\d+)\.(\d+)-py3-none-any\.whl", wheel.name)
+    if not version or tuple(map(int, version.groups())) < (2026, 10, 19):
+        continue
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            metadata = f"certifi-{'.'.join(version.groups())}.dist-info/METADATA"
+            if archive.testzip() is None and metadata in archive.namelist():
+                sys.exit(0)
+    except (OSError, zipfile.BadZipFile):
+        continue
+sys.exit(1)
+PYEOF
+}
+
 # Pip must trust its own vendored certifi, never a bundle named by the environment
 # (an old install's sitecustomize.py pointed these at the pre-distrust bundle).
-run_pip() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u PIP_CERT "$@"; }
+run_pip() { env -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u CURL_CA_BUNDLE -u PIP_CERT "$@"; }
 
 # PIP_CONFIG_FILE=/dev/null drops global and venv config, which --isolated keeps.
 bootstrap_pip() {
@@ -244,6 +262,7 @@ setup_venv() {
     # Hash-check with the interpreter the old venv would be replaced by, before
     # anything is deleted, so a bad wheelhouse cannot leave hooks with no runtime.
     [[ -z "$WHEEL_DIR" ]] || verify_pip_wheel "$python_cmd" || return 1
+    [[ -z "$WHEEL_DIR" || "$(uname)" != "Darwin" ]] || verify_certifi_wheel "$python_cmd" || return 1
     if venv_python &>/dev/null && ! "$(venv_python)" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null; then
         info "Recreating venv with Python 3.11+..."
         rm -rf "$VENV_DIR"
