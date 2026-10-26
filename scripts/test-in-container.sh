@@ -70,7 +70,6 @@ exec "$engine" run --rm "${tty_flag[@]+"${tty_flag[@]}"}" \
     -v "$ROOT:/src:ro" \
     -e UV_VERSION="$UV_VERSION" \
     -e SETUPTOOLS_SCM_PRETEND_VERSION="$version" \
-    -e PIP_REQUIREMENT="$PIP_REQUIREMENT" \
     -e PIP_WHEEL_URL="$PIP_WHEEL_URL" \
     -e SMOKE_SHELL="${SMOKE_SHELL:-}" \
     -e SMOKE_KEEP="${SMOKE_SHELL:+1}" \
