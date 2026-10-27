@@ -30,10 +30,10 @@ find_entry_point() {
     fi
 }
 
-# --- Find Python 3.9+ ---
+# --- Find Python 3.11+ ---
 find_python() {
     for p in python3 python py; do
-        if "$p" -c "import sys; sys.exit(0 if sys.version_info>=(3,9) else 1)" 2>/dev/null; then
+        if "$p" -c "import sys; sys.exit(0 if sys.version_info>=(3,11) else 1)" 2>/dev/null; then
             echo "$p"
             return 0
         fi
@@ -54,9 +54,18 @@ needs_install() {
 # --- Bootstrap venv ---
 bootstrap() {
     PYTHON_CMD=$(find_python) || {
-        echo "[arize] No Python 3.9+ found — tracing will not be available" >&2
+        echo "[arize] No Python 3.11+ found — tracing will not be available" >&2
         return 1
     }
+
+    if [ -x "$VENV_DIR/bin/python" ]; then EXISTING_PYTHON="$VENV_DIR/bin/python"
+    elif [ -x "$VENV_DIR/Scripts/python.exe" ]; then EXISTING_PYTHON="$VENV_DIR/Scripts/python.exe"
+    else EXISTING_PYTHON=""
+    fi
+    if [ -n "$EXISTING_PYTHON" ] && ! "$EXISTING_PYTHON" -c "import sys; assert sys.version_info >= (3, 11)" 2>/dev/null; then
+        echo "[arize] Recreating tracing venv with Python 3.11+..." >&2
+        rm -rf "$VENV_DIR"
+    fi
 
     if ! needs_install; then
         return 0

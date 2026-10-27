@@ -64,3 +64,4 @@ benchmark/builds/
 benchmark/results/
 # benchmark/build/ holds build scripts; the build/ rule above would hide it.
 !benchmark/build/
+tests/core/.wheel-cache/
