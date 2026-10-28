@@ -26,6 +26,7 @@ from tracing.claude_code.hooks.transcript import parse_claude_transcript
 FIXTURE = Path(__file__).parent / "fixtures" / "main_tool_cycle.jsonl"
 SUBAGENT_MAIN_FIXTURE = Path(__file__).parent / "fixtures" / "subagent_main.jsonl"
 SUBAGENT_AGENT_FIXTURE = Path(__file__).parent / "fixtures" / "subagent_agent.jsonl"
+ASYNC_MAIN_FIXTURE = Path(__file__).parent / "fixtures" / "async_subagent_main.jsonl"
 
 
 def _spans(payload):
@@ -457,6 +458,139 @@ def test_foreground_subagent_is_buffered_and_exported_inside_main_tree(tmp_path:
     assert _attrs(spans[3])["subagent.type"] == "synthetic-explorer"
     assert state.get("pending_subagents") is None
     assert state.get("subagent_agent-1_start_time") is None
+
+
+def test_background_subagent_is_exported_under_its_launching_agent_span(tmp_path: Path):
+    state = StateManager(tmp_path, state_file=tmp_path / "state.json", lock_path=tmp_path / "state.lock")
+    state.init_state()
+    for key, value in {
+        "session_id": "session-async-1",
+        "current_trace_id": "e" * 32,
+        "current_trace_span_id": "f" * 16,
+        "current_trace_start_time": "1767272400000",
+        "current_trace_prompt": "Delegate one read-only subagent in the background.",
+        "trace_count": "1",
+        "trace_start_line": "0",
+        "project_name": "synthetic-project",
+        "user_id": "dev@example.com",
+    }.items():
+        state.set(key, value)
+
+    sent = []
+    clock = iter(range(1767272401000, 1767272500000, 1000))
+
+    def send(payload):
+        sent.append(payload)
+        return True
+
+    with (
+        mock.patch("tracing.claude_code.hooks.handlers.resolve_session", return_value=state),
+        mock.patch("tracing.claude_code.hooks.handlers.resolve_transcript_path", return_value=ASYNC_MAIN_FIXTURE),
+        mock.patch("tracing.claude_code.hooks.handlers.get_timestamp_ms", side_effect=lambda: next(clock)),
+        mock.patch("tracing.claude_code.hooks.handlers.send_span", side_effect=send),
+    ):
+        _handle_subagent_start(
+            {
+                "session_id": "session-async-1",
+                "transcript_path": str(ASYNC_MAIN_FIXTURE),
+                "agent_id": "agent-1",
+                "agent_type": "synthetic-explorer",
+            }
+        )
+        # The launching turn ends while the subagent is still running.
+        _handle_stop(
+            {
+                "session_id": "session-async-1",
+                "transcript_path": str(ASYNC_MAIN_FIXTURE),
+                "last_assistant_message": "LAUNCHED_IN_BACKGROUND",
+            }
+        )
+        assert len(sent) == 1
+        turn_spans = _spans(sent[0])
+        assert [span["name"] for span in turn_spans] == [
+            "Turn 1",
+            "LLM call 1: qwen3-coder-next",
+            "Agent",
+            "LLM call 2: qwen3-coder-next",
+        ]
+        assert state.get("current_trace_id") is None
+        assert state.get("async_subagents") is not None
+
+        # It stops later, with no turn open.
+        _handle_subagent_stop(
+            {
+                "session_id": "session-async-1",
+                "transcript_path": str(ASYNC_MAIN_FIXTURE),
+                "agent_transcript_path": str(SUBAGENT_AGENT_FIXTURE),
+                "agent_id": "agent-1",
+                "agent_type": "synthetic-explorer",
+                "last_assistant_message": "Function: greeting; return: SYNTHETIC_TOOL_OK",
+            }
+        )
+
+    assert len(sent) == 2
+    agent_span = turn_spans[2]
+    spans = _spans(sent[1])
+    assert [span["name"] for span in spans] == [
+        "Subagent: synthetic-explorer",
+        "LLM call 1: qwen3-coder-next",
+        "Read",
+        "LLM call 2: qwen3-coder-next",
+    ]
+    assert {span["traceId"] for span in spans} == {"e" * 32}
+    assert spans[0]["parentSpanId"] == agent_span["spanId"]
+    assert spans[1]["parentSpanId"] == spans[0]["spanId"]
+    assert spans[2]["parentSpanId"] == spans[1]["spanId"]
+    assert spans[3]["parentSpanId"] == spans[0]["spanId"]
+    subagent = _attrs(spans[0])
+    assert subagent["openinference.span.kind"] == "AGENT"
+    assert subagent["subagent.id"] == "agent-1"
+    assert subagent["user.id"] == "dev@example.com"
+    # Real duration: from SubagentStart to SubagentStop, not the launch call.
+    assert int(spans[0]["endTimeUnixNano"]) > int(spans[0]["startTimeUnixNano"])
+    assert int(spans[0]["startTimeUnixNano"]) == 1767272401000 * 1_000_000
+    assert _attrs(spans[2])["subagent.id"] == "agent-1"
+    assert state.get("async_subagents") is None
+    assert state.get("subagent_agent-1_start_time") is None
+
+
+def test_background_subagent_that_stops_inside_its_turn_keeps_the_foreground_path(tmp_path: Path):
+    state = StateManager(tmp_path, state_file=tmp_path / "state.json", lock_path=tmp_path / "state.lock")
+    state.init_state()
+    for key, value in {
+        "session_id": "session-async-1",
+        "current_trace_id": "e" * 32,
+        "current_trace_span_id": "f" * 16,
+        "current_trace_start_time": "1767272400000",
+        "trace_count": "1",
+        "trace_start_line": "0",
+    }.items():
+        state.set(key, value)
+
+    sent = []
+    clock = iter(range(1767272401000, 1767272500000, 1000))
+    with (
+        mock.patch("tracing.claude_code.hooks.handlers.resolve_session", return_value=state),
+        mock.patch("tracing.claude_code.hooks.handlers.resolve_transcript_path", return_value=ASYNC_MAIN_FIXTURE),
+        mock.patch("tracing.claude_code.hooks.handlers.get_timestamp_ms", side_effect=lambda: next(clock)),
+        mock.patch("tracing.claude_code.hooks.handlers.send_span", side_effect=lambda p: sent.append(p) or True),
+    ):
+        _handle_subagent_stop(
+            {
+                "session_id": "session-async-1",
+                "transcript_path": str(ASYNC_MAIN_FIXTURE),
+                "agent_transcript_path": str(SUBAGENT_AGENT_FIXTURE),
+                "agent_id": "agent-1",
+                "agent_type": "synthetic-explorer",
+            }
+        )
+        _handle_stop({"session_id": "session-async-1", "transcript_path": str(ASYNC_MAIN_FIXTURE)})
+
+    assert len(sent) == 1
+    names = [span["name"] for span in _spans(sent[0])]
+    assert names.index("Subagent: synthetic-explorer") == names.index("Agent") + 1
+    assert state.get("async_subagents") is None
+    assert state.get("pending_subagents") is None
 
 
 def test_failed_tool_hook_is_correlated_and_marks_tool_span_error(tmp_path: Path):
