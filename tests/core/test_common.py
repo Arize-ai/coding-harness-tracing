@@ -1211,14 +1211,30 @@ class TestSendSpan:
         mock_resp.__exit__ = mock.Mock(return_value=False)
         mock_urlopen.return_value = mock_resp
 
-        assert send_span(self._SAMPLE_SPAN) is True
+        import core.common as common_mod
+
+        real_encoder = common_mod.otlp_json_to_protobuf
+        encoded: list = []
+
+        def spy_encoder(payload):
+            encoded.append(payload)
+            return real_encoder(payload)
+
+        with mock.patch.object(common_mod, "otlp_json_to_protobuf", side_effect=spy_encoder):
+            assert send_span(self._SAMPLE_SPAN) is True
 
         req = mock_urlopen.call_args[0][0]
         assert req.full_url == "https://otlp.arize.com:443/v1/traces"
-        assert req.get_header("Content-type") == "application/json"
+        # OTLP/protobuf, not OTLP/JSON: Arize's JSON intake base64-decodes the
+        # hex traceId/spanId, corrupting every id.
+        assert req.get_header("Content-type") == "application/x-protobuf"
         assert req.get_header("Authorization") == "Bearer my-key"
         assert req.get_header("Space_id") == "my-space"
-        body = json.loads(req.data)
+        assert len(encoded) == 1
+        assert req.data == real_encoder(encoded[0])
+        assert bytes.fromhex("0123456789abcdef0123456789abcdef") in req.data
+        assert bytes.fromhex("abcdef1234567890") in req.data
+        body = encoded[0]
         # Verify arize.project.name injected into span attributes
         span_attrs = body["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
         project_names = [a["value"]["stringValue"] for a in span_attrs if a["key"] == "arize.project.name"]

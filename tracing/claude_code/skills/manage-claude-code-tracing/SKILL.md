@@ -78,7 +78,7 @@ Walk the user through finding their credentials:
 
 Both `api_key` and `space_id` are required for the shared config.
 
-**No Python dependencies are needed.** Both Phoenix and Arize AX use HTTP/JSON — no additional Python dependencies are needed.
+**No Python dependencies are needed.** Both Phoenix and Arize AX are reached over OTLP/HTTP using only the standard library — no additional Python dependencies are needed.
 
 Then proceed to [Configure Settings](#configure-settings). If the user is on an on-prem instance, remind them to provide their custom endpoint.
 
@@ -218,7 +218,7 @@ The plugin path will be `./coding-harness-tracing/tracing/claude_code`.
 
 > Tip: `tracing.claude_code.agent_sdk.claude_options()` returns a pre-configured `ClaudeAgentOptions` with the plugin path and `setting_sources=["user"]` already wired in, so users can skip the manual plumbing in step 5 below when the harness is installed via `install.sh`.
 
-No Python dependencies are needed -- both Phoenix and Arize AX use HTTP/JSON.
+No Python dependencies are needed -- both Phoenix and Arize AX are reached over OTLP/HTTP using only the standard library.
 
 ### 3. Set up the backend config
 
