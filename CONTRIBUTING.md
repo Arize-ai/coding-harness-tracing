@@ -63,7 +63,7 @@ uv run pytest tests/tracing/cursor/
 
 Claude Code tests live under `tests/tracing/claude/`, not `tests/tracing/claude_code/`.
 
-If OpenCode plugin tests fail with Node exit code 9, install Node 22 or newer. Those tests call `node --experimental-transform-types`.
+OpenCode plugin tests require Node 22.6 or newer. They use `node --experimental-strip-types` (also supported by Node 26, which removed `--experimental-transform-types`).
 
 If `test_run_hook_bootstraps_on_python312_without_setuptools` fails against a uv-managed CPython 3.12, that test needs a system Python 3.12 on PATH outside the venv. It skips when it cannot find one.
 

@@ -226,7 +226,7 @@ class TestPluginChildSessionContract:
         assert "forward({ type, sessionID, messages, childSessions })" in plugin_source_text
 
     def test_suppresses_independent_child_session_snapshots(self, plugin_source_text):
-        assert "const sessionInfoRes = await client.session.get" in plugin_source_text
+        assert "const sessionInfoRes = await session.get" in plugin_source_text
         assert "const sessionInfo = successfulSession(sessionInfoRes, sessionID)" in plugin_source_text
         assert "if (!sessionInfo || sessionInfo.parentID) return" in plugin_source_text
 
