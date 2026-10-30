@@ -57,15 +57,13 @@ A new harness must mirror the layout of an existing directory under `tracing/` (
 
 Flag any new harness that skips one of these.
 
-### Python 3.9 floor
+### Python 3.11 floor
 
-The repo targets `>=3.9`. CI runs on 3.9 through 3.14. Reject any 3.10+ syntax in the diff:
+The repo targets `>=3.11`. CI runs on 3.11 through 3.14. Reject any 3.12+ syntax in the diff:
 
-- No `import tomllib` (only stdlib in 3.11+) — use `tomli` if absolutely required, but prefer not introducing a parser at all.
-- No `match`/`case` statements.
-- No `X | Y` runtime unions (e.g. function annotations evaluated at runtime, `isinstance(x, int | str)`). Inside `from __future__ import annotations` modules they are stringified and safe, but flag any runtime use.
-- No `list[int]` / `dict[str, int]` as runtime expressions without `from __future__ import annotations`.
-- No other 3.10+ features (parenthesized context managers in `with` are 3.10+; structural pattern matching; etc.).
+- No `typing.override` or `typing.TypeAliasType`; use compatible `typing` constructs.
+- No f-string grammar that requires Python 3.12.
+- No other 3.12+ standard-library APIs or syntax.
 
 ### No new runtime dependencies
 

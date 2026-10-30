@@ -6,7 +6,7 @@
 #
 #   scripts/smoke-install.sh [harness]      harness defaults to claude
 #
-#   UV_PYTHON=3.9   build and install with this Python, as CI does
+#   UV_PYTHON=3.11  build and install with this Python, as CI does
 #   SMOKE_KEEP=1    skip the uninstall and keep the throwaway HOME
 #   SMOKE_INSTALLER=arize-harness
 #                   install the wheel into ~/.arize/harness/venv with pip, then
@@ -119,10 +119,11 @@ wheel=("$work/wheels"/*.whl)
 
 # --wheel-dir installs with --no-index, so fetch the wheel's dependencies plus
 # certifi (install.sh adds it on macOS, and only warns if missing). Uses an
-# ephemeral pip, since a uv-created venv has none.
-uv run --quiet --python "$py" --with pip --no-project --isolated \
+# fixed ephemeral pip, since a uv-created venv has none. uv fetches this first,
+# so no vulnerable pip participates in the download.
+uv run --quiet --python "$py" --with pip==26.2.2 --no-project --isolated \
     python -m pip download --quiet --disable-pip-version-check \
-    --only-binary :all: -d "$work/wheels" "${wheel[0]}" certifi ||
+    --only-binary :all: -d "$work/wheels" "${wheel[0]}" pip==26.2.2 certifi==2026.10.23 ||
     die "could not download the dependency wheels"
 ls -1 "$work/wheels"
 
@@ -189,6 +190,13 @@ if [[ "$(uname)" == Darwin ]]; then
         die "certifi is not in the venv, so hooks would fail SSL verification on macOS"
     echo "certifi installed for the macOS SSL fix"
 fi
+
+step "updating from the local wheelhouse"
+ARIZE_ENV_FILE="$creds" ARIZE_NONINTERACTIVE=1 "$mgr" update --wheel-dir "$work/wheels" ||
+    die "wheel-based update exited $?"
+"$mgr" status --json > "$work/status-after-update.json" ||
+    { rc=$?; cat "$work/status-after-update.json"; die "status after update exited $rc"; }
+echo "wheel-based update completed and remained healthy"
 
 if "$mgr" update > "$work/update.log" 2>&1; then
     cat "$work/update.log"
