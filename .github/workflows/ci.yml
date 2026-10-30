@@ -38,10 +38,11 @@ jobs:
         run: uv run pytest tests/ -m "not slow"
 
   # The Linux and macOS counterpart of windows-offline: builds the wheel and
-  # runs the real install.sh --wheel-dir into a throwaway HOME. Developers run
-  # the same script locally, so a failure here reproduces with one command.
+  # installs it into a throwaway HOME, with the real install.sh --wheel-dir or
+  # with pip and arize-harness setup. Developers run the same script locally,
+  # so a failure here reproduces with one command.
   unix-offline:
-    name: Unix offline install (install.sh --wheel-dir, ${{ matrix.os }}, ${{ matrix.harness }})
+    name: Unix offline install (${{ matrix.installer }}, ${{ matrix.os }}, ${{ matrix.harness }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -49,6 +50,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         harness: [claude]
+        installer: [install.sh, arize-harness]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -61,7 +63,9 @@ jobs:
           version: "0.13.5"
           python-version: "3.11"
 
-      - name: Smoke-test install.sh
+      - name: Smoke-test ${{ matrix.installer }}
+        env:
+          SMOKE_INSTALLER: ${{ matrix.installer }}
         run: scripts/smoke-install.sh ${{ matrix.harness }}
 
   # The same smoke test as unix-offline, in clean distro images. Minimal images
