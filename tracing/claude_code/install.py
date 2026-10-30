@@ -25,6 +25,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.claude_code.constants import (
     ARIZE_ENV_KEYS,
     DISPLAY_NAME,
@@ -43,6 +44,7 @@ def install(with_skills: bool = False) -> None:
         return
 
     ensure_shared_runtime()
+    install_share(HARNESS_NAME)
 
     config = load_config()
     existing_entry = (config.get("harnesses") or {}).get(HARNESS_NAME)
@@ -87,6 +89,7 @@ def uninstall() -> None:
     _unregister_claude_hooks()
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
+    remove_share(HARNESS_NAME)
     info("Claude Code tracing uninstalled")
 
 
@@ -109,7 +112,7 @@ def _save_settings(settings: dict) -> None:
 def _register_claude_hooks() -> None:
     """Read SETTINGS_FILE (or init to {}), add plugin reference + hook commands.
 
-    Registering the local plugin (path → ~/.arize/harness/tracing/claude_code)
+    Registering the local plugin (path → ~/.arize/harness/share/claude_code)
     makes Claude Code auto-load its bundled hooks even in non-interactive
     (-p) mode, where ``--setting-sources`` defaults to ``project,local`` and
     user-level hooks would otherwise be skipped.

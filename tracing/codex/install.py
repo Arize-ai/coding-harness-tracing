@@ -35,6 +35,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.codex._toml import _toml_load_strict, _toml_write
 from tracing.codex.constants import (
     DISPLAY_NAME,
@@ -221,6 +222,7 @@ def install(with_skills: bool = False) -> None:
 
     # 2. Shared runtime + harness entry.
     ensure_shared_runtime()
+    install_share(HARNESS_NAME)
     config = load_config(str(CONFIG_FILE))
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
 
@@ -303,6 +305,7 @@ def uninstall() -> None:
     remove_harness_entry(HARNESS_NAME)
     info("Removed codex harness entry from config.json")
     unlink_skills(HARNESS_NAME)
+    remove_share(HARNESS_NAME)
     info("Unlinked skills")
     info("Codex tracing uninstalled")
 

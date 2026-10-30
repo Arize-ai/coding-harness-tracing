@@ -4,9 +4,10 @@
   inputs.py modules         every module imported by name at runtime, one per line:
                             each hook target in core/hook_table.py iter_hooks(), plus the
                             core.setup.status registration modules (status.py:62)
-  inputs.py data            data files found via __file__, as "<abs source>\t<dest in bundle>";
-                            a listed path that doesn't exist is reported on stderr, and any such
-                            path not in EXPECTED_MISSING makes it exit 1
+  inputs.py data            data files found via __file__, as "<abs source>\t<dest in bundle>":
+                            every SHARE_FILES entry (core/setup/share.py), plus DATA; a listed path
+                            that doesn't exist is reported on stderr, and any such path not in
+                            EXPECTED_MISSING makes it exit 1
   inputs.py hooks           the exact `arize-harness hook --list` output a complete build must print
   inputs.py check EXE       smoke-test a build: `hook --list` must match `hooks` exactly, and every
                             hook must load (--list only prints the table, which is plain data, so a
@@ -31,10 +32,11 @@ REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO))
 
 from core.hook_table import iter_hooks  # noqa: E402
+from core.setup.share import SHARE_FILES, package_glob  # noqa: E402
 
-# Located via Path(__file__).parent in tracing/{opencode,omp}/constants.py, */install.py
-# and tracing/devin/install.py:113. Dest mirrors the package path so __file__ math still works.
-DATA = ["tracing/opencode/plugin/arize-tracing.ts", "tracing/omp/plugin/arize-tracing.ts", "tracing/devin/skills"]
+# Located via Path(__file__).parent in tracing/devin/install.py:113. SHARE_FILES entries are
+# found the same way by core/setup/share.py. Dest mirrors the package path so __file__ math still works.
+DATA = ["tracing/devin/skills"]
 # Listed in DATA but absent on purpose: the repo ships no devin skills yet ("This harness ships no
 # skills yet", tracing/devin/install.py). Any other missing path fails `inputs.py data`.
 EXPECTED_MISSING = {"tracing/devin/skills"}
@@ -55,6 +57,14 @@ def modules():
 
 def data():
     missing = 0
+    for sub, patterns in SHARE_FILES.items():
+        for pattern in patterns:
+            files = package_glob(REPO / "tracing" / sub, pattern)
+            if not files:
+                print(f"build_inputs: data path missing, not included: tracing/{sub}/{pattern}", file=sys.stderr)
+                missing += 1
+            for f in files:
+                print(f"{f}\t{f.relative_to(REPO)}")
     for rel in DATA:
         src = REPO / rel
         if not src.exists():

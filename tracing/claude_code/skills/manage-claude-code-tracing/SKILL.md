@@ -206,7 +206,7 @@ Ask the user which backend they want. If they don't have credentials yet, walk t
 
 Ask the user: **"Have you already installed this plugin via the Claude Code CLI?"**
 
-**If yes (already installed via the `install.sh` / `install.bat` flow):** The plugin lives inside the harness install directory at `~/.arize/harness/tracing/claude_code`.
+**If yes (already installed via the `install.sh` / `install.bat` flow):** The plugin lives inside the harness install directory at `~/.arize/harness/share/claude_code`.
 
 **If yes (installed via the Claude marketplace):** They can reference it from the CLI cache. Tell them to check `~/.claude/plugins/installed_plugins.json` for the exact path.
 
@@ -253,7 +253,7 @@ Give the user the appropriate snippet to add to their application. They must use
 ```python
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
-PLUGIN_PATH = "./coding-harness-tracing/tracing/claude_code"  # or ~/.arize/harness/tracing/claude_code if installed via install.sh
+PLUGIN_PATH = "./coding-harness-tracing/tracing/claude_code"  # or ~/.arize/harness/share/claude_code if installed via install.sh
 
 options = ClaudeAgentOptions(
     plugins=[{"type": "local", "path": PLUGIN_PATH}],
@@ -269,7 +269,7 @@ async with ClaudeSDKClient(options=options) as client:
 ```typescript
 import { ClaudeSDKClient } from "@anthropic-ai/claude-agent-sdk";
 
-const PLUGIN_PATH = "./coding-harness-tracing/tracing/claude_code"; // or ~/.arize/harness/tracing/claude_code if installed via install.sh
+const PLUGIN_PATH = "./coding-harness-tracing/tracing/claude_code"; // or ~/.arize/harness/share/claude_code if installed via install.sh
 
 const client = new ClaudeSDKClient({
   plugins: [{ type: "local", path: PLUGIN_PATH }],

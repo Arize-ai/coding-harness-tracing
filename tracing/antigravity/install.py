@@ -34,6 +34,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.antigravity import constants as _c
 
 # ---------------------------------------------------------------------------
@@ -145,6 +146,7 @@ def _uninstall_hooks() -> None:
 def install() -> None:
     """Install Antigravity tracing hooks and register in config.json."""
     ensure_shared_runtime()
+    install_share(_c.HARNESS_NAME)
 
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{_c.HARNESS_NAME}")
@@ -180,6 +182,7 @@ def uninstall() -> None:
 
     remove_harness_entry(_c.HARNESS_NAME)
     unlink_skills(_c.HARNESS_NAME)
+    remove_share(_c.HARNESS_NAME)
     info("Antigravity tracing uninstalled")
 
 

@@ -23,6 +23,7 @@ from core.setup import (
     venv_bin,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.cursor.constants import (
     DISPLAY_NAME,
     HARNESS_BIN,
@@ -41,6 +42,7 @@ def install(with_skills: bool = False) -> None:
         return
 
     ensure_shared_runtime()
+    install_share(HARNESS_NAME)
 
     # Create cursor state dir
     state_dir = INSTALL_DIR / "state" / HARNESS_NAME
@@ -86,6 +88,7 @@ def uninstall() -> None:
     _unregister_cursor_hooks()
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
+    remove_share(HARNESS_NAME)
     info("Cursor tracing uninstalled")
 
 

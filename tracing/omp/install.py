@@ -21,13 +21,13 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-from pathlib import Path
 
 import tracing.omp.constants as omp_constants
 from core.config import get_value, load_config
 from core.setup import dry_run, ensure_shared_runtime
 from core.setup import err as _err
 from core.setup import (
+    harness_dir,
     info,
     merge_harness_entry,
     prompt_backend,
@@ -40,6 +40,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 
 # Header-marker the installer writes into the shim and checks on uninstall so
 # we never delete a user's own extension file.
@@ -75,16 +76,13 @@ def _settings_file():
 
 
 def _plugin_source():
-    """Resolve the bundled shim asset relative to THIS installer file.
+    """The plugin asset in share/omp/, where install_share() copies it.
 
-    Deliberately NOT via ``constants.PLUGIN_SOURCE``: at runtime the shell router
-    executes install.py from the rsynced ~/.arize/harness tree (where the .ts
-    ships alongside it), while ``tracing.omp.constants`` is imported from the venv
-    site-packages copy, which does not carry the data asset. Resolving from
-    install.py's own location works in every delivery (repo, INSTALL_DIR) and
-    avoids the FileNotFoundError seen in real installs.
+    Deliberately NOT via ``constants.PLUGIN_SOURCE`` or this file's own folder:
+    on a wheel install there is no source tree next to install.py, and share/
+    holds the same file on every install type.
     """
-    return Path(__file__).resolve().parent / "plugin" / "arize-tracing.ts"
+    return harness_dir(omp_constants.HARNESS_NAME) / "plugin" / "arize-tracing.ts"
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +227,7 @@ def _unregister_extension() -> None:
 def install(with_skills: bool = False) -> None:
     """Install the omp tracing shim and register in config.json."""
     ensure_shared_runtime()
+    install_share(omp_constants.HARNESS_NAME)
 
     config = load_config()
     existing_entry = get_value(config, f"harnesses.{omp_constants.HARNESS_NAME}")
@@ -269,6 +268,7 @@ def uninstall() -> None:
 
     remove_harness_entry(omp_constants.HARNESS_NAME)
     unlink_skills(omp_constants.HARNESS_NAME)
+    remove_share(omp_constants.HARNESS_NAME)
     info("omp tracing uninstalled")
 
 

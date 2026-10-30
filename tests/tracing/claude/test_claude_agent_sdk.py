@@ -45,7 +45,7 @@ def test_includes_local_plugin_by_default(monkeypatch):
     assert kwargs["setting_sources"] == ["user"]
     assert len(kwargs["plugins"]) == 1
     assert kwargs["plugins"][0]["type"] == "local"
-    assert kwargs["plugins"][0]["path"].endswith("tracing/claude_code")
+    assert kwargs["plugins"][0]["path"].endswith("share/claude_code")
 
 
 def test_user_plugins_appended_not_replaced(monkeypatch):
@@ -61,7 +61,7 @@ def test_user_plugins_appended_not_replaced(monkeypatch):
     _, kwargs = fake_options_cls.call_args
     assert len(kwargs["plugins"]) == 2
     paths = [p["path"] for p in kwargs["plugins"]]
-    assert any(p.endswith("tracing/claude_code") for p in paths)
+    assert any(p.endswith("share/claude_code") for p in paths)
     assert "/other" in paths
 
 
@@ -110,7 +110,7 @@ def test_plugin_path_uses_install_dir(monkeypatch):
     agent_sdk.claude_options()
 
     _, kwargs = fake_options_cls.call_args
-    assert kwargs["plugins"][0]["path"] == str(custom_dir / "tracing" / "claude_code")
+    assert kwargs["plugins"][0]["path"] == str(custom_dir / "share" / "claude_code")
 
 
 def test_empty_user_plugins_list(monkeypatch):

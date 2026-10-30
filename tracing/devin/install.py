@@ -37,6 +37,7 @@ from core.setup import (
     write_config,
     write_logging_config,
 )
+from core.setup.share import install_share, remove_share
 from tracing.devin.constants import (
     CONFIG_FILE,
     DISPLAY_NAME,
@@ -62,6 +63,7 @@ def install(with_skills: bool = False) -> None:
         return
 
     ensure_shared_runtime()
+    install_share(HARNESS_NAME)
 
     # Per-harness state dir
     state_dir = INSTALL_DIR / "state" / HARNESS_NAME
@@ -105,6 +107,7 @@ def uninstall() -> None:
     _unregister_hooks()
     remove_harness_entry(HARNESS_NAME)
     unlink_skills(HARNESS_NAME)
+    remove_share(HARNESS_NAME)
     info("Devin tracing uninstalled")
 
 
