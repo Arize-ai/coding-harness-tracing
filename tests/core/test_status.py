@@ -393,3 +393,39 @@ class TestCli:
         out = capsys.readouterr().out
         assert "super-secret-key" not in out
         assert "API key:  present" in out
+
+
+class TestOpencodePluginRegistration:
+    """The opencode plugin builds the install path at run time (join(homedir(), ...)),
+    so only a home-relative literal can appear in the file."""
+
+    def test_shipped_opencode_plugin_counts_as_registered(self, status_paths, tmp_path, monkeypatch):
+        from core.setup import status as status_mod
+        from tracing.opencode.constants import PLUGIN_SOURCE
+
+        home = tmp_path / "home"
+        install_dir = home / ".arize" / "harness"
+        install_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setattr(status_mod, "INSTALL_DIR", install_dir)
+
+        plugin = tmp_path / "arize-tracing.ts"
+        plugin.write_text(PLUGIN_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [plugin])
+
+        assert status_mod._registration_state("opencode") == (True, str(plugin))
+
+    def test_home_relative_sibling_does_not_count(self, status_paths, tmp_path, monkeypatch):
+        from core.setup import status as status_mod
+
+        home = tmp_path / "home"
+        install_dir = home / ".arize" / "harness"
+        install_dir.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setattr(status_mod, "INSTALL_DIR", install_dir)
+
+        plugin = tmp_path / "plugin.ts"
+        plugin.write_text("// stale: ~/.arize/harness-old/venv\n", encoding="utf-8")
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [plugin])
+
+        assert status_mod._registration_state("opencode") == (False, str(plugin))

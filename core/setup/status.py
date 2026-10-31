@@ -103,6 +103,13 @@ def _references_install(path: Path) -> bool:
         base.replace("\\", "\\\\") + "\\\\",  # Windows inside JSON
         base.replace("\\", "/") + "/",  # Windows with forward slashes
     }
+    # Some shipped files cannot hold the absolute path: the opencode plugin
+    # builds it at run time from ``homedir()``, so the only literal it can carry
+    # is the home-relative spelling in a comment (``~/.arize/harness/``).
+    try:
+        markers.add("~/" + INSTALL_DIR.relative_to(Path.home()).as_posix() + "/")
+    except ValueError:
+        pass
 
     if path.is_symlink():
         try:
