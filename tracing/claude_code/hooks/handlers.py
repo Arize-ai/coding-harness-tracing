@@ -661,6 +661,156 @@ def _agent_id_from_tool(event: ToolEvent) -> str:
     return agent_id if isinstance(agent_id, str) else ""
 
 
+# Background (async) subagents: the Agent tool returns ``async_launched`` at
+# once and the subagent stops after the launching turn was exported, often
+# while no turn is open. The launching turn records where its Agent span went;
+# SubagentStop then exports the subagent tree under that span directly.
+ASYNC_SUBAGENTS_KEY = "async_subagents"
+
+
+def _async_launched_agent_id(event) -> str:
+    if not isinstance(event, ToolEvent) or not isinstance(event.output, dict):
+        return ""
+    result = event.output.get("toolUseResult")
+    if not isinstance(result, dict):
+        return ""
+    if result.get("isAsync") is not True and result.get("status") != "async_launched":
+        return ""
+    agent_id = result.get("agentId")
+    return agent_id if isinstance(agent_id, str) else ""
+
+
+def _async_subagents(state) -> dict[str, dict]:
+    return _decode_pending_subagents(state.get(ASYNC_SUBAGENTS_KEY) or "")
+
+
+def _remember_async_subagents(
+    state,
+    graph,
+    span_ids: dict[str, str],
+    trace_id: str,
+    matched: dict[str, dict],
+) -> None:
+    """Record the exported Agent span of every async launch still running."""
+    launches: dict[str, dict] = {}
+    for event in graph.events:
+        agent_id = _async_launched_agent_id(event)
+        if not agent_id or agent_id in matched:
+            continue
+        span_id = span_ids.get(event.event_id)
+        if not span_id:
+            continue
+        prompt = event.input.get("prompt") if isinstance(event.input, dict) else None
+        launches[agent_id] = {
+            "trace_id": trace_id,
+            "parent_span_id": span_id,
+            "turn_id": event.turn_id,
+            "launched_at_ms": event.started_at_ms,
+            "prompt": prompt if isinstance(prompt, str) else None,
+        }
+    if not launches or state.state_file is None:
+        return
+    try:
+        with state._lock():
+            data = state._read_safe()
+            current = _decode_pending_subagents(data.get(ASYNC_SUBAGENTS_KEY, ""))
+            current.update(launches)
+            data[ASYNC_SUBAGENTS_KEY] = json.dumps(current, sort_keys=True)
+            state._write(data)
+    except Exception as exc:
+        error(f"Failed to record async subagent launches: {exc}")
+
+
+def _forget_async_subagent(state, agent_id: str) -> None:
+    if state.state_file is None:
+        return
+    try:
+        with state._lock():
+            data = state._read_safe()
+            current = _decode_pending_subagents(data.get(ASYNC_SUBAGENTS_KEY, ""))
+            current.pop(agent_id, None)
+            if current:
+                data[ASYNC_SUBAGENTS_KEY] = json.dumps(current, sort_keys=True)
+            else:
+                data.pop(ASYNC_SUBAGENTS_KEY, None)
+            data.pop(f"subagent_{agent_id}_start_time", None)
+            data.pop(f"subagent_{agent_id}_prompt", None)
+            state._write(data)
+    except Exception as exc:
+        error(f"Failed to clean up async subagent {agent_id}: {exc}")
+
+
+def _export_async_subagent(state, input_json: dict) -> bool:
+    """Export a background subagent under its launching Agent span.
+
+    Returns True when the subagent belongs to a recorded async launch, whether
+    or not the export succeeded, so the caller does not buffer it for a turn
+    that will never contain its Agent tool.
+    """
+    agent_id = input_json.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id:
+        return False
+    launch = _async_subagents(state).get(agent_id)
+    if launch is None:
+        return False
+    trace_id = launch.get("trace_id")
+    parent_span_id = launch.get("parent_span_id")
+    transcript_path = input_json.get("agent_transcript_path")
+    if not isinstance(trace_id, str) or not isinstance(parent_span_id, str):
+        _forget_async_subagent(state, agent_id)
+        return True
+    if not isinstance(transcript_path, str) or not Path(transcript_path).is_file():
+        return False
+
+    ended_at_ms = get_timestamp_ms()
+    stored_start = str(state.get(f"subagent_{agent_id}_start_time") or "")
+    launched_at = launch.get("launched_at_ms")
+    started_at_ms = int(stored_start) if stored_start.isdigit() else launched_at
+    agent_event = AgentEvent(
+        event_id=f"agent:{agent_id}",
+        session_id=state.get("session_id") or input_json.get("session_id") or "",
+        turn_id=str(launch.get("turn_id") or ""),
+        sequence=0,
+        started_at_ms=started_at_ms if isinstance(started_at_ms, int) else None,
+        ended_at_ms=ended_at_ms,
+        status=EventStatus.COMPLETED,
+        input=launch.get("prompt") or state.get(f"subagent_{agent_id}_prompt") or None,
+        output=input_json.get("last_assistant_message") or "",
+        agent_id=agent_id,
+        source_id=input_json.get("agent_type") or "unknown",
+    )
+    graph = parse_claude_transcript(Path(transcript_path), agent_event)
+    graph.validate()
+    ends = [
+        int(event.ended_at_ms)
+        for event in graph.events
+        if isinstance(event.ended_at_ms, (int, float))
+        and not isinstance(event.ended_at_ms, bool)
+        and math.isfinite(event.ended_at_ms)
+    ]
+    if ends:
+        agent_event.ended_at_ms = max(ended_at_ms, *ends)
+
+    user_id = state.get("user_id") or ""
+    extra = {agent_event.event_id: {"user.id": user_id}} if user_id else None
+    payload = render_event_graph(
+        graph,
+        trace_id=trace_id,
+        service_name=SERVICE_NAME,
+        scope_name=SCOPE_NAME,
+        extra_attributes=extra,
+    )
+    for scope in payload.get("resourceSpans", [{}])[0].get("scopeSpans", []):
+        for span in scope.get("spans", []):
+            if not span.get("parentSpanId"):
+                span["parentSpanId"] = parent_span_id
+    if send_span(payload) is False:
+        error(f"Failed to export async subagent {agent_id}")
+        return True
+    _forget_async_subagent(state, agent_id)
+    return True
+
+
 def _merge_pending_subagents(graph, descriptors: dict[str, dict]) -> dict[str, dict]:
     """Insert correlated foreground agent graphs and return exported descriptors."""
     matched: dict[str, dict] = {}
@@ -920,6 +1070,7 @@ def _handle_stop(input_json: dict) -> None:
             )
             if send_span(payload) is False:
                 return
+            _remember_async_subagents(state, graph, span_id_overrides, trace_id, matched_subagents)
             _acknowledge_exported_turn(state, trace_id, matched_observations, matched_subagents)
             _periodic_gc(trace_count)
             return
@@ -993,6 +1144,10 @@ def _handle_subagent_start(input_json: dict) -> None:
 def _handle_subagent_stop(input_json: dict) -> None:
     """Handle subagent_stop: parse subagent transcript and send CHAIN span."""
     state = resolve_session(input_json)
+    # A background subagent outlives the turn that launched it: export it under
+    # that turn's Agent span, even if no turn is open now.
+    if _export_async_subagent(state, input_json):
+        return
     trace_id = state.get("current_trace_id")
     if trace_id is None:
         return
