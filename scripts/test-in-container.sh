@@ -13,7 +13,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Pinned, so every run uses the same uv.
-UV_VERSION="0.11.24"
+UV_VERSION="0.13.5"
+PIP_WHEEL_URL="https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 
 die() { echo "test-in-container: $*" >&2; exit 1; }
 
@@ -46,6 +47,16 @@ if ! "$engine" info >/dev/null 2>&1; then
     die "$engine is not running. Start it and retry, or run scripts/smoke-install.sh directly."
 fi
 
+# The container copies the checkout without .git, so compute the version here,
+# on the host, and pass it in. smoke-install.sh builds with it.
+version="${SETUPTOOLS_SCM_PRETEND_VERSION:-}"
+if [[ -z "$version" ]]; then
+    command -v uv >/dev/null || die "uv not found. Install it: https://docs.astral.sh/uv/"
+    version="$(cd "$ROOT" && uv tool run --quiet --from 'setuptools-scm>=8,<9' python -m setuptools_scm)" ||
+        die "could not compute the version from $ROOT"
+fi
+echo "test-in-container: building version $version"
+
 tty_flag=()
 [[ -t 0 && -t 1 ]] && tty_flag=(-it)
 [[ "${SMOKE_SHELL:-}" == 1 && ${#tty_flag[@]} -eq 0 ]] && die "SMOKE_SHELL=1 needs a terminal"
@@ -58,12 +69,15 @@ exec "$engine" run --rm "${tty_flag[@]+"${tty_flag[@]}"}" \
     --security-opt label=disable \
     -v "$ROOT:/src:ro" \
     -e UV_VERSION="$UV_VERSION" \
+    -e SETUPTOOLS_SCM_PRETEND_VERSION="$version" \
+    -e PIP_WHEEL_URL="$PIP_WHEEL_URL" \
     -e SMOKE_SHELL="${SMOKE_SHELL:-}" \
     -e SMOKE_KEEP="${SMOKE_SHELL:+1}" \
     "$image" bash -c '
         set -euo pipefail
         '"$prep"'
         python3 -m venv /opt/uv
+        /opt/uv/bin/python -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "$PIP_WHEEL_URL"
         /opt/uv/bin/pip install --quiet --disable-pip-version-check "uv==$UV_VERSION"
         ln -s /opt/uv/bin/uv /usr/local/bin/uv
         mkdir /tmp/src

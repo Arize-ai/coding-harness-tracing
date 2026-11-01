@@ -1,0 +1,5 @@
+# Build tools for build/nuitka.sh. build/common.sh installs them, plus this checkout, into
+# .workbench/bt-<arch> on the pinned interpreter. Exact pins: upgrading Nuitka is a deliberate change.
+nuitka==4.3
+ordered-set==4.1.0
+python-dotenv==1.2.4

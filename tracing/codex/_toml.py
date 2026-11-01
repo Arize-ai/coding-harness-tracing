@@ -8,16 +8,10 @@ into ``install.py``.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
-_tomllib = None
-try:
-    import tomllib as _tomllib  # type: ignore[no-redef]
-except ImportError:
-    try:
-        import tomli as _tomllib  # type: ignore[no-redef]
-    except ImportError:
-        pass
+_tomllib = tomllib
 
 _ARIZE_OTLP_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
 """Legacy-only heuristic for the v1 cleanup path.

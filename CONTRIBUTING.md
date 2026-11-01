@@ -46,7 +46,7 @@ The repo also ships `.githooks/pre-commit`. If you already set `core.hooksPath` 
 
 ## Run tests and lint
 
-These two commands are the local gates. CI runs the same pytest invocation on Python 3.9 through 3.14, and the same pre-commit hooks.
+These two commands are the local gates. CI runs the same pytest invocation on Python 3.11 through 3.14, and the same pre-commit hooks.
 
 ```bash
 uv run pytest tests/ -m "not slow"
@@ -79,10 +79,10 @@ scripts/smoke-install.sh
 
 It builds a wheel from your checkout, installs it with `install.sh --wheel-dir --non-interactive` into a throwaway `HOME` with placeholder credentials, and then checks `status --json`, `update` and `uninstall`. Your real `~/.claude/settings.json` and `~/.arize/harness` are not touched, and neither is the checkout. CI's `unix-offline` job runs this same script on Linux and macOS, so a CI failure there reproduces with this command. The harness defaults to `claude`. Pass another one to test it, for example `scripts/smoke-install.sh copilot`.
 
-CI installs with Python 3.9. To match it:
+CI installs with Python 3.11. To match it:
 
 ```bash
-UV_PYTHON=3.9 scripts/smoke-install.sh
+UV_PYTHON=3.11 scripts/smoke-install.sh
 ```
 
 To inspect the install afterwards, set `SMOKE_KEEP=1`. The script then skips the uninstall, leaves the throwaway `HOME` in place and, pass or fail, prints its path along with the commands to run `status` against it and to delete it:
@@ -110,6 +110,10 @@ podman machine start
 
 After a restart, run `podman machine start` again. If Podman is not installed, the helper falls back to any `docker` CLI, for example on [Colima](https://github.com/abiosoft/colima). Set `CONTAINER_ENGINE` to pick one yourself.
 
+## Versions
+
+The package version comes from git tags (setuptools-scm), so don't change a version in your PR. Untagged commits build as development versions like `0.2.1.dev3+g1a2b3c4`, and builds without `.git` report `0.0.0`. In code, read the version with `core.version()`; don't add another reader.
+
 ## Find the code you need
 
 Shared install, config, and OTLP code lives in `core/`. Each coding assistant lives under `tracing/<harness>/`. User-facing install docs live in `tracing/<harness>/README.md`. The git clone is the source tree. A user install lives under `~/.arize/harness/` and is a different tree.
@@ -130,7 +134,7 @@ Watch for these:
 - Most adapters read metadata from `core.constants.HARNESSES`. Kiro and Devin keep `SERVICE_NAME` and related fields in `tracing/<harness>/constants.py` instead. Copy the pattern the nearest harness already uses.
 - Claude Code's CLI name is `claude`. Its config key and `HARNESS_NAME` are `claude-code`. `install.sh` accepts both spellings in `harness_dir()`, and only `claude` as an install command.
 - Hook processes must stay on the stdlib. `python-dotenv` is the only PyPI dependency, and only `core/setup` imports it.
-- Python 3.9 is the floor. CI rejects 3.10-only syntax.
+- Python 3.11 is the floor. CI rejects 3.12-only syntax.
 
 ## Add a harness
 
