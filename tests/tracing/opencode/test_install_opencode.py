@@ -231,6 +231,13 @@ class TestPluginChildSessionContract:
         assert "if (!sessionInfo || sessionInfo.parentID) return" in plugin_source_text
 
 
+class TestPluginSpawnContract:
+    """Regression: every forwarded snapshot flashed a console window on Windows."""
+
+    def test_spawn_hides_the_windows_console_window(self, plugin_source_text):
+        assert "windowsHide: true" in plugin_source_text
+
+
 # ---------------------------------------------------------------------------
 # Install tests — second harness (copy-from)
 # ---------------------------------------------------------------------------
