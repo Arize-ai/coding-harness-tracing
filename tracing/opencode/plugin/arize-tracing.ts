@@ -22,6 +22,9 @@ import { spawn } from "node:child_process"
 import { homedir, platform } from "node:os"
 import { join } from "node:path"
 
+// The hook binary lives in the shared install venv under ~/.arize/harness/.
+// The path is assembled below from homedir(), so this literal is what
+// `install.sh status` looks for to tell that this plugin belongs to the install.
 function binaryPath(): string {
   const base = join(homedir(), ".arize", "harness", "venv")
   return platform() === "win32"
