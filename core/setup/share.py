@@ -23,7 +23,13 @@ from core.setup import dry_run, err, harness_dir, info
 # ships nothing (devin) is absent and gets no share/ folder.
 SHARE_FILES: dict[str, list[str]] = {
     "antigravity": ["skills/**/*"],
-    "claude_code": [".claude-plugin/plugin.json", "hooks/hooks.json", "scripts/run-hook", "pyproject.toml", "skills/**/*"],
+    "claude_code": [
+        ".claude-plugin/plugin.json",
+        "hooks/hooks.json",
+        "scripts/run-hook",
+        "pyproject.toml",
+        "skills/**/*",
+    ],
     "codex": ["skills/**/*"],
     "copilot": ["skills/**/*"],
     "cursor": [".cursor-plugin/plugin.json", "hooks/hooks.json", "scripts/run-hook", "pyproject.toml", "skills/**/*"],
