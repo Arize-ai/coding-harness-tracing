@@ -6,6 +6,7 @@ import json
 import shlex
 import sys
 
+import core.setup
 from core.config import load_config
 from core.setup import (
     dry_run,
@@ -188,14 +189,19 @@ def _unregister_claude_hooks() -> None:
     if not settings:
         return
 
-    plugin_dir = str(harness_dir("claude-code"))
+    # Ours: share/claude_code, and the source-tree path older releases registered.
+    plugin_dirs = {str(harness_dir("claude-code")), str(core.setup.INSTALL_DIR / "tracing" / "claude_code")}
 
     # Remove our plugin entries (drops empty list).
     if "plugins" in settings:
         settings["plugins"] = [
             p
             for p in settings["plugins"]
-            if not ((isinstance(p, str) and p == plugin_dir) or (isinstance(p, dict) and p.get("path") == plugin_dir))
+            if not (
+                (isinstance(p, str) and p in plugin_dirs)
+                # A non-string path isn't ours; keep it rather than fail on an unhashable value.
+                or (isinstance(p, dict) and isinstance(p.get("path"), str) and p["path"] in plugin_dirs)
+            )
         ]
         if not settings["plugins"]:
             del settings["plugins"]

@@ -12,6 +12,7 @@ import importlib
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import core
@@ -48,9 +49,21 @@ PLUGIN_HARNESSES = {"claude_code", "cursor"}
 # which scripts/run-hook runs instead of bootstrapping Python.
 RUNTIME_FILE = "runtime"
 
+# A leftover temp or old folder from another PID is removed only after this many
+# seconds without changes; a younger one may belong to a setup running right now.
+STALE_AFTER = 3600
+
 
 def _sub_name(harness: str) -> str:
     return harness.replace("-", "_")
+
+
+def _is_stale(path: Path) -> bool:
+    """True when path's mtime is older than STALE_AFTER; False if it's gone already."""
+    try:
+        return time.time() - path.stat().st_mtime > STALE_AFTER
+    except OSError:
+        return False
 
 
 def package_glob(root: Path, pattern: str) -> list[Path]:
@@ -107,8 +120,15 @@ def install_share(harness: str) -> None:
 
     tmp = dest.with_name(f".{sub}.tmp-{os.getpid()}")
     old = dest.with_name(f".{sub}.old-{os.getpid()}")
+    moved = False
     try:
-        shutil.rmtree(tmp, ignore_errors=True)
+        # Leftovers of this harness from interrupted runs. One named with this PID
+        # predates this run, so no live run owns it; any other may belong to a
+        # setup running right now, so it goes only once it's stale.
+        for pattern in (f".{sub}.tmp-*", f".{sub}.old-*"):
+            for leftover in dest.parent.glob(pattern):
+                if leftover in (tmp, old) or _is_stale(leftover):
+                    shutil.rmtree(leftover, ignore_errors=True)
         for rel, src in sources.items():
             target = tmp / rel
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -119,8 +139,15 @@ def install_share(harness: str) -> None:
                 (tmp / RUNTIME_FILE).write_text(sys.executable + "\n")
         if dest.exists():
             os.replace(dest, old)
+            moved = True
         os.replace(tmp, dest)
     except OSError as exc:
+        if moved:
+            # Put the previous copy back, so a failed setup leaves it in place.
+            try:
+                os.replace(old, dest)
+            except OSError:
+                err(f"could not restore {dest}; the previous copy is in {old}")
         shutil.rmtree(tmp, ignore_errors=True)
         err(f"could not write {exc.filename or dest}: {exc.strerror or exc}")
         sys.exit(1)

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+import errno
 import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -144,6 +146,69 @@ class TestInstallShare:
             (install_dir / "share").chmod(0o700)
         assert exc.value.code == 1
         assert str(install_dir / "share") in capsys.readouterr().err
+
+    def test_failed_swap_keeps_previous_copy(self, install_dir, monkeypatch, capsys):
+        """If tmp can't be renamed into place, the previous share/<harness>/ is put back."""
+        share.install_share("codex")
+        dest = install_dir / "share" / "codex"
+        (dest / "marker").write_text("previous copy")
+        before = _files(dest)
+        real_replace = os.replace
+
+        def failing_replace(src, dst):
+            if Path(src).name.startswith(".codex.tmp-"):
+                raise OSError(errno.EACCES, "Permission denied", str(dst))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(share.os, "replace", failing_replace)
+        with pytest.raises(SystemExit) as exc:
+            share.install_share("codex")
+
+        assert exc.value.code == 1
+        assert str(dest) in capsys.readouterr().err
+        assert _files(dest) == before
+        assert (dest / "marker").read_text() == "previous copy"
+        assert sorted(p.name for p in (install_dir / "share").iterdir()) == ["codex"]
+
+    @staticmethod
+    def _make(root: Path, names: list[str], age: float = 0) -> None:
+        for name in names:
+            (root / name / "skills").mkdir(parents=True)
+            (root / name / "skills" / "file").write_text(name)
+            if age:
+                stamp = time.time() - age
+                os.utime(root / name, (stamp, stamp))
+
+    def test_clears_stale_and_own_pid_leftovers_only(self, install_dir):
+        """Stale leftovers go, and so does one with this PID even if fresh; other harnesses' folders stay."""
+        share.install_share("codex")
+        root = install_dir / "share"
+        stale = [".codex.tmp-99999", ".codex.old-99999"]
+        own_pid = [f".codex.old-{os.getpid()}", f".codex.tmp-{os.getpid()}"]
+        others = [".gemini.tmp-99999", ".gemini.old-1", "gemini"]
+        self._make(root, stale + [".gemini.tmp-99999", ".gemini.old-1"], age=share.STALE_AFTER + 60)
+        self._make(root, own_pid + ["gemini"])
+
+        share.install_share("codex")
+
+        assert sorted(p.name for p in root.iterdir()) == sorted(["codex"] + others)
+        assert _files(root / "codex") == _shipped("codex")
+        for name in others:
+            assert (root / name / "skills" / "file").read_text() == name
+
+    def test_keeps_fresh_leftover_from_another_pid(self, install_dir):
+        """A young .tmp/.old from another PID may be a setup running now, so it stays."""
+        share.install_share("codex")
+        root = install_dir / "share"
+        fresh = [".codex.tmp-99999", ".codex.old-99998"]
+        self._make(root, fresh, age=share.STALE_AFTER - 60)
+
+        share.install_share("codex")
+
+        assert sorted(p.name for p in root.iterdir()) == sorted(["codex"] + fresh)
+        assert _files(root / "codex") == _shipped("codex")
+        for name in fresh:
+            assert (root / name / "skills" / "file").read_text() == name
 
     def test_binary_install_has_no_python_and_writes_runtime(self, install_dir, monkeypatch):
         monkeypatch.setattr(share, "is_binary", lambda: True)

@@ -399,6 +399,50 @@ class TestUninstall:
             }
             assert entries[1] == {"matcher": "empty", "hooks": []}
 
+    def test_uninstall_removes_legacy_and_share_plugin_entries(self, fake_home):
+        """Both our plugin paths go, in either shape; an unrelated plugin and a lookalike path stay."""
+        import tracing.claude_code.install as claude_install
+
+        install_dir = fake_home / ".arize" / "harness"
+        legacy = str(install_dir / "tracing" / "claude_code")
+        share = str(install_dir / "share" / "claude_code")
+        unrelated = {"type": "local", "path": str(fake_home / "my-plugin")}
+        lookalike = {"type": "local", "path": legacy + "-fork"}
+        settings_file = fake_home / ".claude" / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "plugins": [
+                        legacy,
+                        {"type": "local", "path": legacy},
+                        share,
+                        {"type": "local", "path": share},
+                        unrelated,
+                        lookalike,
+                    ]
+                }
+            )
+        )
+
+        claude_install._unregister_claude_hooks()
+
+        assert json.loads(settings_file.read_text())["plugins"] == [unrelated, lookalike]
+
+    def test_uninstall_keeps_plugin_entry_with_non_string_path(self, fake_home):
+        """An entry whose path isn't a string isn't ours: uninstall succeeds and leaves it."""
+        import tracing.claude_code.install as claude_install
+
+        odd = {"type": "local", "path": ["a", "b"]}
+        share = str(fake_home / ".arize" / "harness" / "share" / "claude_code")
+        settings_file = fake_home / ".claude" / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(json.dumps({"plugins": [odd, {"type": "local", "path": share}]}))
+
+        claude_install._unregister_claude_hooks()
+
+        assert json.loads(settings_file.read_text())["plugins"] == [odd]
+
     def test_uninstall_removes_hooks_and_config(self, fake_home, monkeypatch):
         """Uninstall removes hooks, plugin, and harness entry from config.json."""
         import tracing.claude_code.install as claude_install
