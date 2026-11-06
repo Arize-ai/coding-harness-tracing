@@ -886,72 +886,41 @@ def list_installed_harnesses() -> list[str]:
 def harness_dir(harness: str) -> Path:
     """Return the absolute path of <install-dir>/tracing/<harness>/.
 
-    Maps a harness alias (e.g. ``claude-code``) to its directory name
-    (``claude_code``) under ``~/.arize/harness/tracing/``.
+    Where install.sh's source tree put each harness. Setup no longer reads from
+    it; only cleanup of what older installs registered there uses it.
     """
     sub_name = harness.replace("-", "_")
     return INSTALL_DIR / "tracing" / sub_name
 
 
-def symlink_skills(harness: str, target_dir: Path | None = None) -> None:
-    """Symlink <install-dir>/tracing/<harness>/skills/* into target_dir/.agents/skills/.
+def install_skills(harness: str, target_dir: Path | None = None) -> None:
+    """Copy <harness>'s packaged skills into target_dir/.agents/skills/ (default: cwd).
 
-    target_dir defaults to the current working directory. Idempotent (skip
-    existing links pointing at the right target). Does nothing if the harness
-    has no skills/ directory.
+    Copies, never symlinks, and replaces our old symlinks there. Each file is
+    recorded in the manifest, so ``remove_harness_files`` removes it again.
     """
-    hdir = harness_dir(harness)
-    skills_src = hdir / "skills"
+    from core.setup.assets import install_skills as _install_skills
 
-    if not skills_src.is_dir():
-        return
-
-    if target_dir is None:
-        target_dir = Path.cwd()
-
-    dest = target_dir / ".agents" / "skills"
-
-    if dry_run():
-        for item in skills_src.iterdir():
-            info(f"would symlink {dest / item.name} -> {item}")
-        return
-
-    dest.mkdir(parents=True, exist_ok=True)
-
-    for item in skills_src.iterdir():
-        link = dest / item.name
-        if link.is_symlink():
-            if link.resolve() == item.resolve():
-                continue  # already correct
-            link.unlink()
-        elif link.exists():
-            continue  # regular file — don't overwrite
-        link.symlink_to(item)
+    _install_skills(harness, target_dir)
 
 
-def unlink_skills(harness: str, target_dir: Path | None = None) -> None:
-    """Remove symlinks created by symlink_skills() for <harness>.
+def remove_harness_files(harness: str, target_dir: Path | None = None) -> None:
+    """Remove every file setup wrote for <harness> (per the manifest), and our old skill symlinks.
 
-    Only removes symlinks, never regular files. Idempotent.
+    The old symlinks are the ones pre-manifest installs made in
+    target_dir/.agents/skills/ (default: cwd) into ~/.arize/harness/tracing/.
+    Nothing else is removed. Idempotent; honors ARIZE_DRY_RUN.
+
+    Exits 1 (``AssetError``) when a recorded file could not be removed; it
+    stays in the manifest, so running uninstall again retries it.
     """
-    hdir = harness_dir(harness)
-    skills_src = hdir / "skills"
+    from core.setup.assets import AssetError, manifest_path, remove_old_skill_links, uninstall_files
 
-    if not skills_src.is_dir():
-        return
-
-    if target_dir is None:
-        target_dir = Path.cwd()
-
-    dest = target_dir / ".agents" / "skills"
-
-    if not dest.is_dir():
-        return
-
-    for item in skills_src.iterdir():
-        link = dest / item.name
-        if link.is_symlink():
-            if dry_run():
-                info(f"would unlink {link}")
-            else:
-                link.unlink()
+    remove_old_skill_links(harness, target_dir)
+    if not uninstall_files(harness):
+        message = (
+            f"some files setup wrote for {harness} could not be removed (listed above); they stay in "
+            f"{manifest_path()} so `arize-harness uninstall {harness}` can retry"
+        )
+        err(message)
+        raise AssetError(message)

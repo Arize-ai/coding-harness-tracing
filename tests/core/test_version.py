@@ -252,13 +252,16 @@ class TestBuilds:
         assert _build(repo, tmp_path / "dist") == ("0.2.0", "0.2.0")
         assert _installed_version(tmp_path / "dist", tmp_path) == "0.2.0"
 
-    def test_wheel_holds_python_modules_only(self, repo, tmp_path):
-        """setuptools-scm's git file finder must not add tracked data files to the wheel."""
+    def test_wheel_holds_python_modules_and_listed_package_data_only(self, repo, tmp_path):
+        """setuptools-scm's git file finder must not add other tracked data files to the wheel."""
+        from core.setup.assets import PACKAGE_FILES
+
         _build(repo, tmp_path / "dist")
         (wheel,) = (tmp_path / "dist").glob("*.whl")
         names = zipfile.ZipFile(wheel).namelist()
         assert "core/_version.py" in names
-        assert [n for n in names if not n.endswith(".py") and ".dist-info/" not in n] == []
+        listed = {f"tracing/{sub}/{rel}" for sub, files in PACKAGE_FILES.items() for rel in files}
+        assert {n for n in names if not n.endswith(".py") and ".dist-info/" not in n} == listed
 
     def test_commit_after_tag_builds_next_dev_version(self, repo, tmp_path):
         _git(repo, "tag", "-a", "v0.2.0", "-m", "v0.2.0")

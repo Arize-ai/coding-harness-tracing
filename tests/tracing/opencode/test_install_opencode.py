@@ -9,6 +9,7 @@ uninstall deletes it (only when it's our file — header-marker guard).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -110,8 +111,10 @@ def plugin_file(cwd_tmp):
 
 @pytest.fixture
 def plugin_source_text(cwd_tmp):
-    """Return the text contents of the shipped plugin source asset."""
-    return _oc.PLUGIN_SOURCE.read_text(encoding="utf-8")
+    """The shipped plugin source with the ``arize-harness hook`` command substituted, as install writes it."""
+    from core.setup.assets import plugin_ts
+
+    return plugin_ts("opencode", _oc.PLUGIN_SOURCE.read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +209,11 @@ class TestPluginSourceResolution:
         assert plugin_file.is_file()
         assert plugin_file.read_text(encoding="utf-8").startswith("// Arize opencode tracing plugin (shim).")
 
-    def test_plugin_source_points_at_existing_asset(self):
-        """_plugin_source() resolves to a file that actually exists on disk."""
-        src = _install._plugin_source()
-        assert src.is_file()
-        assert src.name == "arize-tracing.ts"
+    def test_plugin_source_is_package_data(self):
+        """The installer reads the .ts from the installed package, which ships the repo's file."""
+        from core.setup.assets import read_package_file
+
+        assert read_package_file("opencode", "plugin/arize-tracing.ts") == _oc.PLUGIN_SOURCE.read_bytes()
 
 
 class TestPluginChildSessionContract:
@@ -668,45 +671,42 @@ class TestInstallPromptsForLogging:
 
 
 class TestInstallSkillsWiring:
-    """install() honors with_skills and symlinks the management skill."""
+    """install() honors with_skills and copies the management skill."""
 
-    def test_install_with_skills_true_calls_symlink(self, cwd_tmp, monkeypatch):
+    def test_install_with_skills_true_copies_skills(self, cwd_tmp, monkeypatch):
         _mock_prompts(monkeypatch)
         calls = []
-        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        monkeypatch.setattr(_install, "install_skills", lambda harness: calls.append(harness))
         install(with_skills=True)
         assert calls == ["opencode"]
 
-    def test_install_default_does_not_symlink(self, cwd_tmp, monkeypatch):
+    def test_install_default_does_not_copy_skills(self, cwd_tmp, monkeypatch):
         _mock_prompts(monkeypatch)
         calls = []
-        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        monkeypatch.setattr(_install, "install_skills", lambda harness: calls.append(harness))
         install()
         assert calls == []
 
-    def test_install_with_skills_false_does_not_symlink(self, cwd_tmp, monkeypatch):
+    def test_install_with_skills_false_does_not_copy_skills(self, cwd_tmp, monkeypatch):
         _mock_prompts(monkeypatch)
         calls = []
-        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        monkeypatch.setattr(_install, "install_skills", lambda harness: calls.append(harness))
         install(with_skills=False)
         assert calls == []
 
-    def test_round_trip_creates_then_removes_symlink(self, cwd_tmp, monkeypatch):
-        """install --with-skills creates the symlink; uninstall removes it."""
+    def test_round_trip_copies_then_removes_skill(self, cwd_tmp, monkeypatch):
+        """install --with-skills copies the packaged skill; uninstall removes it."""
         _mock_prompts(monkeypatch)
-        # Stage a fake skills source under the temp INSTALL_DIR that
-        # harness_dir("opencode") resolves to.
-        skills_src = cwd_tmp / ".arize" / "harness" / "tracing" / "opencode" / "skills"
-        skill = skills_src / "manage-opencode-tracing"
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("# manage-opencode-tracing\n")
 
         install(with_skills=True)
-        link = cwd_tmp / ".agents" / "skills" / "manage-opencode-tracing"
-        assert link.is_symlink()
+        skill = cwd_tmp / ".agents" / "skills" / "manage-opencode-tracing"
+        assert not skill.is_symlink()
+        assert (skill / "SKILL.md").read_bytes() == (
+            Path(_install.__file__).parent / "skills" / "manage-opencode-tracing" / "SKILL.md"
+        ).read_bytes()
 
         uninstall()
-        assert not link.exists()
+        assert not skill.exists()
 
 
 class TestMainDispatchSkillsFlag:

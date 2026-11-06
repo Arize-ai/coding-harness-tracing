@@ -27,7 +27,7 @@ Snapshots repeat across firings — that's what dedup is for. There is no stream
 ## Setup
 The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and copies the plugin shim into `~/.config/opencode/plugin/arize-tracing.ts`. opencode auto-discovers plugins in that directory ([config docs](https://opencode.ai/docs/config/)) — no `opencode.json` edit is required. Spans are sent directly to the backend from the reconciler — no separate buffer/collector service is required.
 
-Pass `--with-skills` to also symlink the `manage-opencode-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage opencode tracing configuration.
+Pass `--with-skills` to also copy the `manage-opencode-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage opencode tracing configuration.
 
 ### Remote setup
 

@@ -29,7 +29,7 @@ Because omp's lifecycle events fire exactly once each and carry final data, ther
 
 The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, copies the hook shim into `~/.omp/extensions/arize-tracing.ts`, **and** registers the shim's absolute path in the `extensions` array of `~/.omp/agent/settings.json`. omp does **not** auto-discover an extensions directory ([extension loading docs](https://omp.sh/docs/hooks)) — explicit registration is required, and the installer handles it. Spans are sent directly to the backend from the handler — no separate buffer/collector service is required.
 
-Pass `--with-skills` to also symlink the `manage-omp-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage omp tracing configuration.
+Pass `--with-skills` to also copy the `manage-omp-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage omp tracing configuration.
 
 ### Remote setup
 

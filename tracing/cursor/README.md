@@ -5,7 +5,7 @@ Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for
 ## Setup
 The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers the hooks in `.cursor/hooks.json`.
 
-Pass `--with-skills` to also symlink the `manage-cursor-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Cursor tracing configuration.
+Pass `--with-skills` to also copy the `manage-cursor-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Cursor tracing configuration.
 
 ### Plugin install
 

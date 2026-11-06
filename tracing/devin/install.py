@@ -25,14 +25,14 @@ from core.setup import (
     ensure_shared_runtime,
     err,
     info,
+    install_skills,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    symlink_skills,
-    unlink_skills,
+    remove_harness_files,
     venv_bin,
     write_config,
     write_logging_config,
@@ -95,21 +95,21 @@ def install(with_skills: bool = False) -> None:
 
     info(f"Devin tracing installed.\n" f"  Hooks registered in: {CONFIG_FILE}\n")
 
-    # This harness ships no skills yet; only symlink if a skills dir exists.
+    # This harness ships no skills yet; only copy if a skills dir exists.
     if with_skills and _skills_dir_exists():
-        symlink_skills(HARNESS_NAME)
+        install_skills(HARNESS_NAME)
 
 
 def uninstall() -> None:
     """Remove our SessionEnd hook from Devin's global config, preserving the rest."""
     _unregister_hooks()
     remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
+    remove_harness_files(HARNESS_NAME)
     info("Devin tracing uninstalled")
 
 
 def _skills_dir_exists() -> bool:
-    """True when this harness ships a skills directory to symlink."""
+    """True when this harness ships a skills directory to copy."""
     return (Path(__file__).resolve().parent / "skills").is_dir()
 
 

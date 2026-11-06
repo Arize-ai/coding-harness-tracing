@@ -19,9 +19,7 @@ Usage (called by the shell router):
 from __future__ import annotations
 
 import json
-import shutil
 import sys
-from pathlib import Path
 
 import tracing.omp.constants as omp_constants
 from core.config import get_value, load_config
@@ -29,17 +27,18 @@ from core.setup import dry_run, ensure_shared_runtime
 from core.setup import err as _err
 from core.setup import (
     info,
+    install_skills,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    symlink_skills,
-    unlink_skills,
+    remove_harness_files,
     write_config,
     write_logging_config,
 )
+from core.setup.assets import install_plugin_ts
 
 # Header-marker the installer writes into the shim and checks on uninstall so
 # we never delete a user's own extension file.
@@ -72,19 +71,6 @@ def _settings_file():
     import tracing.omp.constants as _c
 
     return _c.SETTINGS_FILE
-
-
-def _plugin_source():
-    """Resolve the bundled shim asset relative to THIS installer file.
-
-    Deliberately NOT via ``constants.PLUGIN_SOURCE``: at runtime the shell router
-    executes install.py from the rsynced ~/.arize/harness tree (where the .ts
-    ships alongside it), while ``tracing.omp.constants`` is imported from the venv
-    site-packages copy, which does not carry the data asset. Resolving from
-    install.py's own location works in every delivery (repo, INSTALL_DIR) and
-    avoids the FileNotFoundError seen in real installs.
-    """
-    return Path(__file__).resolve().parent / "plugin" / "arize-tracing.ts"
 
 
 # ---------------------------------------------------------------------------
@@ -133,15 +119,11 @@ def _write_settings(data: dict) -> None:
 
 
 def _install_plugin() -> None:
-    """Copy the shipped shim source into omp's extensions dir."""
+    """Write the packaged shim, with the ``arize-harness hook`` command, into omp's extensions dir."""
     plugin_file = _plugin_file()
 
-    if dry_run():
-        info(f"would write omp hook to {plugin_file}")
-        return
-
-    _extensions_dir().mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(_plugin_source(), plugin_file)
+    # Overwrites any older copy (e.g. one spawning the old venv's arize-hook-omp).
+    install_plugin_ts("omp", plugin_file)
 
 
 def _uninstall_plugin() -> None:
@@ -257,7 +239,7 @@ def install(with_skills: bool = False) -> None:
     _register_extension()
 
     if with_skills:
-        symlink_skills(omp_constants.HARNESS_NAME)
+        install_skills(omp_constants.HARNESS_NAME)
 
     info("omp tracing installed")
 
@@ -268,7 +250,7 @@ def uninstall() -> None:
     _uninstall_plugin()
 
     remove_harness_entry(omp_constants.HARNESS_NAME)
-    unlink_skills(omp_constants.HARNESS_NAME)
+    remove_harness_files(omp_constants.HARNESS_NAME)
     info("omp tracing uninstalled")
 
 
