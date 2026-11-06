@@ -12,14 +12,14 @@ from core.setup import (
     ensure_harness_installed,
     ensure_shared_runtime,
     info,
+    install_skills,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    symlink_skills,
-    unlink_skills,
+    remove_harness_files,
     venv_bin,
     write_logging_config,
 )
@@ -35,7 +35,7 @@ from tracing.cursor.constants import (
 
 
 def install(with_skills: bool = False) -> None:
-    """Install Cursor tracing: configure backend, register hooks, optionally symlink skills."""
+    """Install Cursor tracing: configure backend, register hooks, optionally copy skills."""
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -77,15 +77,15 @@ def install(with_skills: bool = False) -> None:
 
     _register_cursor_hooks()
     if with_skills:
-        symlink_skills(HARNESS_NAME)
+        install_skills(HARNESS_NAME)
     info(f"Cursor tracing installed ({HOOKS_FILE})")
 
 
 def uninstall() -> None:
-    """Remove Cursor tracing hooks, harness entry, and skill symlinks."""
+    """Remove Cursor tracing hooks, harness entry, and skills."""
     _unregister_cursor_hooks()
     remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
+    remove_harness_files(HARNESS_NAME)
     info("Cursor tracing uninstalled")
 
 

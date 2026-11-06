@@ -18,6 +18,7 @@ from core.setup import (
     env_flag,
     env_value,
     info,
+    install_skills,
     merge_harness_entry,
     non_interactive,
     prompt_backend,
@@ -25,8 +26,7 @@ from core.setup import (
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    symlink_skills,
-    unlink_skills,
+    remove_harness_files,
     venv_bin,
     write_config,
     write_logging_config,
@@ -88,7 +88,7 @@ def install(with_skills: bool = False, agent_name: str | None = None) -> None:
     _maybe_set_default(chosen)
 
     if with_skills:
-        symlink_skills(HARNESS_NAME)
+        install_skills(HARNESS_NAME)
 
     info(f"Kiro tracing installed.\n" f"  Agent file: {agent_path}\n" f"  Run:        kiro-cli chat --agent {chosen}\n")
 
@@ -98,7 +98,7 @@ def uninstall() -> None:
     only when we created it (matches AGENT_SKELETON description)."""
     _unregister_all_kiro_hooks()
     remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
+    remove_harness_files(HARNESS_NAME)
     info("Kiro tracing uninstalled")
 
 

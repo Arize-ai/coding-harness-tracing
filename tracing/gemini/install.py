@@ -26,7 +26,7 @@ from core.setup import (
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    unlink_skills,
+    remove_harness_files,
     venv_bin,
     write_config,
     write_logging_config,
@@ -202,7 +202,7 @@ def uninstall() -> None:
     _uninstall_hooks()
 
     remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
+    remove_harness_files(HARNESS_NAME)
     info("Gemini tracing uninstalled")
 
 

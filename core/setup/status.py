@@ -14,6 +14,7 @@ import argparse
 import importlib
 import json
 import sys
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from typing import Optional
 
@@ -259,6 +260,14 @@ def main(argv: Optional[list] = None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     args = parser.parse_args(argv)
+
+    # Rewrite files another package version recorded, here so every caller
+    # (arize-harness status, install.sh / install.bat status) gets it. Messages
+    # go to stderr under --json so stdout stays one JSON document.
+    from core.setup.assets import refresh_and_report
+
+    with redirect_stdout(sys.stderr) if args.json else nullcontext():
+        refresh_and_report()
 
     status = collect_status()
 

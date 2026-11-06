@@ -433,10 +433,10 @@ class TestInstall:
         env_text = (fake_home / ".codex" / "arize-env.sh").read_text()
         assert "export ARIZE_USER_ID=test-user" in env_text
 
-    def test_install_with_skills_calls_symlink(self, fake_home, mock_prompts):
-        with patch.object(codex_install, "symlink_skills") as m_symlink:
+    def test_install_with_skills_copies_skills(self, fake_home, mock_prompts):
+        with patch.object(codex_install, "install_skills") as m_install_skills:
             codex_install.install(with_skills=True)
-            m_symlink.assert_called_once_with("codex")
+            m_install_skills.assert_called_once_with("codex")
 
     def test_install_prints_completion_message(self, fake_home, mock_prompts, capsys):
         """Install prints a brief success confirmation."""
