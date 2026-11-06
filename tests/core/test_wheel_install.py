@@ -8,8 +8,8 @@ so the install never reaches an index.
 
 from __future__ import annotations
 
-import hashlib
 import base64
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -158,7 +158,9 @@ class TestUvToolInstall:
     @pytest.fixture(scope="class")
     def set_up(self, tool):
         home, link, env, project = tool
-        results = {key: _run([str(link), "setup", key, "-y", "--with-skills"], project, env, check=False) for key in HARNESSES}
+        results = {
+            key: _run([str(link), "setup", key, "-y", "--with-skills"], project, env, check=False) for key in HARNESSES
+        }
         return results
 
     @pytest.mark.parametrize("key", list(HARNESSES))
@@ -197,9 +199,9 @@ class TestUvToolInstall:
 
         status = _run([str(link), "status"], project, env, check=False)
         assert hooks.read_bytes() == good, status.stdout + status.stderr
-        assert {e["version"] for f in json.loads(manifest_path.read_text())["harnesses"].values() for e in f.values()} == {
-            "9.9.9"
-        }
+        assert {
+            e["version"] for f in json.loads(manifest_path.read_text())["harnesses"].values() for e in f.values()
+        } == {"9.9.9"}
 
     def test_uninstall_removes_manifest_files_only(self, tool, set_up):
         home, link, env, project = tool

@@ -106,7 +106,7 @@ def assert_ts_changes_only_the_hook_command(harness: str, source: str, written: 
     exe = json.loads(ret.strip().removeprefix("return ").rstrip(";"))
     assert Path(exe).is_absolute() and Path(exe).name.lower().startswith("arize-harness"), exe
     shift = removed - 1
-    assert out[start + 2 : spawn - shift] == src[end : spawn]
+    assert out[start + 2 : spawn - shift] == src[end:spawn]
     assert out[spawn - shift] == expected_spawn
     assert out[spawn - shift + 1 :] == src[spawn + 1 :]
 
@@ -918,16 +918,16 @@ class TestManifestContainment:
             ("opencode", "arize-tracing.ts", "tracing/opencode/plugin/arize-tracing.ts", "copy"),
         ],
     )
-    def test_untrusted_entries(self, tmp_path, harness, rel_path, source, kind):
-        assert assets._trusted(harness, str(tmp_path / rel_path), {"source": source, "kind": kind}) is None
+    def test_entries_outside_setup_locations(self, tmp_path, harness, rel_path, source, kind):
+        assert assets._setup_location(harness, str(tmp_path / rel_path), {"source": source, "kind": kind}) is None
 
-    def test_real_entries_are_trusted(self, tmp_path):
+    def test_real_entries_are_setup_locations(self, tmp_path):
         assets.install_claude_plugin()
         assets.install_skills("omp", tmp_path)
         assets.install_plugin_ts("omp", tmp_path / "ext" / "arize-tracing.ts")
         for harness in ("claude-code", "omp"):
             for path, entry in assets.recorded(harness).items():
-                assert assets._trusted(harness, path, entry) is not None, path
+                assert assets._setup_location(harness, path, entry) is not None, path
 
 
 class TestRefreshKeepsTheSetupCommand:
@@ -998,6 +998,10 @@ class TestWriteErrorNotMasked:
         monkeypatch.setattr(assets, "manifest_transaction", broken_txn)
         with pytest.raises(assets.AssetError) as exc:
             assets.write_files(
-                "opencode", [("plugin/arize-tracing.ts", good, "plugin_ts", None), ("plugin/arize-tracing.ts", bad, "plugin_ts", None)]
+                "opencode",
+                [
+                    ("plugin/arize-tracing.ts", good, "plugin_ts", None),
+                    ("plugin/arize-tracing.ts", bad, "plugin_ts", None),
+                ],
             )
         assert str(bad) in str(exc.value)

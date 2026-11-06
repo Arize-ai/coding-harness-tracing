@@ -381,7 +381,7 @@ def _source_rel(harness: str, entry: dict) -> Optional[str]:
 _GENERATED_KINDS = {"hooks/hooks.json": "claude_hooks", "plugin/arize-tracing.ts": "plugin_ts"}
 
 
-def _trusted(harness: str, path: str, entry: dict) -> Optional[Tuple[str, str, Optional[Path]]]:
+def _setup_location(harness: str, path: str, entry: dict) -> Optional[Tuple[str, str, Optional[Path]]]:
     """``(rel, kind, root)`` when a manifest entry names a file setup could have written there, else None.
 
     Refresh and uninstall act only on these, so a corrupted or planted
@@ -446,11 +446,11 @@ def refresh_stale() -> List[str]:
     current_command = str(arize_harness_path())
     for harness, path, entry in stale:
         try:
-            trusted = _trusted(harness, path, entry)
-            if trusted is None:
+            location = _setup_location(harness, path, entry)
+            if location is None:
                 _setup.err(f"ignoring manifest entry {path}: not a file setup writes")
                 continue
-            rel, kind, _root = trusted
+            rel, kind, _root = location
             command = entry.get("command")
             if kind != "copy" and isinstance(command, str) and command != current_command:
                 if Path(command).exists():
@@ -533,8 +533,8 @@ def uninstall_files(harness: str) -> bool:
         return True
     removed = set()
     for path, entry in files.items():
-        trusted = _trusted(harness, path, entry) if isinstance(entry, dict) else None
-        if trusted is None:
+        location = _setup_location(harness, path, entry) if isinstance(entry, dict) else None
+        if location is None:
             # Not a file setup writes: forget the entry, never delete the path.
             _setup.err(f"ignoring manifest entry {path}: not a file setup writes")
             removed.add(path)
@@ -547,7 +547,7 @@ def uninstall_files(harness: str) -> bool:
             _setup.err(f"could not remove {target}: {e}")
             continue
         removed.add(path)
-        root = trusted[2]
+        root = location[2]
         if root is not None:
             _prune(target.parent, root)
     with manifest_transaction() as manifest:
