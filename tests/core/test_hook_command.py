@@ -26,14 +26,15 @@ import core.setup as setup_mod
 from core import cli, install_table
 from core.setup import (
     command_words,
+    commands,
     filter_our_hooks,
     hook_command_for,
     is_arize_hook_command,
     is_old_venv_hook,
     is_our_hook_command,
     registered_command_path,
+    runner,
 )
-from core.setup import commands, runner
 from tests.core.test_cli_commands import _home, _write_creds
 
 POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="runs the installers against POSIX config paths")
@@ -125,6 +126,19 @@ class TestArizeHookCommand:
     def test_command_words(self):
         assert command_words("'/a b/arize-harness' hook x") == ["/a b/arize-harness", "hook", "x"]
         assert command_words(["a", 1]) == []
+
+    def test_command_words_powershell_form(self):
+        """PowerShell's doubled apostrophe is one literal ``'``, not an empty POSIX string."""
+        ps = "& '/home/o''brien/.local/bin/arize-harness' hook copilot stop"
+        assert command_words(ps) == ["&", "/home/o'brien/.local/bin/arize-harness", "hook", "copilot", "stop"]
+        assert registered_command_path(ps) == "/home/o'brien/.local/bin/arize-harness"
+        assert command_words("& 'C:/x/arize-harness.exe' hook gemini") == [
+            "&",
+            "C:/x/arize-harness.exe",
+            "hook",
+            "gemini",
+        ]
+        assert command_words("& 'unclosed hook x") == []
 
 
 class TestFilterOurHooks:
@@ -218,7 +232,9 @@ class TestCommandFields:
         monkeypatch.setattr(runner, "arize_harness_path", lambda: path)
         fields = setup_mod.hook_command_fields("copilot", "arize-hook-copilot-pre-tool")
         assert fields["bash"] == fields["command"] == "'C:/Users/u/.local/bin/arize-harness.exe' hook copilot pre-tool"
-        assert fields["windows"] == fields["powershell"] == "C:/Users/u/.local/bin/arize-harness.exe hook copilot pre-tool"
+        assert (
+            fields["windows"] == fields["powershell"] == "C:/Users/u/.local/bin/arize-harness.exe hook copilot pre-tool"
+        )
 
     def test_quote_in_path(self, monkeypatch):
         path = Path("/home/o'neil/.local/bin/arize-harness")
@@ -344,7 +360,10 @@ def _seed_claude(home: Path, cwd: Path) -> None:
     _write(
         home / ".claude" / "settings.json",
         {
-            "plugins": [{"type": "local", "path": str(home / ".arize" / "harness" / "tracing" / "claude_code")}, "/user/plugin"],
+            "plugins": [
+                {"type": "local", "path": str(home / ".arize" / "harness" / "tracing" / "claude_code")},
+                "/user/plugin",
+            ],
             "hooks": {
                 "Stop": [
                     {
@@ -411,7 +430,13 @@ def _seed_gemini(home: Path, cwd: Path) -> None:
                 "SessionStart": [
                     {
                         "matcher": "",
-                        "hooks": [{"type": "command", "name": "arize-tracing", "command": _old(home, "arize-hook-gemini-session-start")}],
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "arize-tracing",
+                                "command": _old(home, "arize-hook-gemini-session-start"),
+                            }
+                        ],
                     },
                     {"matcher": "", "hooks": [{"type": "command", "name": "user", "command": USER_CMD}]},
                 ]
@@ -423,7 +448,10 @@ def _seed_gemini(home: Path, cwd: Path) -> None:
 def _seed_kiro(home: Path, cwd: Path) -> None:
     _write(
         home / ".kiro" / "agents" / "arize-traced.json",
-        {"name": "arize-traced", "hooks": {"stop": [{"command": _old(home, "arize-hook-kiro")}, {"command": USER_CMD}]}},
+        {
+            "name": "arize-traced",
+            "hooks": {"stop": [{"command": _old(home, "arize-hook-kiro")}, {"command": USER_CMD}]},
+        },
     )
 
 
@@ -573,6 +601,56 @@ def _run_status(home: Path, real: Path):
     from tests.core.test_cli_commands import _run
 
     return _run(home, [str(real), "status", "--json"])
+
+
+def _status_item(home: Path, link: Path, name: str) -> dict:
+    status = _harness_cli(home, link, "status", "--json")
+    assert status.returncode == 0, status.stdout + status.stderr
+    return next(h for h in json.loads(status.stdout)["harnesses"] if h["name"] == name)
+
+
+@POSIX_ONLY
+class TestApostropheInPath:
+    def test_copilot_powershell_fields_count_as_registered(self, link_home):
+        """The ``windows`` / ``powershell`` fields quote ``'`` as ``''``; status must read them back."""
+        home, old_link = link_home
+        link = home / "o'brien" / "bin" / "arize-harness"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(old_link.resolve())
+        _write_creds(home)
+
+        first = _harness_cli(home, link, "setup", "copilot", "--non-interactive")
+        assert first.returncode == 0, first.stdout + first.stderr
+        hooks = home / ".github" / "hooks" / "hooks.json"
+        assert "o''brien" in hooks.read_text()
+        after_one = _snapshot(home)
+
+        item = _status_item(home, link, "copilot")
+        assert item["registered"] is True, item
+        assert not item.get("missing_command"), item
+
+        second = _harness_cli(home, link, "setup", "copilot", "--non-interactive")
+        assert second.returncode == 0, second.stdout + second.stderr
+        assert _snapshot(home) == after_one
+
+
+@POSIX_ONLY
+class TestJsoncComments:
+    @pytest.mark.parametrize(
+        "comment",
+        ['// my 27" monitor config\n', '/* " */\n'],
+        ids=["line-comment", "block-comment"],
+    )
+    def test_quote_in_a_comment_does_not_hide_the_registration(self, link_home, comment):
+        home, link = link_home
+        _write_creds(home)
+        result = _harness_cli(home, link, "setup", "devin", "--non-interactive")
+        assert result.returncode == 0, result.stdout + result.stderr
+        config = home / ".config" / "devin" / "config.json"
+        config.write_text(comment + config.read_text())
+
+        item = _status_item(home, link, "devin")
+        assert item["registered"] is True, item
 
 
 # ---------------------------------------------------------------------------

@@ -86,8 +86,6 @@ def _registration_paths(harness: str) -> list:
 # the Codex home) is scanned one level deep for these.
 _CONFIG_SUFFIXES = (".json", ".toml", ".ts")
 
-# A JSON string literal; also how hook commands appear in the generated .ts.
-_STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
 # The generated opencode / omp plugin: binaryPath() returns the arize-harness
 # path, and spawn() gets ["hook", <harness>].
 _TS_BINARY = re.compile(r'function binaryPath\(\): string \{\s*return ("(?:[^"\\]|\\.)*");?\s*\}')
@@ -126,11 +124,39 @@ def _ts_commands(text: str) -> List[object]:
     return []
 
 
+def _json_string_literals(text: str) -> Iterator[str]:
+    """Each string literal in JSON / JSONC text, quotes included.
+
+    ``//`` and ``/* */`` comments are skipped when they start outside a string,
+    so a ``"`` inside a comment does not pair up with the next string's quote.
+    """
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        if char == '"':
+            start = i
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            if i <= n:
+                yield text[start:i]
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            i = n if end < 0 else end + 1
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        else:
+            i += 1
+
+
 def _file_commands(path: Path) -> List[object]:
     """Every value in ``path`` that could be a hook command: strings, and argv lists in TOML.
 
-    JSON (and JSONC, which Devin allows) is read as its string literals, so
-    comments or a trailing comma never hide a registration.
+    JSON (and JSONC, which Devin allows) is read as its string literals, found
+    by ``_json_string_literals``, so comments or a trailing comma never hide a
+    registration.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -144,7 +170,7 @@ def _file_commands(path: Path) -> List[object]:
         except tomllib.TOMLDecodeError:
             return []
     values: List[object] = []
-    for literal in _STRING_LITERAL.findall(text):
+    for literal in _json_string_literals(text):
         try:
             values.append(json.loads(literal))
         except json.JSONDecodeError:

@@ -880,15 +880,36 @@ def hook_command_fields(harness: str, entry_point: str) -> dict:
     return {"command": posix, "bash": posix, "windows": windows, "powershell": windows}
 
 
+def _powershell_words(command: str) -> list[str]:
+    """``& '<path>' rest...`` split by PowerShell rules: ``''`` inside the quotes is one ``'``.
+
+    Returns [] when the quoted path is not closed.
+    """
+    path, i = [], 3  # after "& '"
+    while i < len(command):
+        if command[i] == "'":
+            if command.startswith("''", i):
+                path.append("'")
+                i += 2
+                continue
+            return ["&", "".join(path), *command[i + 1 :].split()]
+        path.append(command[i])
+        i += 1
+    return []
+
+
 def command_words(command: object) -> list[str]:
     """A registered command split into words: an argv list as is, a shell string by POSIX rules.
 
-    Returns [] for anything else, or a string a shell could not parse.
+    ``& '<path>' ...`` (the PowerShell form setup writes) is split by PowerShell
+    rules instead. Returns [] for anything else, or a string a shell could not parse.
     """
     if isinstance(command, (list, tuple)):
         return list(command) if all(isinstance(word, str) for word in command) else []
     if not isinstance(command, str):
         return []
+    if command.startswith("& '"):
+        return _powershell_words(command)
     try:
         return shlex.split(command)
     except ValueError:
