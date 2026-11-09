@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import inspect
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -21,12 +20,13 @@ from core.config import load_config, migrate_yaml_config
 from core.constants import HARNESSES
 from core.runtime import is_binary
 from core.setup import INSTALL_DIR, VENV_DIR, err, info, is_harness_installed, list_installed_harnesses, print_color
-
-# Printed by install.sh too; the smoke test greps for "no source tree to update".
-_NO_SOURCE = (
-    "This looks like an offline install with no source tree to update.",
-    "Re-run the installer that created it (for npx evals, update that), or",
-    "pass --wheel-dir <dir> with a newer wheel.",
+from core.setup.runner import (
+    DIST_NAME,
+    INSTALL_HINT,
+    SetupRefused,
+    arize_harness_path,
+    require_setup_writes,
+    setup_write_refusal,
 )
 
 
@@ -57,19 +57,28 @@ def running_from_install_venv() -> bool:
         return False
 
 
-def _other_install_update_hint() -> str:
-    """One line saying how to update an install that is not ``~/.arize/harness/venv``."""
-    prefix_parts = Path(sys.prefix).parts
-    if "uv" in prefix_parts and "tools" in prefix_parts:
-        return "This is a uv tool install; update it with `uv tool upgrade coding-harness-tracing`."
-    checkout = Path(core.__file__).resolve().parent.parent
-    if (checkout / ".git").exists() and (checkout / "pyproject.toml").is_file():
-        return f"This runs from the source checkout at {checkout}; update it with `git pull` and `uv sync` there."
-    # Nothing is published to an index, so the only update is a newer wheel.
-    return (
-        f"This runs from {sys.executable}, not {VENV_DIR}; re-run the installer that created it, or install a "
-        f"newer wheel with `{sys.executable} -m pip install -U --no-index --find-links <dir> coding-harness-tracing`."
-    )
+def update_hint() -> str:
+    """How to update the ``arize-harness`` that is running, as one line.
+
+    - a Nuitka binary: download a new one;
+    - ``uv tool install``: ``uv tool upgrade``; ``pipx install``: ``pipx upgrade``;
+    - ``~/.arize/harness/venv``: ``install.bat update`` on Windows, re-run install.sh elsewhere;
+    - anything else (``uvx``, ``uv run``, a dev checkout): the install line, as setup prints it.
+    """
+    if is_binary():
+        return f"This is a binary install ({arize_harness_path()}); download a new arize-harness binary to replace it."
+    if running_from_install_venv():
+        if on_windows():
+            return "This is an install.bat install; update it with `install.bat update`."
+        return f"This is an install.sh install; update it by re-running install.sh (`{INSTALL_DIR / 'install.sh'} update`)."
+    reason = setup_write_refusal()
+    if reason is None:
+        prefix = Path(sys.prefix)
+        if (prefix / "uv-receipt.toml").is_file():
+            return f"This is a uv tool install; update it with `uv tool upgrade {DIST_NAME}`."
+        if (prefix / "pipx_metadata.json").is_file():
+            return f"This is a pipx install; update it with `pipx upgrade {DIST_NAME}`."
+    return f"{reason or 'this is not a persistent install'}; {INSTALL_HINT}."
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +156,12 @@ def _refresh_files() -> None:
 
 
 def cmd_setup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    # Before anything is asked or written: hooks registered from uvx, uv run or
+    # a dev checkout would point at something that goes away.
+    try:
+        require_setup_writes()
+    except SetupRefused:
+        return 1
     if args.non_interactive:
         os.environ["ARIZE_NONINTERACTIVE"] = "1"
     if args.backend:
@@ -189,13 +204,6 @@ def cmd_uninstall(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         err("uninstall needs a harness name, or --all to remove everything. Nothing was changed.")
         return 2
 
-    if is_binary():
-        err("uninstall --all is not supported on a binary install yet. Nothing was changed.")
-        return 1
-    if on_windows() and running_from_install_venv():
-        err("On Windows, run `install.bat uninstall` to remove this install. Nothing was changed.")
-        return 1
-
     from core.setup.wipe import wipe_shared_runtime
 
     header("Full uninstall")
@@ -211,7 +219,8 @@ def cmd_uninstall(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             install_table.load(key).uninstall()
         except (Exception, SystemExit) as e:
             warn(f"{key} uninstall failed (continuing): {e}")
-    wipe_shared_runtime()
+    # Config, state, logs and the files setup wrote; never the package that is running.
+    wipe_shared_runtime(keep_running_package=True)
     return 0
 
 
@@ -231,81 +240,15 @@ def cmd_status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
 # ---------------------------------------------------------------------------
 
 
-def _run(cmd: List[str]) -> bool:
-    return subprocess.run(cmd, check=False).returncode == 0
-
-
-def _pip_install(*args: str) -> bool:
-    """``pip install`` with the running interpreter, so the install being updated is the one that changes."""
-    return _run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", *args])
-
-
 def cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    if is_binary():
-        err("update is not supported on a binary install yet. Nothing was changed.")
-        return 1
-    if not running_from_install_venv():
-        err(_other_install_update_hint())
-        return 1
-    if on_windows():
-        err("On Windows, run `install.bat update` to update this install. Nothing was changed.")
-        return 1
+    """Print the command that updates this install and exit 1; nothing is changed.
 
-    header("Updating coding-harness-tracing")
-    # Re-registering prompts for the project name; with no terminal to answer
-    # on, use saved values instead, as install.sh update does.
-    if not sys.stdin.isatty():
-        os.environ["ARIZE_NONINTERACTIVE"] = "1"
-
-    if args.wheel_dir is not None:
-        wheel_dir = Path(args.wheel_dir).expanduser()
-        if not wheel_dir.is_dir():
-            err(f"--wheel-dir needs a directory; got '{args.wheel_dir}'")
-            return 1
-        wheel_dir = wheel_dir.resolve()
-        if not any(wheel_dir.glob("coding_harness_tracing-*.whl")):
-            err(f"No coding_harness_tracing-*.whl in {wheel_dir}")
-            return 1
-        info(f"Updating from local wheels in {wheel_dir}...")
-        # --no-index: a missing wheel must fail, never fall back to PyPI.
-        installed = _pip_install("-U", "--no-index", "--find-links", str(wheel_dir), "coding-harness-tracing")
-    elif (INSTALL_DIR / ".git").is_dir():
-        info("Pulling latest changes...")
-        if not _run(["git", "-C", str(INSTALL_DIR), "pull", "--ff-only"]):
-            err(f"git pull failed in {INSTALL_DIR}; run `install.sh update` to update this install.")
-            return 1
-        info("Reinstalling coding-harness-tracing...")
-        installed = _pip_install("-U", str(INSTALL_DIR))
-    elif (INSTALL_DIR / "pyproject.toml").is_file():
-        err(f"{INSTALL_DIR} was installed from a tarball; run `install.sh update` to update it. Nothing was changed.")
-        return 1
-    else:
-        for line in _NO_SOURCE:
-            err(line)
-        return 1
-    if not installed:
-        err("Failed to install coding-harness-tracing")
-        return 1
-
-    # The reinstall may have replaced this process's own modules, so the rest
-    # runs in fresh interpreters, from site-packages only (-I keeps the cwd off
-    # sys.path).
-    info("Migrating legacy config.yaml to config.json (if present)...")
-    _run([sys.executable, "-I", "-m", "core.config", "migrate"])
-    names = list_installed_harnesses()
-    if not names:
-        info("No installed harnesses found to re-register")
-    for name in names:
-        key = install_table.resolve(name)
-        if key is None:
-            warn(f"Unknown harness: {name} (skipping)")
-            continue
-        info(f"Re-registering {key}...")
-        # One harness failing must not leave the rest half-updated.
-        if not _run([sys.executable, "-I", "-m", "core.cli", "setup", key]):
-            warn(f"{key} re-registration failed (continuing)")
-    info("Update complete.")
-    return 0
+    The package manager that installed ``arize-harness`` is the one that can
+    replace it, and re-running ``setup`` afterwards is not needed: hooks run
+    the command link, which then points at the new version.
+    """
+    err(f"{update_hint()} Nothing was changed.")
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +281,9 @@ def build_parser() -> argparse.ArgumentParser:
         "uninstall", help="remove tracing for one harness, or everything", description=f"Harnesses: {harness_names}."
     )
     uninstall.add_argument("harness", nargs="?", help="harness to remove")
-    uninstall.add_argument("--all", action="store_true", help="remove every harness and the shared runtime")
+    uninstall.add_argument(
+        "--all", action="store_true", help="remove every harness, then ~/.arize/harness config, state and logs"
+    )
     uninstall.set_defaults(func=cmd_uninstall, parser=uninstall)
 
     status = sub.add_parser("status", help="report configured harnesses and whether their hooks are wired up")
@@ -349,8 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.set_defaults(func=cmd_status, parser=status)
 
-    update = sub.add_parser("update", help="update this install and re-register every harness")
-    update.add_argument("--wheel-dir", metavar="DIR", help="install from local wheels in DIR, never an index")
+    update = sub.add_parser("update", help="print the command that updates this install")
     update.set_defaults(func=cmd_update, parser=update)
     return parser
 

@@ -173,8 +173,10 @@ class TestIdempotent:
 
         _mock_prompts(monkeypatch)
         if windows:
-            root = PureWindowsPath(r"C:\new\harness\venv\Scripts")
-            monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+            from core.setup import runner
+
+            exe = PureWindowsPath(r"C:\Users\Test User\.local\bin\arize-harness.exe")
+            monkeypatch.setattr(runner, "arize_harness_path", lambda: exe)
 
         claude_install.install(with_skills=False)
         settings_file = fake_home / ".claude" / "settings.json"
@@ -195,16 +197,18 @@ class TestIdempotent:
     def test_reinstalling_with_old_values_ensures_correct_registrations(
         self, fake_home, monkeypatch, include_corrected
     ):
-        """Reinstall removes only the exact historical Windows command."""
+        """Reinstall replaces the old venv's Windows commands, and keeps commands that only look alike."""
+        import core.setup as setup_mod
         import tracing.claude_code.install as claude_install
 
         root = PureWindowsPath(r"C:\old\harness\venv\Scripts")
-        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        monkeypatch.setattr(setup_mod, "VENV_DIR", root.parent)
         old_commands = {
             event: str(root / f"{entry_point}.exe") for event, entry_point in claude_install.HOOK_EVENTS.items()
         }
         new_commands = {
-            event: (root / f"{entry_point}.exe").as_posix() for event, entry_point in claude_install.HOOK_EVENTS.items()
+            event: setup_mod.hook_command_for("claude-code", entry_point)
+            for event, entry_point in claude_install.HOOK_EVENTS.items()
         }
         session_start_siblings = [
             {"hooks": [{"type": "command", "command": old_commands["SessionStart"] + " --custom"}]},
@@ -218,7 +222,9 @@ class TestIdempotent:
         hooks["SessionStart"][0]["hooks"].extend(session_start_siblings[0]["hooks"])
         hooks["SessionStart"].extend(session_start_siblings[1:])
         if include_corrected:
-            hooks["SessionStart"].append({"hooks": [{"type": "command", "command": new_commands["SessionStart"]}]})
+            # The shell-quoted spelling a later installer wrote: also ours.
+            corrected = f"'{(root / 'arize-hook-session-start.exe').as_posix()}'"
+            hooks["SessionStart"].append({"hooks": [{"type": "command", "command": corrected}]})
         settings_file = fake_home / ".claude" / "settings.json"
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(json.dumps({"hooks": hooks}))
@@ -229,6 +235,7 @@ class TestIdempotent:
         for event in claude_install.HOOK_EVENTS:
             commands = [h["command"] for entry in settings["hooks"][event] for h in entry["hooks"]]
             assert old_commands[event] not in commands
+            assert not any(setup_mod.is_old_venv_hook(c) for c in commands)
             assert commands.count(new_commands[event]) == 1
         session_commands = [h["command"] for entry in settings["hooks"]["SessionStart"] for h in entry["hooks"]]
         assert old_commands["SessionStart"] + " --custom" in session_commands
@@ -338,10 +345,11 @@ class TestUninstall:
     @pytest.mark.parametrize("formats", ["legacy", "corrected", "both"], ids=["legacy-only", "corrected-only", "both"])
     def test_uninstall_removes_legacy_and_corrected_registrations(self, fake_home, monkeypatch, formats):
         """Uninstall removes either Windows command spelling."""
+        import core.setup as setup_mod
         import tracing.claude_code.install as claude_install
 
         root = PureWindowsPath(r"C:\Users\Test User\.arize\harness\venv\Scripts")
-        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        monkeypatch.setattr(setup_mod, "VENV_DIR", root.parent)
         settings_file = fake_home / ".claude" / "settings.json"
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         hooks = {}
@@ -363,10 +371,11 @@ class TestUninstall:
     @pytest.mark.parametrize("formats", ["legacy", "corrected", "both"], ids=["legacy", "corrected", "both"])
     def test_uninstall_filters_owned_hooks_inside_mixed_containers(self, fake_home, monkeypatch, formats):
         """Uninstall preserves user hooks and container metadata."""
+        import core.setup as setup_mod
         import tracing.claude_code.install as claude_install
 
         root = PureWindowsPath(r"C:\Users\Test User\.arize\harness\venv\Scripts")
-        monkeypatch.setattr(claude_install, "venv_bin", lambda name: root / f"{name}.exe")
+        monkeypatch.setattr(setup_mod, "VENV_DIR", root.parent)
         hooks = {}
         for event, entry_point in claude_install.HOOK_EVENTS.items():
             path = root / f"{entry_point}.exe"

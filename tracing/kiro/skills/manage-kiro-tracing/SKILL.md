@@ -12,7 +12,7 @@ Configure OpenInference tracing for **Kiro CLI** sessions to Arize AX (cloud) or
 **This skill follows a decision tree workflow.** Start by asking the user where they are in the setup process:
 
 1. **Is the harness already installed?**
-   - Check `~/.kiro/agents/` for an agent file containing `arize-hook-kiro` in its `hooks` block
+   - Check `~/.kiro/agents/` for an agent file containing `arize-harness hook kiro` in its `hooks` block
    - Check `~/.arize/harness/config.json` for the `harnesses.kiro` block
    - If both are present → Jump to [Validate](#validate) or [Troubleshoot](#troubleshoot)
 
@@ -158,11 +158,11 @@ A freshly-created `arize-traced` agent looks like:
   "allowedTools": [],
   "resources": [],
   "hooks": {
-    "agentSpawn":       [{ "command": "~/.arize/harness/venv/bin/arize-hook-kiro" }],
-    "userPromptSubmit": [{ "command": "~/.arize/harness/venv/bin/arize-hook-kiro" }],
-    "preToolUse":       [{ "command": "~/.arize/harness/venv/bin/arize-hook-kiro" }],
-    "postToolUse":      [{ "command": "~/.arize/harness/venv/bin/arize-hook-kiro" }],
-    "stop":             [{ "command": "~/.arize/harness/venv/bin/arize-hook-kiro" }]
+    "agentSpawn":       [{ "command": "'/home/you/.local/bin/arize-harness' hook kiro" }],
+    "userPromptSubmit": [{ "command": "'/home/you/.local/bin/arize-harness' hook kiro" }],
+    "preToolUse":       [{ "command": "'/home/you/.local/bin/arize-harness' hook kiro" }],
+    "postToolUse":      [{ "command": "'/home/you/.local/bin/arize-harness' hook kiro" }],
+    "stop":             [{ "command": "'/home/you/.local/bin/arize-harness' hook kiro" }]
   },
   "toolsSettings": {},
   "includeMcpJson": true,
@@ -170,7 +170,7 @@ A freshly-created `arize-traced` agent looks like:
 }
 ```
 
-All five events route to a single `arize-hook-kiro` CLI entry point that dispatches based on the event name in the payload.
+All five events route to a single `arize-harness hook kiro` CLI entry point that dispatches based on the event name in the payload.
 
 If the user already has an agent JSON they want to trace, merge the five entries above into its existing `hooks` block — do not overwrite the rest of the agent definition.
 
@@ -203,7 +203,7 @@ kiro-cli chat --agent arize-traced
 ### Validate
 
 1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the file contains the `harnesses.kiro` block.
-2. **Agent file exists**: Run `cat ~/.kiro/agents/<agent>.json` to verify the `hooks` block has all five events pointing at `arize-hook-kiro`.
+2. **Agent file exists**: Run `cat ~/.kiro/agents/<agent>.json` to verify the `hooks` block has all five events pointing at `arize-harness hook kiro`.
 3. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 4. **Kiro accepts the agent config** (optional, requires `kiro-cli` on PATH): `kiro-cli agent validate --path ~/.kiro/agents/<agent>.json`.
 
@@ -271,7 +271,7 @@ Common issues and fixes:
 | Problem | Fix |
 |---------|-----|
 | Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/kiro.log` |
-| Hooks not firing | Verify the agent JSON has all five hooks under `hooks` and that each `command` resolves to the `arize-hook-kiro` venv binary. Run `kiro-cli agent validate --path ~/.kiro/agents/<agent>.json` if `kiro-cli` is on PATH |
+| Hooks not firing | Verify the agent JSON has all five hooks under `hooks` and that each `command` runs `arize-harness hook kiro` from an `arize-harness` that still exists (`arize-harness status` says so). Run `kiro-cli agent validate --path ~/.kiro/agents/<agent>.json` if `kiro-cli` is on PATH |
 | Wrong agent in use | Either pass `--agent <name>` to `kiro-cli chat`, or set the agent as default: `kiro-cli agent set-default <name>` |
 | Config missing | Run `./install.sh kiro` or create `~/.arize/harness/config.json` manually with a `harnesses.kiro` section |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |

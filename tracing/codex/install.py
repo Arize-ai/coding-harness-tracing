@@ -3,7 +3,7 @@
 
 Self-contained module that handles:
 - Writing ~/.codex/arize-env.sh (env file)
-- Updating ~/.codex/config.toml (notify + five hook entry points)
+- Updating ~/.codex/config.toml (notify runs ``arize-harness hook codex notify``)
 - Managing the shared config.json harness entry
 - Copying skills
 - Migrating legacy v1 installs via tracing.codex.install_legacy
@@ -22,8 +22,12 @@ from core.setup import (
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
+    err,
     info,
     install_skills,
+    is_arize_hook_command,
+    is_old_venv_hook,
+    is_our_hook_command,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
@@ -31,19 +35,12 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_config,
     write_logging_config,
 )
+from core.setup.runner import hook_argv
 from tracing.codex._toml import _toml_load_strict, _toml_write
-from tracing.codex.constants import (
-    DISPLAY_NAME,
-    HARNESS_BIN,
-    HARNESS_HOME,
-    HARNESS_NAME,
-    NOTIFY_BIN_NAME,
-    get_codex_home,
-)
+from tracing.codex.constants import DISPLAY_NAME, HARNESS_BIN, HARNESS_HOME, HARNESS_NAME, get_codex_home
 from tracing.codex.install_legacy import cleanup_legacy_install
 
 # Hook events from the legacy installer; used only for cleanup
@@ -74,7 +71,7 @@ def _entry_is_arize_managed(entry: object) -> bool:
         if not isinstance(h, dict):
             continue
         cmd = h.get("command") or ""
-        if isinstance(cmd, str) and "arize-hook-codex-" in cmd:
+        if isinstance(cmd, str) and ("arize-hook-codex-" in cmd or is_our_hook_command(cmd, HARNESS_NAME)):
             return True
     return False
 
@@ -107,53 +104,83 @@ def _strip_arize_hooks(data: dict) -> bool:
     return changed
 
 
-def _codex_toml_apply(path: Path, notify_cmd: str) -> None:
-    """Write the notify-only layout to ~/.codex/config.toml. Idempotent.
+def _is_our_notify(value: object) -> bool:
+    """True when ``notify`` is ours alone: ``[<arize-harness>, "hook", "codex", "notify"]`` or the old venv command."""
+    return is_arize_hook_command(value, HARNESS_NAME) or is_old_venv_hook(value)
 
-    Ensures our ``notify_cmd`` is present exactly once in ``notify = [...]``.
-    Does not touch any existing ``[[hooks.<Event>]]`` entries -- if a prior
-    install left some behind, manage them out-of-band or run ``uninstall``.
+
+def _without_old_notify_words(value: list) -> list:
+    """``value`` without the old venv command, which older installers appended to the user's own ``notify``."""
+    return [word for word in value if not is_old_venv_hook(word)]
+
+
+def _codex_toml_apply(path: Path, notify_argv: list) -> None:
+    """Set ``notify = notify_argv`` in ~/.codex/config.toml, and drop our old hook entries. Idempotent.
+
+    Codex runs one notify program (``notify`` is its argv, with the payload
+    appended), so ours replaces an older one of ours rather than joining a
+    list. A ``notify`` the user set themselves is left alone, with a warning:
+    tracing is then not registered, and ``status`` says so.
+
+    The ``[[hooks.<Event>]]`` entries older installers wrote (the venv's
+    ``arize-hook-codex-*``) are removed, as uninstall removes them; other
+    hook entries are kept.
     """
     if dry_run():
-        info(f"would add notify entry to {path}")
+        info(f"would set notify in {path}")
         return
 
     data = _toml_load_strict(path)
+    changed = _strip_arize_hooks(data)
+    existing = data.get("notify")
 
-    existing_notify = data.get("notify", [])
-    if not isinstance(existing_notify, list):
-        existing_notify = [existing_notify] if existing_notify else []
-    if notify_cmd not in existing_notify:
-        existing_notify.append(notify_cmd)
-    data["notify"] = existing_notify
+    if existing in (None, "", []) or _is_our_notify(existing):
+        data["notify"] = list(notify_argv)
+        changed = True
+    else:
+        remaining = _without_old_notify_words(existing) if isinstance(existing, list) else existing
+        if remaining in ([], ""):
+            data["notify"] = list(notify_argv)
+            changed = True
+        else:
+            err(
+                f"{path} already sets notify = {remaining!r}. Codex runs one notify program, so tracing "
+                "was not registered; remove that notify line and re-run setup to trace Codex."
+            )
+            if remaining != existing:
+                data["notify"] = remaining
+                changed = True
 
+    if not changed:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     _toml_write(data, path)
 
 
-def _codex_toml_remove(path: Path, notify_cmd: str) -> None:
-    """Remove our notify entry and any legacy hook entries. Idempotent."""
+def _codex_toml_remove(path: Path) -> None:
+    """Remove our notify entry (today's or the old venv's) and any legacy hook entries. Idempotent."""
     if not path.is_file():
         return
 
     if dry_run():
-        info(f"would revert {path}: remove notify={notify_cmd} and any legacy hook entries")
+        info(f"would revert {path}: remove our notify and any legacy hook entries")
         return
 
     data = _toml_load_strict(path)
     changed = False
 
-    existing_notify = data.get("notify", [])
-    if isinstance(existing_notify, list) and notify_cmd in existing_notify:
-        existing_notify.remove(notify_cmd)
-        if existing_notify:
-            data["notify"] = existing_notify
-        else:
-            del data["notify"]
-        changed = True
-    elif isinstance(existing_notify, str) and existing_notify == notify_cmd:
+    existing = data.get("notify")
+    if existing is not None and _is_our_notify(existing):
         del data["notify"]
         changed = True
+    elif isinstance(existing, list):
+        remaining = _without_old_notify_words(existing)
+        if remaining != existing:
+            changed = True
+            if remaining:
+                data["notify"] = remaining
+            else:
+                del data["notify"]
 
     if _strip_arize_hooks(data):
         changed = True
@@ -259,8 +286,7 @@ def install(with_skills: bool = False) -> None:
     _write_env_file(codex_env_file, user_id=user_id)
 
     # 4. Write the notify-only TOML layout.
-    notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    _codex_toml_apply(codex_config_file, notify_cmd)
+    _codex_toml_apply(codex_config_file, hook_argv(HARNESS_NAME, "notify"))
     info(f"Updated TOML config: {codex_config_file}")
 
     # 5. Skills.
@@ -284,8 +310,7 @@ def uninstall() -> None:
     cleanup_legacy_install(codex_config_file)
 
     # 2. Revert TOML — remove our notify entry and any legacy hook entries.
-    notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    _codex_toml_remove(codex_config_file, notify_cmd)
+    _codex_toml_remove(codex_config_file)
     info(f"Reverted TOML config: {codex_config_file}")
 
     # 3. Remove env file if ours.

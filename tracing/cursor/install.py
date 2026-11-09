@@ -11,6 +11,8 @@ from core.setup import (
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
+    filter_our_hooks,
+    hook_command_for,
     info,
     install_skills,
     merge_harness_entry,
@@ -20,7 +22,6 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_logging_config,
 )
 from tracing.cursor.constants import (
@@ -113,17 +114,25 @@ def _save_hooks(data: dict) -> None:
 def _register_cursor_hooks() -> None:
     """Add hook entries for all HOOK_EVENTS to ~/.cursor/hooks.json.
 
-    For each event, ensure an entry with ``command == venv_bin(HOOK_BIN_NAME)``
-    exists — skip if already there.  Merges with existing entries without
-    duplicating.  Honors dry_run().
+    For each event, ensure one entry runs ``hook_command("cursor")``, and drop
+    our older ones (another ``arize-harness``, the old venv's
+    ``arize-hook-cursor``), under any event.  Merges with existing entries
+    without duplicating.  Honors dry_run().
     """
     data = _load_hooks()
     hooks = data["hooks"]
-    hook_cmd = str(venv_bin(HOOK_BIN_NAME))
+    hook_cmd = hook_command_for(HARNESS_NAME, HOOK_BIN_NAME)
+
+    for event in list(hooks):
+        if event not in HOOK_EVENTS and isinstance(hooks[event], list):
+            hooks[event] = filter_our_hooks(hooks[event], HARNESS_NAME)
+            if not hooks[event]:
+                del hooks[event]
 
     for event in HOOK_EVENTS:
         event_list = hooks.setdefault(event, [])
-        already = any(h.get("command") == hook_cmd for h in event_list)
+        event_list[:] = filter_our_hooks(event_list, HARNESS_NAME, keep=hook_cmd)
+        already = any(isinstance(h, dict) and h.get("command") == hook_cmd for h in event_list)
         if not already:
             event_list.append({"command": hook_cmd})
 
@@ -148,11 +157,11 @@ def _unregister_cursor_hooks() -> None:
     if not hooks:
         return
 
-    hook_cmd = str(venv_bin(HOOK_BIN_NAME))
-
     for event in list(hooks.keys()):
         event_list = hooks[event]
-        filtered = [h for h in event_list if h.get("command") != hook_cmd]
+        if not isinstance(event_list, list):
+            continue
+        filtered = filter_our_hooks(event_list, HARNESS_NAME)
         if filtered:
             hooks[event] = filtered
         else:

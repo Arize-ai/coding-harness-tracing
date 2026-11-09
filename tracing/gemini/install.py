@@ -19,7 +19,10 @@ from core.config import get_value, load_config
 from core.setup import (
     dry_run,
     ensure_shared_runtime,
+    filter_our_nested_hooks,
+    hook_command_for,
     info,
+    is_our_hook_command,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
@@ -27,7 +30,6 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_config,
     write_logging_config,
 )
@@ -92,6 +94,16 @@ def _write_settings(data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _is_our_hook(hook: dict) -> bool:
+    """True for a hook we wrote: named ``HOOK_NAME``, or running our command (today's or the old venv's)."""
+    return hook.get("name") == HOOK_NAME or is_our_hook_command(hook.get("command"), HARNESS_NAME)
+
+
+def _without_our_blocks(event_list: list) -> list:
+    """``event_list`` with our hooks taken out of each matcher block; a block is dropped only if that empties it."""
+    return filter_our_nested_hooks(event_list, HARNESS_NAME, is_ours=_is_our_hook)
+
+
 def _install_hooks() -> None:
     """Write/merge our hook entries into ~/.gemini/settings.json."""
     if dry_run():
@@ -101,14 +113,19 @@ def _install_hooks() -> None:
     data = _read_settings()
     hooks_map: dict = data.setdefault("hooks", {})
 
+    # Our blocks go under every event, including ones we no longer register.
+    for event in list(hooks_map):
+        if event not in EVENTS and isinstance(hooks_map[event], list):
+            hooks_map[event] = _without_our_blocks(hooks_map[event])
+            if not hooks_map[event]:
+                del hooks_map[event]
+
     for event, entry_point in EVENTS.items():
-        cmd = str(venv_bin(entry_point))
+        cmd = hook_command_for(HARNESS_NAME, entry_point, shell="powershell")
         event_list: list = hooks_map.setdefault(event, [])
 
-        # Remove any existing matcher-block that contains a hook with our name
-        event_list[:] = [
-            block for block in event_list if not any(h.get("name") == HOOK_NAME for h in block.get("hooks", []))
-        ]
+        # Take our hooks out of every block (the user's stay), then append our block.
+        event_list[:] = _without_our_blocks(event_list)
 
         # Append our block
         event_list.append(
@@ -141,11 +158,11 @@ def _uninstall_hooks() -> None:
     data = _read_settings()
     hooks_map = data.get("hooks", {})
 
-    for event in EVENTS:
+    for event in list(hooks_map):
         event_list = hooks_map.get(event, [])
-        filtered = [
-            block for block in event_list if not any(h.get("name") == HOOK_NAME for h in block.get("hooks", []))
-        ]
+        if not isinstance(event_list, list):
+            continue
+        filtered = _without_our_blocks(event_list)
         if filtered:
             hooks_map[event] = filtered
         else:

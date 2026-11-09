@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 from getpass import getpass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from dotenv import dotenv_values
 
@@ -787,15 +788,241 @@ def ensure_shared_runtime() -> None:
                 legacy.unlink()
 
 
-def venv_bin(name: str) -> Path:
-    """Return the full path to a venv binary.
+# ---------------------------------------------------------------------------
+# Hook commands: what setup registers, and what older installs registered
+# ---------------------------------------------------------------------------
 
-    On POSIX: VENV_DIR/bin/<name>. On Windows: VENV_DIR/Scripts/<name>.exe.
-    Does NOT verify the file exists.
+_COMMAND_NAMES = ("arize-harness", "arize-harness.exe")
+_OLD_HOOK_NAME = re.compile(r"arize-hook-[a-z0-9]+(?:-[a-z0-9]+)*(?:\.exe)?", re.IGNORECASE)
+
+
+def _windows() -> bool:
+    return os.name == "nt"
+
+
+def _hook_target(harness: str, entry_point: str) -> tuple:
+    """The hook table's ``(harness, event)`` for an ``arize-hook-*`` entry point; ValueError when unknown."""
+    from core.hook_table import canonical_harness, iter_hooks, legacy_entry_point
+
+    name = canonical_harness(harness)
+    for table_harness, event, _target in iter_hooks():
+        if table_harness == name and legacy_entry_point(table_harness, event) == entry_point:
+            return table_harness, event
+    raise ValueError(f"no hook for entry point {entry_point!r} in harness '{harness}'")
+
+
+# A path PowerShell, cmd.exe and a POSIX shell all run as written, unquoted
+# (VS Code's own rule for when a hook path needs no quoting).
+_UNQUOTED_PATH = re.compile(r"[A-Za-z0-9_./:-]+")
+
+
+def _powershell_command(harness: str, entry_point: str) -> str:
+    """``<path> hook ...`` when the path needs no quoting, else ``& '<path>' hook ...``.
+
+    PowerShell runs a bare path as a command but treats a leading quoted
+    string as a value, hence the call operator. The unquoted form also runs
+    under cmd.exe, which some harness runners use instead.
     """
-    if os.name == "nt":
-        return VENV_DIR / "Scripts" / f"{name}.exe"
-    return VENV_DIR / "bin" / name
+    from core.setup.runner import hook_argv
+
+    path, *rest = hook_argv(*_hook_target(harness, entry_point))
+    path = Path(path).as_posix()
+    if _UNQUOTED_PATH.fullmatch(path):
+        return " ".join([path, *rest])
+    return " ".join(["&", "'" + path.replace("'", "''") + "'", *rest])
+
+
+def hook_command_for(harness: str, entry_point: str, shell: str = "posix") -> str:
+    """The command a harness config runs for the hook an ``arize-hook-*`` entry point ran.
+
+    Installers keep their event -> entry-point tables; this finds the entry
+    point's (harness, event) in the hook table and returns ``hook_command()``,
+    ``'<path>' hook <harness> <event>``.
+
+    ``shell`` is how the harness runs the command on Windows (macOS and Linux
+    always get the POSIX form):
+
+    - ``"posix"``: a POSIX shell (Claude Code's Git Bash), or a runner that
+      fixes quoting itself (Cursor adds PowerShell's ``&``);
+    - ``"powershell"``: ``_powershell_command`` (Gemini CLI);
+    - ``"cmd"``: ``"<path>" hook ...``, since cmd.exe does not treat single
+      quotes as quotes (Kiro).
+
+    Raises ValueError for an unknown entry point or shell.
+    """
+    from core.setup.runner import hook_argv, hook_command
+
+    if shell not in ("posix", "powershell", "cmd"):
+        raise ValueError(f"unknown shell {shell!r}")
+    target = _hook_target(harness, entry_point)
+    if shell == "posix" or not _windows():
+        return hook_command(*target)
+    if shell == "powershell":
+        return _powershell_command(harness, entry_point)
+    path, *rest = hook_argv(*target)
+    return " ".join(['"' + Path(path).as_posix() + '"', *rest])
+
+
+def hook_command_fields(harness: str, entry_point: str) -> dict:
+    """Per-OS command fields for a harness that reads them (VS Code Copilot, Copilot CLI).
+
+    - ``command`` and ``bash``: the POSIX form, which macOS and Linux run
+      (``bash`` wins there; ``command`` is the fallback everywhere);
+    - ``windows`` and ``powershell``: ``_powershell_command``, which Windows
+      runs (VS Code prefers ``windows``, Copilot CLI reads ``powershell``).
+
+    Written the same on every OS, so re-running setup anywhere gives the same entry.
+    """
+    from core.setup.runner import hook_command
+
+    posix = hook_command(*_hook_target(harness, entry_point))
+    windows = _powershell_command(harness, entry_point)
+    return {"command": posix, "bash": posix, "windows": windows, "powershell": windows}
+
+
+def command_words(command: object) -> list[str]:
+    """A registered command split into words: an argv list as is, a shell string by POSIX rules.
+
+    Returns [] for anything else, or a string a shell could not parse.
+    """
+    if isinstance(command, (list, tuple)):
+        return list(command) if all(isinstance(word, str) for word in command) else []
+    if not isinstance(command, str):
+        return []
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
+
+
+def is_arize_hook_command(command: object, harness: str | None = None) -> bool:
+    """True for ``'<.../arize-harness>' hook <harness> ...``, as a shell string or an argv list.
+
+    Any ``arize-harness`` path counts, so re-running setup from another install
+    replaces the entry instead of adding a second one. With ``harness``, only
+    that harness's hooks match (``claude-code`` and ``claude`` are the same).
+    """
+    from core.hook_table import canonical_harness
+
+    words = command_words(command)
+    if words and words[0] == "&":  # PowerShell's call operator
+        words = words[1:]
+    if len(words) < 3 or words[1] != "hook":
+        return False
+    if re.split(r"[\\/]", words[0])[-1].lower() not in _COMMAND_NAMES:
+        return False
+    return harness is None or words[2] == canonical_harness(harness.replace("_", "-"))
+
+
+def _old_venv_path(command: object) -> str | None:
+    """The path of an ``arize-hook-*`` command in ``~/.arize/harness/venv`` that older installers wrote.
+
+    Those commands had no arguments, and were written native
+    (``C:\\...\\Scripts\\arize-hook-stop.exe``), shell-quoted
+    (``'/home/u/.arize/harness/venv/bin/arize-hook-stop'``), or as a one-word argv list.
+    """
+    if isinstance(command, (list, tuple)):
+        if len(command) != 1:
+            return None
+        command = command[0]
+    if not isinstance(command, str):
+        return None
+    raw = command.strip()
+    candidates = [raw]
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        candidates.append(raw[1:-1])
+    words = command_words(raw)
+    if len(words) == 1:
+        candidates.append(words[0])
+
+    windows = os.name == "nt"
+    venv = VENV_DIR.as_posix().rstrip("/")
+    for candidate in candidates:
+        path = candidate.replace("\\", "/")
+        for sub in ("bin", "Scripts"):
+            prefix = f"{venv}/{sub}/"
+            head = path[: len(prefix)]
+            if (head.casefold() == prefix.casefold()) if windows else (head == prefix):
+                rest = path[len(prefix) :]
+                if _OLD_HOOK_NAME.fullmatch(rest):
+                    return candidate
+    return None
+
+
+def is_old_venv_hook(command: object) -> bool:
+    """True for an ``arize-hook-*`` command in ``~/.arize/harness/venv``, in any form older installers wrote."""
+    return _old_venv_path(command) is not None
+
+
+def is_our_hook_command(command: object, harness: str | None = None) -> bool:
+    """True for a hook entry we own in ``harness``'s config: today's command or an old venv one."""
+    return is_arize_hook_command(command, harness) or is_old_venv_hook(command)
+
+
+def filter_our_hooks(entries: list, harness: str, keep: str | None = None) -> list:
+    """``entries`` (hook dicts with a ``command``) without ours, except the first whose command is ``keep``.
+
+    What re-running setup and uninstall do to one event's list: our older
+    entries go, today's stays once, and every other entry is kept as it is.
+    """
+    kept_keep = False
+    result = []
+    for entry in entries:
+        command = entry.get("command") if isinstance(entry, dict) else None
+        if not is_our_hook_command(command, harness):
+            result.append(entry)
+        elif keep is not None and command == keep and not kept_keep:
+            kept_keep = True
+            result.append(entry)
+    return result
+
+
+def filter_our_nested_hooks(
+    entries: list,
+    harness: str,
+    keep: str | None = None,
+    is_ours: Callable[[dict], bool] | None = None,
+) -> list:
+    """``filter_our_hooks`` for configs that group hooks: ``[{"matcher": ..., "hooks": [hook, ...]}, ...]``.
+
+    Our hooks are filtered inside each group, except the first whose command
+    is ``keep``; the user's hooks and every other key of the group stay as
+    they are. A group is dropped only when removing ours leaves it empty (a
+    group that was empty to begin with is kept). ``is_ours`` decides which
+    hooks are ours; by default, any hook whose ``command`` is ours.
+    """
+    if is_ours is None:
+
+        def is_ours(hook: dict) -> bool:
+            return is_our_hook_command(hook.get("command"), harness)
+
+    kept_keep = False
+    result = []
+    for entry in entries:
+        inner = entry.get("hooks") if isinstance(entry, dict) else None
+        if not isinstance(inner, list):
+            result.append(entry)
+            continue
+        kept = []
+        for hook in inner:
+            if not (isinstance(hook, dict) and is_ours(hook)):
+                kept.append(hook)
+            elif keep is not None and hook.get("command") == keep and not kept_keep:
+                kept_keep = True
+                kept.append(hook)
+        if len(kept) == len(inner):
+            result.append(entry)
+        elif kept:
+            result.append({**entry, "hooks": kept})
+    return result
+
+
+def registered_command_path(command: object) -> str | None:
+    """The executable one of our hook entries runs, or None when the entry is not ours."""
+    if is_arize_hook_command(command):
+        words = command_words(command)
+        return words[1] if words[0] == "&" else words[0]
+    return _old_venv_path(command)
 
 
 def merge_harness_entry(

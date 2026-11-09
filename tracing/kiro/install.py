@@ -17,6 +17,8 @@ from core.setup import (
     ensure_shared_runtime,
     env_flag,
     env_value,
+    filter_our_hooks,
+    hook_command_for,
     info,
     install_skills,
     merge_harness_entry,
@@ -27,7 +29,6 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_config,
     write_logging_config,
 )
@@ -146,11 +147,18 @@ def _save_agent(path: Path, data: dict) -> None:
 def _register_kiro_hooks(agent_path: Path, name: str) -> None:
     """Add an entry for each HOOK_EVENT pointing at our hook binary."""
     data = _load_agent(agent_path, name)
-    hook_cmd = str(venv_bin(HOOK_BIN_NAME))
+    hook_cmd = hook_command_for(HARNESS_NAME, HOOK_BIN_NAME, shell="cmd")
     hooks = data.setdefault("hooks", {})
+    # Our older entries (another arize-harness, the old venv's arize-hook-kiro) go, under any event.
+    for event in list(hooks):
+        if event not in HOOK_EVENTS and isinstance(hooks[event], list):
+            hooks[event] = filter_our_hooks(hooks[event], HARNESS_NAME)
+            if not hooks[event]:
+                del hooks[event]
     for event in HOOK_EVENTS:
         event_list = hooks.setdefault(event, [])
-        if not any(h.get("command") == hook_cmd for h in event_list):
+        event_list[:] = filter_our_hooks(event_list, HARNESS_NAME, keep=hook_cmd)
+        if not any(isinstance(h, dict) and h.get("command") == hook_cmd for h in event_list):
             event_list.append({"command": hook_cmd})
 
     if dry_run():
@@ -173,12 +181,11 @@ def _register_kiro_hooks(agent_path: Path, name: str) -> None:
 
 def _unregister_all_kiro_hooks() -> None:
     """Walk KIRO_AGENTS_DIR; in each agent JSON, remove entries whose
-    command equals our HOOK_BIN_NAME (resolved via venv_bin). Drop empty
-    event lists. If a file ended up empty AND was created by us
+    command is ours (``arize-harness hook kiro``, or the old venv's
+    ``arize-hook-kiro``). Drop empty event lists. If a file ended up empty AND was created by us
     (description matches the skeleton), delete it."""
     if not KIRO_AGENTS_DIR.is_dir():
         return
-    hook_cmd = str(venv_bin(HOOK_BIN_NAME))
     skeleton_desc = AGENT_SKELETON["description"]
 
     for agent_file in KIRO_AGENTS_DIR.glob("*.json"):
@@ -194,7 +201,9 @@ def _unregister_all_kiro_hooks() -> None:
         modified = False
         for event in list(hooks.keys()):
             event_list = hooks.get(event, [])
-            filtered = [h for h in event_list if isinstance(h, dict) and h.get("command") != hook_cmd]
+            if not isinstance(event_list, list):
+                continue
+            filtered = filter_our_hooks(event_list, HARNESS_NAME)
             if filtered != event_list:
                 modified = True
             if filtered:

@@ -140,27 +140,6 @@ class TestEnsureSharedRuntime:
 
 
 # ---------------------------------------------------------------------------
-# venv_bin()
-# ---------------------------------------------------------------------------
-
-
-class TestVenvBin:
-    def test_posix(self, fake_install, monkeypatch):
-        monkeypatch.setattr(os, "name", "posix")
-        from core.setup import VENV_DIR, venv_bin
-
-        result = venv_bin("foo")
-        assert result == VENV_DIR / "bin" / "foo"
-
-    def test_windows(self, fake_install, monkeypatch):
-        monkeypatch.setattr(os, "name", "nt")
-        from core.setup import VENV_DIR, venv_bin
-
-        result = venv_bin("foo")
-        assert result == VENV_DIR / "Scripts" / "foo.exe"
-
-
-# ---------------------------------------------------------------------------
 # merge_harness_entry()
 # ---------------------------------------------------------------------------
 

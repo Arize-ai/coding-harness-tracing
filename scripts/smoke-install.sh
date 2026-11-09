@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Install smoke test: build a wheel from this checkout, install it with
 # install.sh --wheel-dir --non-interactive into a throwaway HOME, then check
-# status, update and uninstall. CI's unix-offline and linux-distro-offline jobs
-# run this script.
+# that hooks run `arize-harness hook`, and status, update and uninstall. CI's
+# unix-offline and linux-distro-offline jobs run this script.
 #
 #   scripts/smoke-install.sh [harness]      harness defaults to claude
 #
 #   UV_PYTHON=3.11  build and install with this Python, as CI does
 #   SMOKE_KEEP=1    skip the uninstall and keep the throwaway HOME
 #   SMOKE_INSTALLER=arize-harness
-#                   install the wheel into ~/.arize/harness/venv with pip, then
-#                   run `arize-harness setup` and use arize-harness for status,
+#                   install the wheel with `uv tool install`, then run
+#                   `arize-harness setup` and use arize-harness for status,
 #                   update and uninstall --all (default: install.sh)
 #   SETUPTOOLS_SCM_PRETEND_VERSION=X   build as version X instead of the
 #                   checkout's git version
@@ -31,7 +31,7 @@ esac
 # The command that runs status, update and uninstall for this installer.
 manager() {
     if [[ "$INSTALLER" == arize-harness ]]; then
-        echo "$work/home/.arize/harness/venv/bin/arize-harness"
+        echo "$work/home/.local/bin/arize-harness"
     else
         echo "$work/home/.arize/harness/install.sh"
     fi
@@ -136,18 +136,26 @@ unset CODEX_HOME DEVIN_PROJECT_DIR PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSE
 while IFS= read -r var; do unset "$var"; done < <(compgen -v | grep -E '^(ARIZE|PHOENIX|OTEL|PIP)_' || true)
 export PIP_CONFIG_FILE=/dev/null
 
+# setup refuses to write from anything under the temp dir, and $work is there.
+# Point the temp dir inside $work, away from the throwaway HOME.
+mkdir -p "$work/tmp"
+export TMPDIR="$work/tmp" TEMP="$work/tmp" TMP="$work/tmp"
+
 creds="$work/creds.env"
 printf '%s\n' ARIZE_API_KEY=ci-not-a-real-key ARIZE_SPACE_ID=ci-space > "$creds"
 installed="$HOME/.arize/harness"
 mgr="$(manager)"
 
+# The interpreter of the installed package.
+pyenv="$installed/venv/bin/python"
 if [[ "$INSTALLER" == arize-harness ]]; then
-    # This exact venv: hooks register venv paths, and update only runs from it.
-    step "installing the wheel into $installed/venv"
-    "$py" -m venv "$installed/venv" || die "could not create $installed/venv"
-    "$installed/venv/bin/python" -m pip install --quiet --disable-pip-version-check \
-        --no-index --find-links "$work/wheels" coding-harness-tracing certifi ||
-        die "pip install from $work/wheels failed"
+    # A uv tool install, as users get one: hooks register its command link.
+    export UV_TOOL_DIR="$HOME/.local/share/uv/tools" UV_TOOL_BIN_DIR="$HOME/.local/bin"
+    pyenv="$UV_TOOL_DIR/coding-harness-tracing/bin/python"
+    step "installing the wheel with uv tool install"
+    uv tool install --quiet --offline --no-index --find-links "$work/wheels" --python "$py" \
+        --with certifi "${wheel[0]}" ||
+        die "uv tool install from $work/wheels failed"
     step "installing with arize-harness setup $HARNESS --non-interactive"
     ARIZE_ENV_FILE="$creds" "$mgr" setup "$HARNESS" --non-interactive ||
         die "arize-harness setup $HARNESS exited $?"
@@ -174,37 +182,57 @@ EOF
     { cat "$work/status.json"; die "status --json does not list $config_key with its hooks registered"; }
 echo "$HARNESS is configured and its hooks are registered"
 
+# Every hook entry runs `arize-harness hook`, never a venv arize-hook-* command;
+# a uv tool install registers its command link, so no venv path at all.
+no_venv=()
+[[ "$INSTALLER" == arize-harness ]] && no_venv=(--no-venv)
+"$pyenv" -I "$ROOT/scripts/smoke_hook_commands.py" "$HOME" "$work" ${no_venv[@]+"${no_venv[@]}"} ||
+    die "a harness config runs something other than arize-harness hook"
+echo "harness configs run only arize-harness hook"
+
 [[ ! -e "$installed/pyproject.toml" && ! -e "$installed/.git" ]] ||
     die "$installed holds a source tree. Wheel mode must not fetch the repo"
 echo "no source tree in $installed"
 
 # -I: read the venv's install only, never the cwd or PYTHON* settings.
-reported="$("$installed/venv/bin/python" -I -c "import core; print(core.version())")" ||
-    die "core.version() failed in the installed venv"
+reported="$("$pyenv" -I -c "import core; print(core.version())")" ||
+    die "core.version() failed in the installed environment"
 [[ "$reported" == "$SETUPTOOLS_SCM_PRETEND_VERSION" ]] ||
     die "installed package reports version $reported, but $SETUPTOOLS_SCM_PRETEND_VERSION was built"
 echo "installed package reports version $reported, as built"
 
 if [[ "$(uname)" == Darwin ]]; then
-    "$installed/venv/bin/python" -c "import certifi" 2>/dev/null ||
-        die "certifi is not in the venv, so hooks would fail SSL verification on macOS"
+    "$pyenv" -c "import certifi" 2>/dev/null ||
+        die "certifi is not installed, so hooks would fail SSL verification on macOS"
     echo "certifi installed for the macOS SSL fix"
 fi
 
-step "updating from the local wheelhouse"
-ARIZE_ENV_FILE="$creds" ARIZE_NONINTERACTIVE=1 "$mgr" update --wheel-dir "$work/wheels" ||
-    die "wheel-based update exited $?"
-"$mgr" status --json > "$work/status-after-update.json" ||
-    { rc=$?; cat "$work/status-after-update.json"; die "status after update exited $rc"; }
-echo "wheel-based update completed and remained healthy"
+if [[ "$INSTALLER" == arize-harness ]]; then
+    # update only says how: the package manager that installed it updates it.
+    step "checking that update prints the upgrade command"
+    if "$mgr" update > "$work/update.log" 2>&1; then
+        cat "$work/update.log"
+        die "update exited 0. It must only print the upgrade command"
+    fi
+    grep -q "uv tool upgrade coding-harness-tracing" "$work/update.log" ||
+        { cat "$work/update.log"; die "update did not print the uv tool upgrade command"; }
+    echo "update printed the upgrade command and changed nothing"
+else
+    step "updating from the local wheelhouse"
+    ARIZE_ENV_FILE="$creds" ARIZE_NONINTERACTIVE=1 "$mgr" update --wheel-dir "$work/wheels" ||
+        die "wheel-based update exited $?"
+    "$mgr" status --json > "$work/status-after-update.json" ||
+        { rc=$?; cat "$work/status-after-update.json"; die "status after update exited $rc"; }
+    echo "wheel-based update completed and remained healthy"
 
-if "$mgr" update > "$work/update.log" 2>&1; then
-    cat "$work/update.log"
-    die "update exited 0. An offline install must refuse to update"
+    if "$mgr" update > "$work/update.log" 2>&1; then
+        cat "$work/update.log"
+        die "update exited 0. An offline install must refuse to update"
+    fi
+    grep -q "no source tree to update" "$work/update.log" ||
+        { cat "$work/update.log"; die "update failed, but not with the offline-install refusal"; }
+    echo "update refused, as intended"
 fi
-grep -q "no source tree to update" "$work/update.log" ||
-    { cat "$work/update.log"; die "update failed, but not with the offline-install refusal"; }
-echo "update refused, as intended"
 
 if [[ "$KEEP" == 1 ]]; then
     echo
@@ -218,9 +246,17 @@ uninstall_all=(uninstall)
 [[ "$INSTALLER" == arize-harness ]] && uninstall_all=(uninstall --all)
 "$mgr" "${uninstall_all[@]}" > "$work/uninstall.log" 2>&1 ||
     { rc=$?; cat "$work/uninstall.log"; die "uninstall exited $rc"; }
-[[ ! -e "$installed/venv" ]] ||
-    { cat "$work/uninstall.log"; die "$installed/venv survived the uninstall"; }
-echo "uninstall removed the venv"
+if [[ "$INSTALLER" == arize-harness ]]; then
+    [[ ! -e "$installed" ]] ||
+        { cat "$work/uninstall.log"; ls -la "$installed"; die "$installed survived uninstall --all"; }
+    "$mgr" --version > /dev/null ||
+        { cat "$work/uninstall.log"; die "uninstall --all broke the running arize-harness"; }
+    echo "uninstall --all removed $installed and kept arize-harness"
+else
+    [[ ! -e "$installed/venv" ]] ||
+        { cat "$work/uninstall.log"; die "$installed/venv survived the uninstall"; }
+    echo "uninstall removed the venv"
+fi
 
 echo
 echo "smoke-install: OK ($HARNESS via $INSTALLER)"

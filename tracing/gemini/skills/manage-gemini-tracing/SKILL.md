@@ -159,7 +159,7 @@ The installer registers all 8 hook events (`SessionStart`, `SessionEnd`, `Before
 3. **Hooks active**: Verify `~/.gemini/settings.json` contains 8 hook entries with `name: arize-tracing`.
 4. **Quick dry-run test** (optional):
    ```bash
-   echo '{"event":"BeforeModel"}' | ARIZE_DRY_RUN=true arize-hook-gemini-before-model
+   echo '{"event":"BeforeModel"}' | ARIZE_DRY_RUN=true arize-harness hook gemini before-model
    ```
 
 ### Confirm

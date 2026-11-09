@@ -97,11 +97,10 @@ def cwd_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(_ac, "SETTINGS_DIR", antigravity_settings_dir)
     monkeypatch.setattr(_ac, "SETTINGS_FILE", antigravity_settings_dir / "hooks.json")
 
-    # Mock venv_bin so commands are deterministic and don't depend on a real venv
-    def _fake_venv_bin(name):
-        return tmp_path / ".arize" / "harness" / "venv" / "bin" / name
+    # A fixed arize-harness, so commands don't depend on where the tests run from
+    from core.setup import runner
 
-    monkeypatch.setattr(_install, "venv_bin", _fake_venv_bin)
+    monkeypatch.setattr(runner, "arize_harness_path", lambda: tmp_path / ".local" / "bin" / "arize-harness")
 
     return tmp_path
 
@@ -155,7 +154,7 @@ class TestInstallFreshStructure:
             assert "matcher" not in h
             assert "hooks" not in h
             assert h["type"] == "command"
-            assert entry_point in h["command"]
+            assert h["command"].endswith(" hook antigravity " + entry_point.removeprefix("arize-hook-antigravity-"))
 
     def test_timeout_is_30_seconds_int(self, settings_file, monkeypatch):
         """Timeout MUST be 30 (seconds), never 30000 (ms)."""
@@ -168,14 +167,16 @@ class TestInstallFreshStructure:
             assert handler["timeout"] == _ac.HOOK_TIMEOUT_SECONDS
             assert isinstance(handler["timeout"], int)
 
-    def test_command_uses_venv_bin(self, cwd_tmp, settings_file, monkeypatch):
+    def test_command_runs_arize_harness_hook(self, cwd_tmp, settings_file, monkeypatch):
+        from core.setup import hook_command_for
+
         _mock_prompts(monkeypatch)
         install()
         data = json.loads(settings_file.read_text())
         for event, entry_point in _ac.EVENTS.items():
             cmd = data[_ac.HOOK_NAME][event][0]["command"]
-            assert "venv" in cmd
-            assert cmd.endswith(entry_point)
+            assert cmd == hook_command_for("antigravity", entry_point)
+            assert cmd.startswith(f"'{cwd_tmp.as_posix()}/.local/bin/arize-harness' hook antigravity ")
 
     def test_pretty_printed_with_trailing_newline(self, settings_file, monkeypatch):
         _mock_prompts(monkeypatch)

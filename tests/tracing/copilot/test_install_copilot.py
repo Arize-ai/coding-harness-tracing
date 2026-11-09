@@ -150,10 +150,44 @@ class TestInstallFreshWritesFlatHarnessEntry:
             "Stop",
             "SubagentStop",
         }
+        from core.setup import hook_command_fields
+        from tracing.copilot.constants import HOOK_EVENTS
+
         for event, entries in data["hooks"].items():
             assert len(entries) == 1
-            assert entries[0]["type"] == "command"
-            assert "arize-hook-copilot-" in entries[0]["command"]
+            assert entries[0] == {"type": "command", **hook_command_fields("copilot", HOOK_EVENTS[event])}
+
+    def test_reinstall_replaces_an_older_entry_in_place(self, hooks_dir, monkeypatch):
+        """An entry of ours without the per-OS fields is rewritten where it was; the user's stay put."""
+        import core.setup as setup_mod
+        from core.setup import hook_command_fields
+
+        old = str(setup_mod.VENV_DIR / "bin" / "arize-hook-copilot-stop")
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        (hooks_dir / "hooks.json").write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "Stop": [
+                            {"type": "command", "command": "echo before"},
+                            {"type": "command", "command": old},
+                            {"type": "command", "command": "echo after"},
+                        ]
+                    }
+                }
+            )
+        )
+        _mock_prompts(monkeypatch)
+        install()
+        first = (hooks_dir / "hooks.json").read_text()
+        stop = json.loads(first)["hooks"]["Stop"]
+        assert stop == [
+            {"type": "command", "command": "echo before"},
+            {"type": "command", **hook_command_fields("copilot", "arize-hook-copilot-stop")},
+            {"type": "command", "command": "echo after"},
+        ]
+        install()
+        assert (hooks_dir / "hooks.json").read_text() == first
 
     def test_only_hooks_json_written(self, hooks_dir, monkeypatch):
         _mock_prompts(monkeypatch)

@@ -49,7 +49,7 @@ That path skips the wizard, so set backend credentials in `~/.claude/settings.js
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- codex
 ```
 
-The installer registers hooks in `~/.codex/config.toml`. Codex will not run them until you trust them once: start `codex`, run `/hooks`, and approve each `arize-hook-codex-*` entry. Then run a session, for example:
+The installer registers hooks in `~/.codex/config.toml`. Codex will not run them until you trust them once: start `codex`, run `/hooks`, and approve the `arize-harness hook codex` entries. Then run a session, for example:
 
 ```bash
 codex exec "explain what this file does" path/to/file.py
@@ -205,6 +205,8 @@ An API key on its own is rejected as ambiguous, since both backends use one.
 
 With no terminal to answer on — CI, a cron job, a script — it takes the stored values instead of failing. Credentials aren't re-read on that path; only the project name is confirmed, and it keeps whatever is in `config.json`.
 
+`arize-harness update` changes nothing: it prints the command that updates the install it runs from (`uv tool upgrade coding-harness-tracing`, `pipx upgrade coding-harness-tracing`, `install.bat update`, re-running `install.sh`, or downloading a new binary) and exits non-zero. Hooks run the command link, so no re-setup is needed after an upgrade.
+
 ### Checking what's installed
 
 `status` reports which harnesses are configured and whether their hooks are actually wired into the harness's own settings file — the two things that have to both be true for traces to appear.
@@ -234,11 +236,11 @@ Harnesses:
     hooks:    registered (/Users/me/.claude/settings.json)
 ```
 
-`hooks: NOT registered` means credentials are saved but the harness was never wired up (or something removed the hooks) — re-run the install for that harness.
+`hooks: NOT registered` means credentials are saved but the harness was never wired up (or something removed the hooks), or the `arize-harness` its hooks run no longer exists (`missing:` names it) — re-run the install for that harness.
 
 ### Running a hook by hand
 
-`arize-harness hook` runs the same handler as the matching `arize-hook-*` command. The installers still register the `arize-hook-*` commands, so existing harness configs don't need to change.
+`arize-harness hook` runs the same handler as the matching `arize-hook-*` command. Every hook entry setup writes runs `'<path>' hook <harness> [<event>]`, where `<path>` is the `arize-harness` that ran setup: the `uv tool` or `pipx` command link (`~/.local/bin/arize-harness`), or the binary. Re-running `arize-harness setup <harness>` replaces the entries older installs wrote (the `~/.arize/harness/venv` `arize-hook-*` commands) and leaves your own hooks alone.
 
 ```bash
 arize-harness hook --list                  # every harness and event it accepts

@@ -18,7 +18,7 @@ Codex tracing uses real Codex CLI lifecycle hooks plus the legacy `notify` hook 
    - `arize-hook-codex-tool` (`PreToolUse`, `PostToolUse`, `PermissionRequest`) — appends rows to `~/.arize/harness/state/codex/spans_<thread_id>.jsonl`.
    - `arize-hook-codex-stop` (`Stop`) — reads state + JSONL, builds the parent LLM span plus TOOL child spans, sends the multi-span payload, then clears turn-scoped state and deletes the JSONL.
 
-3. **Notify hook** (`arize-hook-codex-notify`) — Fires on `agent-turn-complete`. Real Codex hook payloads don't carry exact token counts, so `notify` is kept purely as a token-usage backstop: it extracts `token_usage` and `last-assistant-message` from the notify payload and writes them into the state file. If the state file doesn't exist (hooks not yet trusted, first run), notify falls back to its legacy behavior of emitting a single flat Turn span.
+3. **Notify hook** (`arize-harness hook codex notify`) — Fires on `agent-turn-complete`. Real Codex hook payloads don't carry exact token counts, so `notify` is kept purely as a token-usage backstop: it extracts `token_usage` and `last-assistant-message` from the notify payload and writes them into the state file. If the state file doesn't exist (hooks not yet trusted, first run), notify falls back to its legacy behavior of emitting a single flat Turn span.
 
 ```
 Codex CLI
@@ -29,7 +29,7 @@ Codex CLI
   |-- PreToolUse / PostToolUse / PermissionRequest --> arize-hook-codex-tool
   |     |--> appends row to spans_<thread_id>.jsonl
   |
-  |-- agent-turn-complete (notify) --> arize-hook-codex-notify
+  |-- agent-turn-complete (notify) --> arize-harness hook codex notify
   |     |--> writes token_usage into state_<thread_id>.json
   |
   |-- Stop --> arize-hook-codex-stop
@@ -46,7 +46,7 @@ Codex CLI
 Codex requires explicit user trust for non-managed hooks before they fire. After install, the user must:
 
 1. Start a Codex session: `codex`
-2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
+2. Type `/hooks` and approve the `arize-harness hook codex` entries.
 
 Without this one-time approval, the real hooks never fire and tracing falls back to `notify`-only (single LLM span per turn, no tool spans).
 
@@ -207,7 +207,7 @@ If the user wants to associate spans with a user ID, add `export ARIZE_USER_ID="
 Read `~/.codex/config.toml`. Add the `notify` line at the top level (NOT inside any `[section]`) — this is the token-usage backstop:
 
 ```toml
-notify = ["~/.arize/harness/venv/bin/arize-hook-codex-notify"]
+notify = ["/home/you/.local/bin/arize-harness", "hook", "codex", "notify"]
 ```
 
 Then add one `[[hooks.<Event>]]` entry per real Codex lifecycle event:
@@ -239,7 +239,7 @@ command = ["~/.arize/harness/venv/bin/arize-hook-codex-stop"]
 Codex requires explicit user trust for non-managed hooks before they fire. The user must:
 
 1. Start a Codex session: `codex`
-2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
+2. Type `/hooks` and approve the `arize-harness hook codex` entries.
 
 Until this is done, only the `notify` token-usage backstop will run (flat single-span tracing). The real hooks will not fire.
 
@@ -261,7 +261,7 @@ source ~/.codex/arize-env.sh && echo "ARIZE_TRACE_ENABLED=$ARIZE_TRACE_ENABLED"
 ```
 
 3. **Check the hooks are trusted inside Codex:**
-   Start `codex`, run `/hooks`, and confirm each `arize-hook-codex-*` entry is listed and approved.
+   Start `codex`, run `/hooks`, and confirm the `arize-harness hook codex` entries are listed and approved.
 
 4. **Phoenix connectivity** (if using Phoenix):
 ```bash
@@ -270,7 +270,7 @@ curl -sf ${PHOENIX_ENDPOINT}/v1/traces >/dev/null && echo "Phoenix reachable" ||
 
 5. **Dry run test:**
 ```bash
-ARIZE_DRY_RUN=true arize-hook-codex-notify '{"type":"agent-turn-complete","thread-id":"test-123","turn-id":"turn-1","cwd":"/tmp","input-messages":"hello","last-assistant-message":"hi there"}'
+ARIZE_DRY_RUN=true arize-harness hook codex notify '{"type":"agent-turn-complete","thread-id":"test-123","turn-id":"turn-1","cwd":"/tmp","input-messages":"hello","last-assistant-message":"hi there"}'
 ```
 Should print: `[arize] DRY RUN:` followed by the span name.
 
@@ -313,7 +313,7 @@ Common issues and fixes:
 | Problem | Fix |
 |---------|-----|
 | Traces not appearing | Check `ARIZE_TRACE_ENABLED` is `true` in `~/.codex/arize-env.sh` |
-| Hooks not firing | Run `codex` → `/hooks` and confirm each `arize-hook-codex-*` entry is trusted. If they aren't listed at all, re-run the installer. |
+| Hooks not firing | Run `codex` → `/hooks` and confirm the `arize-harness hook codex` entries are trusted. If they aren't listed at all, re-run the installer. |
 | `notify` hook not firing | Verify `notify` line in `~/.codex/config.toml` points to correct path |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | No output in terminal | Hooks run in background; check `~/.arize/harness/logs/codex.log` |
@@ -322,5 +322,5 @@ Common issues and fixes:
 | Wrong project name | Check `harnesses.codex.project_name` in `~/.arize/harness/config.json`. For a runtime override, set `ARIZE_PROJECT_NAME` for AX or `PHOENIX_PROJECT` for Phoenix in `~/.codex/arize-env.sh`. |
 | Existing `notify` hook | Codex supports only one `notify` — create a wrapper script that calls both |
 | Stale state files | Run: `rm -rf ~/.arize/harness/state/codex/state_*.json ~/.arize/harness/state/codex/spans_*.jsonl` |
-| Flat spans only (no children) | The real hooks haven't been trusted yet. Run `codex` → `/hooks` and approve each `arize-hook-codex-*` entry. |
+| Flat spans only (no children) | The real hooks haven't been trusted yet. Run `codex` → `/hooks` and approve the `arize-harness hook codex` entries. |
 | User ID not appearing on spans | Set `ARIZE_USER_ID` in `~/.codex/arize-env.sh` or export before running Codex |

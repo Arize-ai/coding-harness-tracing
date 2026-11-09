@@ -8,6 +8,7 @@ import pytest
 
 import tracing.gemini.constants as _gc
 import tracing.gemini.install as _install
+from core.setup import hook_command_for
 
 install = _install.install
 uninstall = _install.uninstall
@@ -165,7 +166,7 @@ class TestInstallFreshWritesFlatHarnessEntry:
             inner = block["hooks"][0]
             assert inner["type"] == "command"
             assert inner["name"] == _gc.HOOK_NAME
-            assert entry_point in inner["command"]
+            assert inner["command"] == hook_command_for("gemini", entry_point, shell="powershell")
             assert inner["timeout"] == _gc.HOOK_TIMEOUT_MS
 
     def test_settings_json_pretty_printed_with_trailing_newline(self, settings_file, monkeypatch):
@@ -177,16 +178,70 @@ class TestInstallFreshWritesFlatHarnessEntry:
         # Trailing newline
         assert text.endswith("\n")
 
-    def test_settings_json_command_uses_venv_bin(self, cwd_tmp, settings_file, monkeypatch):
-        """Commands should reference the venv bin path."""
+    def test_settings_json_command_runs_arize_harness_hook(self, cwd_tmp, settings_file, monkeypatch):
+        """Commands run ``arize-harness hook gemini <event>``, never a venv ``arize-hook-*``."""
+        from core.setup import is_arize_hook_command, is_old_venv_hook
+
         _mock_prompts(monkeypatch)
         install()
         data = json.loads(settings_file.read_text())
-        # Pick one event to check
-        first_event = list(_gc.EVENTS.keys())[0]
-        cmd = data["hooks"][first_event][0]["hooks"][0]["command"]
-        # Should contain venv path component
-        assert "venv" in cmd or ".arize" in cmd
+        for event in _gc.EVENTS:
+            cmd = data["hooks"][event][0]["hooks"][0]["command"]
+            assert is_arize_hook_command(cmd, "gemini") and not is_old_venv_hook(cmd)
+
+    def test_mixed_block_keeps_the_users_hook(self, cwd_tmp, settings_file, monkeypatch):
+        """A block holding a user hook and one of ours loses only ours, on setup and on uninstall."""
+        import core.setup as setup_mod
+
+        old = str(setup_mod.VENV_DIR / "bin" / "arize-hook-gemini-before-tool")
+        user_hook = {"type": "command", "name": "my-linter", "command": "lint.sh"}
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "BeforeTool": [
+                            {"matcher": "write_file", "hooks": [user_hook, {"type": "command", "command": old}]},
+                            {"matcher": "", "hooks": [{"type": "command", "name": _gc.HOOK_NAME, "command": old}]},
+                        ]
+                    }
+                }
+            )
+        )
+        _mock_prompts(monkeypatch)
+        install()
+        blocks = json.loads(settings_file.read_text())["hooks"]["BeforeTool"]
+        ours = hook_command_for("gemini", "arize-hook-gemini-before-tool", shell="powershell")
+        assert blocks[0] == {"matcher": "write_file", "hooks": [user_hook]}
+        assert [h["command"] for b in blocks for h in b["hooks"]] == ["lint.sh", ours]
+
+        uninstall()
+        data = json.loads(settings_file.read_text())
+        assert data["hooks"]["BeforeTool"] == [{"matcher": "write_file", "hooks": [user_hook]}]
+
+    def test_reinstall_replaces_old_venv_blocks_and_keeps_others(self, cwd_tmp, settings_file, monkeypatch):
+        import core.setup as setup_mod
+
+        old = str(setup_mod.VENV_DIR / "bin" / "arize-hook-gemini-session-start")
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {"matcher": "", "hooks": [{"type": "command", "command": old}]},
+                            {"matcher": "", "hooks": [{"type": "command", "name": "user", "command": "echo hi"}]},
+                        ]
+                    }
+                }
+            )
+        )
+        _mock_prompts(monkeypatch)
+        install()
+        blocks = json.loads(settings_file.read_text())["hooks"]["SessionStart"]
+        commands = [h["command"] for b in blocks for h in b["hooks"]]
+        assert old not in commands and "echo hi" in commands
+        assert commands.count(hook_command_for("gemini", "arize-hook-gemini-session-start", shell="powershell")) == 1
 
 
 # ---------------------------------------------------------------------------

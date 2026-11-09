@@ -71,6 +71,20 @@ def isolate_setup_files(tmp_path, monkeypatch):
     monkeypatch.setattr(core.setup, "INSTALL_DIR", tmp_path / "isolated-home" / ".arize" / "harness")
 
 
+@pytest.fixture(autouse=True)
+def setup_allowed_from_checkout(monkeypatch):
+    """Let in-process ``arize-harness setup`` run from this checkout.
+
+    ``require_setup_writes()`` refuses a dev checkout, which is where tests
+    run. Tests of the refusal restore it with
+    ``monkeypatch.setattr(commands, "require_setup_writes", runner.require_setup_writes)``;
+    subprocesses get the same allowance from ``tests._install_type.PERSISTENT_PYTHONPATH``.
+    """
+    import core.setup.commands as commands
+
+    monkeypatch.setattr(commands, "require_setup_writes", lambda: None)
+
+
 @pytest.fixture
 def tmp_harness_dir(tmp_path, monkeypatch):
     """Create the full ~/.arize/harness directory tree in a temp location.

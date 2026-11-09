@@ -11,8 +11,8 @@ import pytest
 from tracing.kiro.constants import AGENT_SKELETON, DEFAULT_AGENT_NAME, HOOK_EVENTS
 
 # The hook command string that install.py should write into agent configs.
-FAKE_VENV_BIN = Path("/fake/venv/bin/arize-hook-kiro")
-HOOK_CMD = str(FAKE_VENV_BIN)
+# What hook_command_for() gives a uv tool install at /fake/bin.
+HOOK_CMD = "'/fake/bin/arize-harness' hook kiro"
 
 # Derive expected keys from the constant so the test stays in sync.
 EXPECTED_SKELETON_KEYS = set(AGENT_SKELETON.keys())
@@ -24,12 +24,9 @@ EXPECTED_SKELETON_KEYS = set(AGENT_SKELETON.keys())
 
 
 @pytest.fixture(autouse=True)
-def _mock_venv_bin(monkeypatch):
-    """Make venv_bin() always return our fake path."""
-    monkeypatch.setattr(
-        "tracing.kiro.install.venv_bin",
-        lambda name: FAKE_VENV_BIN,
-    )
+def _mock_hook_command(monkeypatch):
+    """Make hook_command_for() always return our fake command."""
+    monkeypatch.setattr("tracing.kiro.install.hook_command_for", lambda *args, **kwargs: HOOK_CMD)
 
 
 @pytest.fixture(autouse=True)

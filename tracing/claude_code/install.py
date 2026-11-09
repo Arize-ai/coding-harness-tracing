@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import json
-import shlex
 import sys
+from typing import Optional
 
 from core.config import load_config
 from core.setup import (
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
+    filter_our_nested_hooks,
     harness_dir,
+    hook_command_for,
     info,
     install_skills,
+    is_our_hook_command,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
@@ -21,7 +24,6 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_config,
     write_logging_config,
 )
@@ -108,6 +110,23 @@ def _save_settings(settings: dict) -> None:
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")
 
 
+def _is_our_plugin(entry: object, plugin_dirs: set) -> bool:
+    """True for a ``plugins`` entry (a path, or ``{"path": ...}``) naming one of ``plugin_dirs``."""
+    if isinstance(entry, str):
+        return entry in plugin_dirs
+    return isinstance(entry, dict) and entry.get("path") in plugin_dirs
+
+
+def _is_our_hook(hook: dict) -> bool:
+    """Ours: a command hook running ``arize-harness hook claude ...`` or an old venv ``arize-hook-*``."""
+    return hook.get("type") == "command" and is_our_hook_command(hook.get("command"), HARNESS_NAME)
+
+
+def _filter_our_hooks(event_hooks: list, keep: Optional[str]) -> list:
+    """``event_hooks`` without our commands, except the first one equal to ``keep`` (see ``filter_our_nested_hooks``)."""
+    return filter_our_nested_hooks(event_hooks, HARNESS_NAME, keep=keep, is_ours=_is_our_hook)
+
+
 def _register_claude_hooks() -> None:
     """Read SETTINGS_FILE (or init to {}), add plugin reference + hook commands.
 
@@ -117,20 +136,20 @@ def _register_claude_hooks() -> None:
     ``--setting-sources`` defaults to ``project,local`` and user-level hooks
     would otherwise be skipped.
 
-    Merges with existing entries without duplicating. Uses venv_bin() for each
-    HOOK_EVENTS entry point. Honors dry_run().
+    Each HOOK_EVENTS entry runs ``hook_command()``. Our older entries are
+    replaced: commands from another ``arize-harness``, the old venv's
+    ``arize-hook-*`` commands, and the plugin entry for
+    ``~/.arize/harness/tracing/claude_code``. Running it twice changes nothing.
+    Honors dry_run().
     """
     settings = _load_settings()
     plugin_dir = str(claude_plugin_dir())
 
-    # Add plugin reference (idempotent — skip if the path is already listed
-    # under either the string or {path: ...} shape used by the marketplace).
+    # Drop the plugin entry older installs registered, then add ours once
+    # (either the string or {path: ...} shape used by the marketplace counts).
     plugins = settings.setdefault("plugins", [])
-    has_plugin = any(
-        (isinstance(p, str) and p == plugin_dir) or (isinstance(p, dict) and p.get("path") == plugin_dir)
-        for p in plugins
-    )
-    if not has_plugin:
+    plugins[:] = [p for p in plugins if not _is_our_plugin(p, {str(harness_dir("claude-code"))})]
+    if not any(_is_our_plugin(p, {plugin_dir}) for p in plugins):
         plugins.append({"type": "local", "path": plugin_dir})
 
     # Set env vars (only if absent). We deliberately do NOT bake
@@ -141,30 +160,23 @@ def _register_claude_hooks() -> None:
     env_block = settings.setdefault("env", {})
     env_block.setdefault("ARIZE_TRACE_ENABLED", "true")
 
-    # Register hooks
+    # Register hooks. Events we no longer register lose our old entries too.
     hooks = settings.setdefault("hooks", {})
+    for event in list(hooks):
+        if event not in HOOK_EVENTS and isinstance(hooks[event], list):
+            hooks[event] = _filter_our_hooks(hooks[event], keep=None)
+            if not hooks[event]:
+                del hooks[event]
     for event, entry_point in HOOK_EVENTS.items():
-        hook_path = venv_bin(entry_point)
-        hook_cmd = shlex.quote(hook_path.as_posix())
+        hook_cmd = hook_command_for(HARNESS_NAME, entry_point)
         event_hooks = hooks.setdefault(event, [])
-        legacy_cmd = str(hook_path)
-        if legacy_cmd != hook_cmd:
-            # Older installers wrote native paths that Bash can misinterpret.
-            # Remove only this event's exact legacy command
-            cleaned = []
-            for entry in event_hooks:
-                entry_hooks = entry.get("hooks", [])
-                kept_hooks = [
-                    hook
-                    for hook in entry_hooks
-                    if not (hook.get("type") == "command" and hook.get("command") == legacy_cmd)
-                ]
-                if len(kept_hooks) == len(entry_hooks):
-                    cleaned.append(entry)
-                elif kept_hooks:
-                    cleaned.append({**entry, "hooks": kept_hooks})
-            event_hooks[:] = cleaned
-        already = any(h.get("command", "") == hook_cmd for entry in event_hooks for h in entry.get("hooks", []))
+        event_hooks[:] = _filter_our_hooks(event_hooks, keep=hook_cmd)
+        already = any(
+            isinstance(h, dict) and h.get("command") == hook_cmd
+            for entry in event_hooks
+            if isinstance(entry, dict)
+            for h in entry.get("hooks", [])
+        )
         if not already:
             event_hooks.append({"hooks": [{"type": "command", "command": hook_cmd}]})
 
@@ -178,8 +190,9 @@ def _register_claude_hooks() -> None:
 def _unregister_claude_hooks() -> None:
     """Remove our hook entries and plugin reference from SETTINGS_FILE.
 
-    Keeps other hooks, plugins, and env vars intact. No-op if file doesn't
-    exist. Honors dry_run().
+    Removes today's ``arize-harness hook claude`` commands and the old venv
+    ones. Keeps other hooks, plugins, and env vars intact. No-op if file
+    doesn't exist. Honors dry_run().
     """
     if not SETTINGS_FILE.exists():
         return
@@ -193,33 +206,17 @@ def _unregister_claude_hooks() -> None:
 
     # Remove our plugin entries (drops empty list).
     if "plugins" in settings:
-        settings["plugins"] = [
-            p
-            for p in settings["plugins"]
-            if not ((isinstance(p, str) and p in plugin_dirs) or (isinstance(p, dict) and p.get("path") in plugin_dirs))
-        ]
+        settings["plugins"] = [p for p in settings["plugins"] if not _is_our_plugin(p, plugin_dirs)]
         if not settings["plugins"]:
             del settings["plugins"]
 
     # Remove our hook entries
     if "hooks" in settings:
-        our_commands = {str(venv_bin(ep)) for ep in HOOK_EVENTS.values()}
-        our_commands.update(shlex.quote(venv_bin(ep).as_posix()) for ep in HOOK_EVENTS.values())
         hooks = settings["hooks"]
         for event in list(hooks.keys()):
-            event_hooks = hooks[event]
-            filtered = []
-            for entry in event_hooks:
-                entry_hooks = entry.get("hooks", [])
-                kept_hooks = [
-                    hook
-                    for hook in entry_hooks
-                    if not (hook.get("type") == "command" and hook.get("command") in our_commands)
-                ]
-                if len(kept_hooks) == len(entry_hooks):
-                    filtered.append(entry)
-                elif kept_hooks:
-                    filtered.append({**entry, "hooks": kept_hooks})
+            if not isinstance(hooks[event], list):
+                continue
+            filtered = _filter_our_hooks(hooks[event], keep=None)
             if filtered:
                 hooks[event] = filtered
             else:
