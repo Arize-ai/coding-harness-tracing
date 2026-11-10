@@ -15,6 +15,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1027,3 +1028,120 @@ class TestWriteErrorNotMasked:
                 ],
             )
         assert str(bad) in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# PR review: folder ownership and operation-wide locking
+# ---------------------------------------------------------------------------
+
+
+def _replace_skill_folder_with_link(project: Path, home: Path) -> Path:
+    """Swap the installed codex skill folder for a symlink to a user folder holding their own SKILL.md."""
+    skill = project / ".agents" / "skills" / "manage-codex-tracing"
+    theirs = home / "my-skills" / "manage-codex-tracing"
+    theirs.mkdir(parents=True)
+    (theirs / "SKILL.md").write_text("the user's own skill")
+    (skill / "SKILL.md").unlink()
+    skill.rmdir()
+    skill.symlink_to(theirs)
+    return theirs / "SKILL.md"
+
+
+@POSIX_ONLY
+class TestSymlinkedSkillFolder:
+    def test_refresh_leaves_the_users_file(self, install_dir, tmp_path, writable, capsys):
+        assets.install_skills("codex", tmp_path / "proj")
+        users = _replace_skill_folder_with_link(tmp_path / "proj", tmp_path)
+        _age(install_dir)
+
+        assert assets.refresh_stale() == []
+
+        assert users.read_text() == "the user's own skill"
+        assert "is a symlink setup did not make" in capsys.readouterr().out
+        assert "codex" not in assets.load_manifest()["harnesses"], "no longer tracked"
+
+    def test_uninstall_leaves_the_users_file(self, install_dir, tmp_path, capsys):
+        assets.install_skills("codex", tmp_path / "proj")
+        users = _replace_skill_folder_with_link(tmp_path / "proj", tmp_path)
+
+        assert assets.uninstall_files("codex") is True
+
+        assert users.read_text() == "the user's own skill"
+        assert (tmp_path / "proj" / ".agents" / "skills" / "manage-codex-tracing").is_symlink()
+        assert "is a symlink setup did not make" in capsys.readouterr().out
+        assert "codex" not in assets.load_manifest()["harnesses"]
+
+    def test_symlinked_claude_plugin_subfolder(self, install_dir, tmp_path, writable):
+        root = assets.install_claude_plugin()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "hooks.json").write_text("theirs")
+        (root / "hooks" / "hooks.json").unlink()
+        (root / "hooks").rmdir()
+        (root / "hooks").symlink_to(elsewhere)
+        _age(install_dir)
+
+        assets.refresh_stale()
+        assert (elsewhere / "hooks.json").read_text() == "theirs"
+        assets.uninstall_files("claude-code")
+        assert (elsewhere / "hooks.json").read_text() == "theirs"
+
+    def test_real_folders_still_refresh_and_uninstall(self, install_dir, tmp_path, writable):
+        assets.install_skills("codex", tmp_path / "proj")
+        skill = tmp_path / "proj" / ".agents" / "skills" / "manage-codex-tracing" / "SKILL.md"
+        skill.write_text("stale")
+        _age(install_dir)
+        assert assets.refresh_stale() == [str(skill)]
+        assert assets.uninstall_files("codex") is True
+        assert not skill.exists()
+
+
+@pytest.mark.timeout(60)  # a non-reentrant or missing lock must fail, not hang
+class TestLockSpansTheOperation:
+    def test_lock_is_reentrant_in_one_thread(self):
+        with assets._manifest_lock():
+            with assets.manifest_transaction() as manifest:
+                manifest["harnesses"]["x"] = {}
+        assert "x" in assets.load_manifest()["harnesses"]
+
+    def test_setup_during_uninstall_waits_and_stays_recorded(self, install_dir, tmp_path, monkeypatch):
+        """Uninstall paused after deleting a skill file; setup of the same skill must wait, then be recorded."""
+        project = tmp_path / "proj"
+        assets.install_skills("codex", project)
+        target = project / ".agents" / "skills" / "manage-codex-tracing" / "SKILL.md"
+        code = (
+            "import sys; from pathlib import Path; import core.setup as s; "
+            f"s.INSTALL_DIR = Path({str(install_dir)!r}); "
+            "from core.setup import assets; assets.install_skills('codex', Path(sys.argv[1]))"
+        )
+        env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
+        seen = {}
+        real_unlink = Path.unlink
+
+        def unlink_then_race(self, *args, **kwargs):
+            real_unlink(self, *args, **kwargs)
+            if self == target and "proc" not in seen:
+                # Mid-uninstall: start a concurrent setup and give it time to run if it could.
+                seen["proc"] = subprocess.Popen([sys.executable, "-c", code, str(project)], env=env, cwd=tmp_path)
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and seen["proc"].poll() is None and not target.exists():
+                    time.sleep(0.05)
+                seen["blocked"] = seen["proc"].poll() is None and not target.exists()
+
+        monkeypatch.setattr(Path, "unlink", unlink_then_race)
+        assert assets.uninstall_files("codex") is True
+        monkeypatch.setattr(Path, "unlink", real_unlink)
+        assert seen["proc"].wait(timeout=60) == 0
+
+        assert seen["blocked"], "setup ran while uninstall held the manifest"
+        assert target.is_file(), "setup ran after uninstall finished"
+        assert str(target) in assets.recorded("codex"), "and its file is recorded, so the next uninstall removes it"
+        assert assets.uninstall_files("codex") is True
+        assert not target.exists()
+
+    def test_dry_run_creates_no_lock_file(self, install_dir, tmp_path, monkeypatch):
+        monkeypatch.setenv("ARIZE_DRY_RUN", "true")
+        assets.install_skills("codex", tmp_path)
+        assets.uninstall_files("codex")
+        assets.refresh_stale()
+        assert not install_dir.exists()
