@@ -605,17 +605,22 @@ def install_skills(harness: str, target_dir: Optional[Path] = None) -> None:
         return
     dest = _skills_dest(target_dir)
     old_root = _old_skills_root(harness)
+    ours = recorded(harness)
     specs: List[FileSpec] = []
     old_links: List[Path] = []
     for name, rel in skills:
         skill_dir = dest / name
+        target = skill_dir / rel.split("/", 2)[2]
         if skill_dir.is_symlink():
             if not _points_into(skill_dir, old_root):
                 _setup.info(f"warning: {skill_dir} is a symlink setup did not make; leaving it, skipping {name}")
                 continue
             if skill_dir not in old_links:
                 old_links.append(skill_dir)
-        specs.append((rel, skill_dir / rel.split("/", 2)[2], "copy", skill_dir))
+        elif skill_dir.exists() and str(target) not in ours:
+            _setup.info(f"warning: {skill_dir} is a folder setup did not make; leaving it, skipping {name}")
+            continue
+        specs.append((rel, target, "copy", skill_dir))
     if specs:
         write_files(harness, specs, unlink_first=old_links)
 

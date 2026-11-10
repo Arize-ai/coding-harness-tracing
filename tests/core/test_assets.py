@@ -313,6 +313,28 @@ class TestSkills:
         assert (skill / "SKILL.md").read_text() != "old"
         assert (old_src / "SKILL.md").read_text() == "old", "never writes through the old link"
 
+    def test_leaves_a_skill_folder_setup_did_not_write(self, install_dir, tmp_path, capsys):
+        skill = tmp_path / ".agents" / "skills" / "manage-cursor-tracing"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("mine")
+
+        assets.install_skills("cursor", tmp_path)
+        assert (skill / "SKILL.md").read_text() == "mine"
+        assert f"{skill} is a folder setup did not make" in capsys.readouterr().out
+
+        assets.uninstall_files("cursor")
+        assert (skill / "SKILL.md").read_text() == "mine", "uninstall never removes it"
+
+    def test_rewrites_a_skill_folder_it_wrote(self, install_dir, tmp_path):
+        assets.install_skills("cursor", tmp_path)
+        skill_md = tmp_path / ".agents" / "skills" / "manage-cursor-tracing" / "SKILL.md"
+        skill_md.write_text("edited")
+
+        assets.install_skills("cursor", tmp_path)
+        assert (
+            skill_md.read_bytes() == (TRACING / "cursor" / "skills" / "manage-cursor-tracing" / "SKILL.md").read_bytes()
+        )
+
     def test_harness_without_skills_is_a_no_op(self, tmp_path):
         for harness in ("devin", "antigravity", "copilot", "gemini"):
             assets.install_skills(harness, tmp_path)
