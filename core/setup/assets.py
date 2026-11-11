@@ -18,11 +18,12 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from importlib import resources
 from pathlib import Path
-from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Callable, ContextManager, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import core
 import core.setup as _setup
@@ -229,13 +230,28 @@ def _acquire(fd: int, lock: Path) -> bool:
             time.sleep(0.05)
 
 
+# How many _manifest_lock() blocks this thread is inside; only the outermost takes the file lock.
+_LOCK_STATE = threading.local()
+
+
 @contextmanager
 def _manifest_lock() -> Iterator[None]:
     """An exclusive lock on ``manifest.json.lock``, released when the process exits at the latest.
 
-    Blocks on POSIX; on Windows retries for up to ``LOCK_TIMEOUT_SECONDS``. On
-    a filesystem without locks it warns and proceeds unlocked rather than fail.
+    Reentrant within a thread, so a whole operation (read the manifest, change
+    files, save the manifest) can hold it while the steps inside take it
+    again. Blocks on POSIX; on Windows retries for up to
+    ``LOCK_TIMEOUT_SECONDS``. On a filesystem without locks it warns and
+    proceeds unlocked rather than fail.
     """
+    depth = getattr(_LOCK_STATE, "depth", 0)
+    if depth:
+        _LOCK_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LOCK_STATE.depth = depth
+        return
     lock = manifest_path().with_name(MANIFEST_NAME + ".lock")
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
@@ -245,8 +261,10 @@ def _manifest_lock() -> Iterator[None]:
     locked = False
     try:
         locked = _acquire(fd, lock)
+        _LOCK_STATE.depth = 1
         yield
     finally:
+        _LOCK_STATE.depth = 0
         if sys.platform == "win32":
             if locked:
                 try:
@@ -257,6 +275,16 @@ def _manifest_lock() -> Iterator[None]:
                 except OSError:
                     pass
         os.close(fd)  # also drops a flock
+
+
+def _operation_lock() -> ContextManager[None]:
+    """The manifest lock for a whole setup / refresh / uninstall step; nothing under ``ARIZE_DRY_RUN``.
+
+    Held from the first manifest read through the file changes to the final
+    save, so concurrent runs can't interleave: e.g. setup re-recording a file
+    that an uninstall in progress then forgets.
+    """
+    return nullcontext() if _setup.dry_run() else _manifest_lock()
 
 
 @contextmanager
@@ -338,6 +366,13 @@ def write_files(harness: str, specs: List[FileSpec], unlink_first: Sequence[Path
         for _rel, target, _kind, _root, _data in rendered:
             _setup.info(f"would write {target}")
         return
+    with _manifest_lock():
+        _write_and_record(harness, rendered, unlink_first)
+
+
+def _write_and_record(
+    harness: str, rendered: List[Tuple[str, Path, str, Optional[Path], bytes]], unlink_first: Sequence[Path]
+) -> None:
     for link in unlink_first:
         try:
             link.unlink()  # our old symlink: replaced by a copy, never written through
@@ -413,6 +448,29 @@ def _setup_location(harness: str, path: str, entry: dict) -> Optional[Tuple[str,
     return None
 
 
+def _foreign_link(target: Path, root: Optional[Path]) -> Optional[Path]:
+    """The first symlinked folder between ``target`` and the folder setup owns (``root``, included), if any.
+
+    Setup writes real folders, never through a symlink, so a link there means
+    the folder is no longer ours (for example a skill folder replaced by a link
+    to the user's own copy): refresh and uninstall must leave what's behind it.
+    The same rule ``install_skills`` applies before writing.
+    """
+    if root is None:
+        return None
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None
+    current = target.parent
+    while True:
+        if current.is_symlink():
+            return current
+        if current == root or current == current.parent:
+            return None
+        current = current.parent
+
+
 def stale_entries(harness: Optional[str] = None) -> List[Tuple[str, str, dict]]:
     """Recorded ``(harness, path, entry)`` whose version is not the running package's."""
     current = core.version()
@@ -435,12 +493,23 @@ def refresh_stale() -> List[str]:
     Returns the rewritten paths.
     """
     try:
-        stale = stale_entries()
-        if not stale or not may_write_setup():
-            return []
+        if not stale_entries() or not may_write_setup():
+            return []  # the common case: nothing to do, and no lock file is created
     except Exception as e:  # a malformed manifest must not take status down
         _setup.err(f"could not check {manifest_path()} for stale files: {e}")
         return []
+    try:
+        with _operation_lock():
+            return _refresh_locked()
+    except (Exception, SystemExit) as e:
+        if not isinstance(e, AssetError):
+            _setup.err(f"could not refresh files listed in {manifest_path()}: {e}")
+        return []
+
+
+def _refresh_locked() -> List[str]:
+    """``refresh_stale`` under the manifest lock: re-read what's stale, rewrite it, record it."""
+    stale = stale_entries()
     rewritten: List[Tuple[str, str]] = []
     gone: List[Tuple[str, str]] = []
     current_command = str(arize_harness_path())
@@ -450,7 +519,13 @@ def refresh_stale() -> List[str]:
             if location is None:
                 _setup.err(f"ignoring manifest entry {path}: not a file setup writes")
                 continue
-            rel, kind, _root = location
+            rel, kind, root = location
+            link = _foreign_link(Path(path), root)
+            if link is not None:
+                # Not ours any more: never write through it, and stop tracking it.
+                _setup.info(f"leaving {path}: {link} is a symlink setup did not make")
+                gone.append((harness, path))
+                continue
             command = entry.get("command")
             if kind != "copy" and isinstance(command, str) and command != current_command:
                 if Path(command).exists():
@@ -531,6 +606,15 @@ def uninstall_files(harness: str) -> bool:
         for path in files:
             _setup.info(f"would remove {path}")
         return True
+    with _manifest_lock():
+        return _uninstall_locked(harness, key)
+
+
+def _uninstall_locked(harness: str, key: str) -> bool:
+    """``uninstall_files`` under the manifest lock, re-reading the entries so a concurrent setup is seen."""
+    files = load_manifest()["harnesses"].get(key)
+    if not isinstance(files, dict) or not files:
+        return True
     removed = set()
     for path, entry in files.items():
         location = _setup_location(harness, path, entry) if isinstance(entry, dict) else None
@@ -540,6 +624,13 @@ def uninstall_files(harness: str) -> bool:
             removed.add(path)
             continue
         target = Path(path)
+        root = location[2]
+        link = _foreign_link(target, root)
+        if link is not None:
+            # The folder was replaced by a symlink: what's behind it is the user's. Forget, never delete.
+            _setup.info(f"leaving {path}: {link} is a symlink setup did not make")
+            removed.add(path)
+            continue
         try:
             if target.is_symlink() or target.is_file():
                 target.unlink()
@@ -547,7 +638,6 @@ def uninstall_files(harness: str) -> bool:
             _setup.err(f"could not remove {target}: {e}")
             continue
         removed.add(path)
-        root = location[2]
         if root is not None:
             _prune(target.parent, root)
     with manifest_transaction() as manifest:
@@ -603,19 +693,28 @@ def install_skills(harness: str, target_dir: Optional[Path] = None) -> None:
     skills = skill_files(harness)
     if not skills:
         return
-    dest = _skills_dest(target_dir)
+    with _operation_lock():  # the checks below and the write see one consistent manifest
+        _install_skills_locked(harness, skills, _skills_dest(target_dir))
+
+
+def _install_skills_locked(harness: str, skills: List[Tuple[str, str]], dest: Path) -> None:
     old_root = _old_skills_root(harness)
+    ours = recorded(harness)
     specs: List[FileSpec] = []
     old_links: List[Path] = []
     for name, rel in skills:
         skill_dir = dest / name
+        target = skill_dir / rel.split("/", 2)[2]
         if skill_dir.is_symlink():
             if not _points_into(skill_dir, old_root):
                 _setup.info(f"warning: {skill_dir} is a symlink setup did not make; leaving it, skipping {name}")
                 continue
             if skill_dir not in old_links:
                 old_links.append(skill_dir)
-        specs.append((rel, skill_dir / rel.split("/", 2)[2], "copy", skill_dir))
+        elif skill_dir.exists() and str(target) not in ours:
+            _setup.info(f"warning: {skill_dir} is a folder setup did not make; leaving it, skipping {name}")
+            continue
+        specs.append((rel, target, "copy", skill_dir))
     if specs:
         write_files(harness, specs, unlink_first=old_links)
 
