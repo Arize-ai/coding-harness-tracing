@@ -1,9 +1,6 @@
-"""#90021 against a real wheel: what it ships, and setup from ``uv tool install`` in a throwaway HOME.
+"""Slow: build the wheel, install it with ``uv tool install``, and set up every harness.
 
-Slow: builds the wheel with ``uv build`` (as tests/core/test_version.py does)
-and installs it with ``uv tool install --no-index`` from a local wheel dir.
-python-dotenv's wheel is rebuilt from the copy installed in this environment,
-so the install never reaches an index.
+Runs offline: python-dotenv's wheel is rebuilt from this environment's copy.
 """
 
 from __future__ import annotations
@@ -115,8 +112,7 @@ def tool(wheel_dir, tmp_path_factory):
         if not k.startswith(("ARIZE_", "PHOENIX_", "OTEL_", "UV_", "PIP_", "PIPX_", "XDG_"))
         and k not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CODEX_HOME")
     }
-    # The sandbox itself sits in the system temp dir, which may_write_setup() refuses;
-    # give the tools their own temp dir so the install looks like a real one.
+    # may_write_setup() refuses installs under the temp dir, where this sandbox lives.
     (root / "tmp").mkdir()
     env.update(
         TMPDIR=str(root / "tmp"),

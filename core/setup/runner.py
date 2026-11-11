@@ -1,15 +1,7 @@
-"""Which ``arize-harness`` is running setup, and whether it may write anything.
+"""Find the ``arize-harness`` running setup, and decide whether setup may write files.
 
-Two helpers every installer shares:
-
-- ``hook_command(harness, event)``: the command a harness config runs for a
-  hook, ``'<path>' hook <harness> <event>``, where ``<path>`` is the
-  ``arize-harness`` that ran setup.
-- ``may_write_setup()``: whether that ``arize-harness`` is a persistent
-  install, so the files setup writes keep pointing at something that exists.
-
-Only ``core.setup`` and its callers import this; the hook path never does
-(Arize-ai/coding-harness-tracing#161).
+``hook_command`` builds the hook command installers write into harness configs.
+``may_write_setup`` is False for temporary installs such as uvx, whose path won't last.
 """
 
 from __future__ import annotations
@@ -27,7 +19,7 @@ from core.runtime import is_binary
 COMMAND_NAME = "arize-harness"
 DIST_NAME = "coding-harness-tracing"
 
-# Printed whenever setup refuses to write from a non-persistent install.
+# Shown when setup refuses to write from a temporary install.
 INSTALL_HINT = (
     f"install it with `uv tool install {DIST_NAME}` or `pipx install {DIST_NAME}`, "
     f"then run `{COMMAND_NAME} setup` from there"
@@ -35,7 +27,6 @@ INSTALL_HINT = (
 
 
 class SetupRefused(SystemExit):
-    """Raised by ``require_setup_writes``; exits 1 after printing the reason."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(1)
@@ -57,26 +48,21 @@ def _is_command_name(path: PurePath) -> bool:
 
 
 def _absolute(path: str) -> Path:
-    """``path`` made absolute without resolving symlinks: a uv tool link must stay the link."""
+    """Make ``path`` absolute without resolving symlinks, so a uv tool link stays a link."""
     return Path(os.path.abspath(path))
 
 
 def _with_exe(path: Path) -> Path:
-    """On Windows, the launcher ``.exe`` that ``sys.argv[0]`` may name without its suffix."""
     if _is_windows() and path.suffix.lower() != ".exe":
         return path.with_name(path.name + ".exe")
     return path
 
 
 def arize_harness_path() -> Path:
-    """The ``arize-harness`` that is running, as it was invoked.
+    """Path of the running ``arize-harness``.
 
-    - A Nuitka binary: its own path.
-    - ``arize-harness`` run from a uv tool / pipx command link: that link
-      (``sys.argv[0]``), not the venv script it points at.
-    - Otherwise (``python -m core.cli``, an installer run directly, tests): the
-      ``arize-harness`` next to this interpreter, which is the one the
-      interpreter's environment installed.
+    The binary itself, the command link it was run from, or else the one next to
+    this Python.
     """
     if is_binary():
         return _absolute(sys.argv[0] or sys.executable)
@@ -88,12 +74,7 @@ def arize_harness_path() -> Path:
 
 
 def hook_argv(harness: str, event: Optional[str] = None) -> List[str]:
-    """``[<path>, "hook", <harness>, <event>]`` (no event for single-entry harnesses).
-
-    ``harness`` may be an install name (``claude-code``); the command carries
-    the hook table's name (``claude``). Raises ValueError for a harness or
-    event ``arize-harness hook`` would not dispatch.
-    """
+    """``[<path>, "hook", <harness>, <event>]`` (no event for single-entry harnesses)."""
     name = canonical_harness(harness.replace("_", "-"))
     if name in SINGLE_HOOKS:
         if event is not None:
@@ -107,28 +88,20 @@ def hook_argv(harness: str, event: Optional[str] = None) -> List[str]:
 
 
 def sh_quote(word: str) -> str:
-    """Single-quote ``word`` for a POSIX shell (always quoted, unlike ``shlex.quote``)."""
     return "'" + word.replace("'", "'\"'\"'") + "'"
 
 
 def hook_command(harness: str, event: Optional[str] = None) -> str:
-    """The shell command a harness config runs: ``'<path>' hook <harness> <event>``.
+    """The hook command for a harness config: ``'<path>' hook <harness> <event>``.
 
-    The path is written with forward slashes and single-quoted, as the hook
-    commands in settings files are run by a POSIX shell (Git Bash on Windows).
-    Put the result in a JSON config with ``json.dumps``; for a TypeScript
-    ``spawn`` call use ``ts_argv`` instead, which needs no shell.
+    Quoted for a POSIX shell (Git Bash on Windows). Use ``ts_argv`` for TypeScript.
     """
     path, *rest = hook_argv(harness, event)
     return " ".join([sh_quote(Path(path).as_posix()), *rest])
 
 
 def ts_argv(harness: str, event: Optional[str] = None) -> tuple:
-    """``(file, args)`` as TypeScript string literals, for ``spawn(file, args)``.
-
-    JSON string syntax is valid TypeScript, and ``json.dumps`` escapes every
-    quote, backslash and line separator, so a Windows path survives intact.
-    """
+    """The hook command as TypeScript string literals ``(file, args)`` for ``spawn()``."""
     path, *rest = hook_argv(harness, event)
     return json.dumps(path), json.dumps(rest)
 
@@ -166,27 +139,20 @@ def _temp_roots() -> List[Path]:
 
 
 def _old_venv_dir() -> Path:
-    from core.setup import VENV_DIR  # late: core.setup imports this module's callers
+    from core.setup import VENV_DIR  # imported here to avoid a circular import
 
     return VENV_DIR
 
 
-# Files each tool writes into an environment it installed and will keep:
-# ``uv tool install`` a receipt, ``pipx install`` its metadata. Ephemeral
-# ``uvx`` environments have no receipt. Checking for them avoids guessing where
-# each tool keeps its environments on each platform.
+# Files that ``uv tool install`` and ``pipx install`` leave in environments they keep.
 _PERSISTENT_MARKERS = ("uv-receipt.toml", "pipx_metadata.json")
 
-# uv's cache layout for uvx / ``uv run --with`` environments.
+# uv cache folders used by uvx and ``uv run --with``.
 _UV_CACHE_PARTS = ("archive-v0", "builds-v0")
 
 
 def _in_tool_cache(prefix: Path) -> bool:
-    """True for uv's cache (``.../archive-v0/<hash>``) or pipx run's (``.../pipx/.cache/<hash>``, ``~/.cache/pipx/<hash>``).
-
-    Only those layouts: a directory merely named ``cache`` elsewhere in the
-    path (``HOME=/cache`` in a container) is not a tool cache.
-    """
+    """True if ``prefix`` is inside uv's or pipx's cache (uvx, pipx run)."""
     parts = _parts(prefix)
     if any(part in _UV_CACHE_PARTS for part in parts):
         return True
@@ -201,19 +167,10 @@ def _package_dir() -> Path:
 
 
 def setup_write_refusal() -> Optional[str]:
-    """Why this ``arize-harness`` may not write setup files, or None when it may.
+    """Why setup may not write from this install, or None if it may.
 
-    Allowed only for installs known to persist:
-
-    - a Nuitka binary outside the temp directory;
-    - a ``uv tool install`` (its environment holds ``uv-receipt.toml``);
-    - a ``pipx install`` (its environment holds ``pipx_metadata.json``);
-    - on Windows, the ``install.bat`` venv at ``~/.arize/harness/venv``.
-
-    Everything else is refused, including ``uvx`` and ``pipx run`` (a cache), ``uv run`` and
-    any dev checkout (the package is not inside the environment), the old
-    ``~/.arize/harness/venv`` on macOS/Linux, and anything under the temp
-    directory. Unknown layouts are refused too.
+    Allowed: a uv tool or pipx install, the Windows ``install.bat`` venv, or a
+    binary outside the temp dir. Everything else is refused.
     """
     if is_binary():
         binary = _norm(arize_harness_path())
@@ -241,12 +198,10 @@ def setup_write_refusal() -> Optional[str]:
 
 
 def may_write_setup() -> bool:
-    """True when this ``arize-harness`` is a persistent install that setup may write from."""
     return setup_write_refusal() is None
 
 
 def require_setup_writes() -> None:
-    """Raise ``SetupRefused`` (exit 1) with the install hint unless ``may_write_setup()``."""
     reason = setup_write_refusal()
     if reason is None:
         return

@@ -1,11 +1,7 @@
-"""Tests for core/setup/assets.py: package data, the Claude plugin folder, generated .ts, skills and the manifest.
+"""Tests for core/setup/assets.py.
 
-Covers #90021's acceptance criteria that don't need a built wheel (see
-TestWheel in test_wheel_install.py for those): every harness sets up from the
-installed package in a throwaway HOME, written files equal their packaged
-source except the hook command, a version mismatch is refreshed by
-setup/status/uninstall but never by hook, uninstall removes only what the
-manifest lists (plus old symlinks), and ARIZE_DRY_RUN writes nothing.
+Each harness's setup, refresh and uninstall run against a throwaway HOME.
+Built-wheel checks are in test_wheel_install.py.
 """
 
 from __future__ import annotations
@@ -88,11 +84,7 @@ def assert_equals_source_except_hook_command(harness: str, entry: dict, written:
 
 
 def assert_ts_changes_only_the_hook_command(harness: str, source: str, written: str) -> None:
-    """The written .ts differs from its source in exactly two places, found independently of plugin_ts.
-
-    1. The body of ``function binaryPath()`` (today's venv path) is one ``return "<arize-harness>"`` line.
-    2. ``spawn(binaryPath(), [],`` passes ``["hook", "<harness>"]`` instead of ``[]``.
-    """
+    """Check the written .ts differs from its source only in ``binaryPath()`` and the ``spawn`` arguments."""
     src = source.replace("\r\n", "\n").splitlines()
     out = written.replace("\r\n", "\n").splitlines()
     start = next(i for i, line in enumerate(src) if line.startswith("function binaryPath(): string {"))
@@ -531,7 +523,7 @@ class TestRefreshFromCommands:
 
 
 # ---------------------------------------------------------------------------
-# End to end: every harness, throwaway HOME, from the installed package
+# End to end: set up every harness in a throwaway HOME
 # ---------------------------------------------------------------------------
 
 
@@ -645,7 +637,7 @@ class TestEveryHarness:
 
 
 # ---------------------------------------------------------------------------
-# Review fixes
+# Line endings, manifest concurrency, uninstall failures, refresh errors
 # ---------------------------------------------------------------------------
 
 
@@ -771,7 +763,7 @@ class TestRefreshHardening:
 
 
 # ---------------------------------------------------------------------------
-# Second review fixes
+# Locking, user symlinks, manifest path checks, setup-time command
 # ---------------------------------------------------------------------------
 
 
@@ -1031,7 +1023,7 @@ class TestWriteErrorNotMasked:
 
 
 # ---------------------------------------------------------------------------
-# PR review: folder ownership and operation-wide locking
+# Symlinked folders and locking across a whole operation
 # ---------------------------------------------------------------------------
 
 
@@ -1121,7 +1113,7 @@ class TestLockSpansTheOperation:
         def unlink_then_race(self, *args, **kwargs):
             real_unlink(self, *args, **kwargs)
             if self == target and "proc" not in seen:
-                # Mid-uninstall: start a concurrent setup and give it time to run if it could.
+                # mid-uninstall: start a setup and give it time to run
                 seen["proc"] = subprocess.Popen([sys.executable, "-c", code, str(project)], env=env, cwd=tmp_path)
                 deadline = time.monotonic() + 3
                 while time.monotonic() < deadline and seen["proc"].poll() is None and not target.exists():

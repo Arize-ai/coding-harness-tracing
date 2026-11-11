@@ -61,10 +61,9 @@ def _plugin_file():
 
 
 def _install_plugin() -> None:
-    """Write the packaged plugin, with the ``arize-harness hook`` command, into opencode's plugin dir."""
+    """Write the generated plugin into opencode's plugin dir."""
     plugin_file = _plugin_file()
 
-    # Overwrites any older copy (e.g. one spawning the old venv's arize-hook-opencode).
     install_plugin_ts("opencode", plugin_file)
 
 
