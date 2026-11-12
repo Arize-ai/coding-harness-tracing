@@ -1,13 +1,7 @@
-"""Files ``arize-harness setup`` writes from the installed package, and the manifest that records them.
+"""Install, refresh and remove the files ``arize-harness setup`` writes.
 
-Every file comes from package data (``importlib.resources``), never from a
-source-tree path, so a wheel installed with ``uv tool install`` / ``pipx``, a
-Nuitka binary and a dev checkout all behave the same.
-
-Each written file is recorded in ``~/.arize/harness/manifest.json`` with the
-package version and how to make it again. ``refresh_stale()`` rewrites files
-recorded under another version; ``uninstall_files()`` removes a harness's
-files and nothing else.
+Files are read from the installed package and recorded in
+``~/.arize/harness/manifest.json``, which ``status`` and ``uninstall`` rely on.
 """
 
 from __future__ import annotations
@@ -33,23 +27,13 @@ MANIFEST_NAME = "manifest.json"
 MANIFEST_SCHEMA = 1
 CLAUDE_PLUGIN_DIR_NAME = "claude_plugin"
 
-# Package data each harness ships, relative to its ``tracing.<sub>`` package.
-# Must match [tool.setuptools.package-data] in pyproject.toml (a test checks).
-PACKAGE_FILES: Dict[str, List[str]] = {
-    "claude_code": [".claude-plugin/plugin.json", "hooks/hooks.json", "skills/manage-claude-code-tracing/SKILL.md"],
-    "codex": ["skills/manage-codex-tracing/SKILL.md"],
-    "cursor": ["skills/manage-cursor-tracing/SKILL.md"],
-    "kiro": ["skills/manage-kiro-tracing/SKILL.md"],
-    "omp": ["plugin/arize-tracing.ts", "skills/manage-omp-tracing/SKILL.md"],
-    "opencode": ["plugin/arize-tracing.ts", "skills/manage-opencode-tracing/SKILL.md"],
-}
-
-# Harnesses whose installer takes --with-skills and ships skills.
-SKILL_HARNESSES = ("claude_code", "codex", "cursor", "kiro", "omp", "opencode")
+# Packaged files setup reads by name. Skills are found under each harness's skills/
+# folder. pyproject.toml's [tool.setuptools.package-data] decides what ships.
+FIXED_FILES = (".claude-plugin/plugin.json", "hooks/hooks.json", "plugin/arize-tracing.ts")
 
 
 class AssetError(SystemExit):
-    """A package file is missing or a target can't be written. Exits 1; the message names the path."""
+    """Setup hit a missing package file or an unwritable path. Exits 1."""
 
     def __init__(self, message: str) -> None:
         super().__init__(1)
@@ -65,12 +49,10 @@ def _fail(message: str) -> AssetError:
 
 
 def _sub(harness: str) -> str:
-    """``claude-code`` -> ``claude_code``: the ``tracing.<sub>`` package name."""
     return harness.replace("-", "_")
 
 
 def _key(harness: str) -> str:
-    """``claude_code`` -> ``claude-code``: the config.json / manifest key."""
     return harness.replace("_", "-")
 
 
@@ -80,10 +62,7 @@ def _key(harness: str) -> str:
 
 
 def read_package_file(harness: str, rel: str) -> bytes:
-    """Bytes of ``tracing/<sub>/<rel>`` from the installed package; exits 1 naming it if missing."""
     sub = _sub(harness)
-    if rel not in PACKAGE_FILES.get(sub, []):
-        raise _fail(f"tracing/{sub}/{rel} is not package data")
     try:
         node = resources.files(f"tracing.{sub}").joinpath(*rel.split("/"))
         return node.read_bytes()
@@ -92,13 +71,26 @@ def read_package_file(harness: str, rel: str) -> bytes:
 
 
 def skill_files(harness: str) -> List[Tuple[str, str]]:
-    """``(skill name, package-relative path)`` for every skill file a harness ships."""
-    out = []
-    for rel in PACKAGE_FILES.get(_sub(harness), []):
-        parts = rel.split("/")
-        if parts[0] == "skills" and len(parts) >= 3:
-            out.append((parts[1], rel))
-    return out
+    """The skill files the installed package ships for a harness, as ``(skill name, package path)``."""
+    try:
+        skills = resources.files(f"tracing.{_sub(harness)}").joinpath("skills")
+    except ModuleNotFoundError:
+        return []
+    if not skills.is_dir():
+        return []
+    return [
+        (folder.name, f"skills/{folder.name}/{file.name}")
+        for folder in sorted(skills.iterdir(), key=lambda f: f.name)
+        if folder.is_dir()
+        for file in sorted(folder.iterdir(), key=lambda f: f.name)
+        if file.is_file()
+    ]
+
+
+def _is_package_rel(rel: str) -> bool:
+    """True for a fixed file setup reads, or a ``skills/<skill>/<file>`` path."""
+    parts = rel.split("/")
+    return rel in FIXED_FILES or (len(parts) == 3 and parts[0] == "skills" and ".." not in parts)
 
 
 # ---------------------------------------------------------------------------
@@ -109,10 +101,6 @@ _RUN_HOOK = re.compile(r'"\\"\$\{CLAUDE_PLUGIN_ROOT\}/scripts/run-hook\\" arize-
 
 
 def claude_hooks_json(source: str) -> str:
-    """The marketplace ``hooks/hooks.json`` with each ``run-hook`` command replaced by ``hook_command()``.
-
-    Only the command strings change; the rest of the file is kept byte for byte.
-    """
     from core.setup.runner import hook_command
 
     def repl(m: re.Match) -> str:
@@ -121,7 +109,7 @@ def claude_hooks_json(source: str) -> str:
     text, count = _RUN_HOOK.subn(repl, source)
     if count == 0:
         raise _fail("tracing/claude_code/hooks/hooks.json has no run-hook commands to replace")
-    json.loads(text)  # still valid JSON
+    json.loads(text)
     return text
 
 
@@ -130,16 +118,15 @@ _TS_SPAWN = re.compile(r"spawn\(binaryPath\(\), \[\],")
 
 
 def plugin_ts(harness: str, source: str) -> str:
-    """The packaged ``arize-tracing.ts`` with today's venv path replaced by the ``arize-harness hook`` command.
+    """The opencode/omp plugin with its venv path replaced by the ``arize-harness hook`` command.
 
-    Keeps the source's line endings: a Windows checkout without a
-    ``.gitattributes`` rule ships the file with CRLF.
+    Keeps CRLF line endings if the source has them.
     """
     file_literal, args_literal = ts_argv(harness)
     newline = "\r\n" if "\r\n" in source else "\n"
     lf = source.replace("\r\n", "\n")
     old = _TS_BINARY_PATH.search(lf)
-    semi = ";" if old and ";\n" in old.group(0) else ""  # omp's style uses semicolons, opencode's doesn't
+    semi = ";" if old and ";\n" in old.group(0) else ""  # match the file's style: omp uses semicolons, opencode doesn't
     body = f"function binaryPath(): string {{\n  return {file_literal}{semi}\n}}\n"
     text, n1 = _TS_BINARY_PATH.subn(lambda _m: body, lf, count=1)
     text, n2 = _TS_SPAWN.subn(lambda _m: f"spawn(binaryPath(), {args_literal},", text, count=1)
@@ -148,7 +135,7 @@ def plugin_ts(harness: str, source: str) -> str:
     return text.replace("\n", newline) if newline != "\n" else text
 
 
-# kind -> (harness, package rel, source bytes) -> output bytes
+# How each kind of file is produced from its packaged source.
 _GENERATORS: Dict[str, Callable[[str, str, bytes], bytes]] = {
     "copy": lambda harness, rel, data: data,
     "claude_hooks": lambda harness, rel, data: claude_hooks_json(data.decode("utf-8")).encode("utf-8"),
@@ -180,7 +167,7 @@ def load_manifest() -> dict:
 
 
 def save_manifest(data: dict) -> None:
-    """Write the manifest atomically, through a temp file of this process's own."""
+    """Write the manifest atomically (temp file, then rename)."""
     path = manifest_path()
     data["schema"] = MANIFEST_SCHEMA
     tmp: Optional[str] = None
@@ -201,13 +188,13 @@ def save_manifest(data: dict) -> None:
                 pass
 
 
-# flock / locking errors that mean "this filesystem can't lock" (NFS without lockd, some FUSE/SMB mounts).
+# errno values meaning the filesystem doesn't support locks (e.g. NFS without lockd).
 _NO_LOCKING = {errno.ENOLCK, errno.EOPNOTSUPP, getattr(errno, "ENOTSUP", errno.EOPNOTSUPP), errno.ENOSYS}
 LOCK_TIMEOUT_SECONDS = 120.0
 
 
 def _acquire(fd: int, lock: Path) -> bool:
-    """Take an exclusive lock on ``fd``; False when the filesystem has no locking."""
+    """Lock ``fd`` exclusively. Returns False if the filesystem can't lock."""
     deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
     while True:
         try:
@@ -224,25 +211,22 @@ def _acquire(fd: int, lock: Path) -> bool:
             if e.errno in _NO_LOCKING:
                 _setup.info(f"warning: {lock.parent} does not support file locks; updating the manifest unlocked")
                 return False
-            # Windows: held by another process (EACCES / EDEADLK); keep trying until the deadline.
+            # Windows: another process holds the lock, so retry until the deadline.
             if sys.platform != "win32" or time.monotonic() >= deadline:
                 raise _fail(f"cannot lock {lock}: {e}")
             time.sleep(0.05)
 
 
-# How many _manifest_lock() blocks this thread is inside; only the outermost takes the file lock.
+# How deeply this thread has nested _manifest_lock(); only the outer call holds the file lock.
 _LOCK_STATE = threading.local()
 
 
 @contextmanager
 def _manifest_lock() -> Iterator[None]:
-    """An exclusive lock on ``manifest.json.lock``, released when the process exits at the latest.
+    """Exclusive lock on ``manifest.json.lock``, reentrant within a thread.
 
-    Reentrant within a thread, so a whole operation (read the manifest, change
-    files, save the manifest) can hold it while the steps inside take it
-    again. Blocks on POSIX; on Windows retries for up to
-    ``LOCK_TIMEOUT_SECONDS``. On a filesystem without locks it warns and
-    proceeds unlocked rather than fail.
+    Blocks on POSIX, retries on Windows for up to ``LOCK_TIMEOUT_SECONDS``, and
+    runs unlocked with a warning where the filesystem has no locks.
     """
     depth = getattr(_LOCK_STATE, "depth", 0)
     if depth:
@@ -274,25 +258,17 @@ def _manifest_lock() -> Iterator[None]:
                     msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
                 except OSError:
                     pass
-        os.close(fd)  # also drops a flock
+        os.close(fd)  # closing also releases the flock
 
 
 def _operation_lock() -> ContextManager[None]:
-    """The manifest lock for a whole setup / refresh / uninstall step; nothing under ``ARIZE_DRY_RUN``.
-
-    Held from the first manifest read through the file changes to the final
-    save, so concurrent runs can't interleave: e.g. setup re-recording a file
-    that an uninstall in progress then forgets.
-    """
+    """Hold the manifest lock for a whole setup, refresh or uninstall. No-op in dry runs."""
     return nullcontext() if _setup.dry_run() else _manifest_lock()
 
 
 @contextmanager
 def manifest_transaction() -> Iterator[dict]:
-    """Load the manifest under the lock, let the caller change it, then save it.
-
-    Concurrent setup / status / uninstall runs never lose each other's entries.
-    """
+    """Load the manifest under the lock, let the caller change it, then save it."""
     with _manifest_lock():
         data = load_manifest()
         yield data
@@ -300,7 +276,6 @@ def manifest_transaction() -> Iterator[dict]:
 
 
 def recorded(harness: str) -> Dict[str, dict]:
-    """``{path: entry}`` the manifest lists for a harness."""
     files = load_manifest()["harnesses"].get(_key(harness), {})
     return files if isinstance(files, dict) else {}
 
@@ -314,7 +289,6 @@ def _iter_entries(data: dict) -> Iterator[Tuple[str, str, dict]]:
 
 
 def _harness_files(data: dict, key: str) -> dict:
-    """``data["harnesses"][key]`` as a dict, replacing anything malformed there."""
     files = data["harnesses"].get(key)
     if not isinstance(files, dict):
         files = data["harnesses"][key] = {}
@@ -325,14 +299,13 @@ def _harness_files(data: dict, key: str) -> dict:
 # Writing
 # ---------------------------------------------------------------------------
 
-# (package rel, target, kind, root)
+# (package path, target path, kind, owned folder)
 FileSpec = Tuple[str, Path, str, Optional[Path]]
 
 
 def _write_bytes(target: Path, data: bytes) -> None:
     try:
         if target.is_symlink() or (target.exists() and not target.is_file()):
-            # An old symlink (or a link left where a file goes): replace, never write through it.
             target.unlink()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
@@ -345,22 +318,13 @@ def _entry(harness: str, rel: str, kind: str, root: Optional[Path]) -> dict:
     if root is not None:
         entry["root"] = str(root)
     if kind != "copy":
-        # The arize-harness baked into the file; refresh leaves the file to that install.
+        # the arize-harness this file calls; refresh skips files another install owns
         entry["command"] = str(arize_harness_path())
     return entry
 
 
 def write_files(harness: str, specs: List[FileSpec], unlink_first: Sequence[Path] = ()) -> None:
-    """Write package files (``copy``) or generated files and record them in one manifest update.
-
-    Every file is rendered first, so a missing package file fails before
-    anything is written. ``root`` is the directory we own that a target sits
-    in (a skill folder, the Claude plugin folder); uninstall removes it once
-    empty. ``unlink_first`` (our old symlinks) are removed only after every
-    file rendered. Files written before a failure are still recorded, and the
-    write failure is what propagates. Honors ``ARIZE_DRY_RUN``; overwrites
-    without prompting.
-    """
+    """Render, write and record a set of files in one manifest update."""
     rendered = [(rel, target, kind, root, render(harness, rel, kind)) for rel, target, kind, root in specs]
     if _setup.dry_run():
         for _rel, target, _kind, _root, _data in rendered:
@@ -375,7 +339,7 @@ def _write_and_record(
 ) -> None:
     for link in unlink_first:
         try:
-            link.unlink()  # our old symlink: replaced by a copy, never written through
+            link.unlink()  # an old skill symlink, replaced by a copy
         except OSError as e:
             raise _fail(f"cannot replace {link}: {e}")
     written: List[FileSpec] = []
@@ -397,13 +361,12 @@ def _write_and_record(
             except (Exception, SystemExit) as e:
                 if not failed:
                     raise
-                # Keep the write error as the one reported; this one is secondary.
+                # report the write error, not this follow-on one
                 if not isinstance(e, AssetError):
                     _setup.err(f"could not record {len(written)} written file(s) in {manifest_path()}: {e}")
 
 
 def write_file(harness: str, rel: str, target: Path, kind: str = "copy", root: Optional[Path] = None) -> None:
-    """Write and record one file; see ``write_files``."""
     write_files(harness, [(rel, target, kind, root)])
 
 
@@ -417,16 +380,12 @@ _GENERATED_KINDS = {"hooks/hooks.json": "claude_hooks", "plugin/arize-tracing.ts
 
 
 def _setup_location(harness: str, path: str, entry: dict) -> Optional[Tuple[str, str, Optional[Path]]]:
-    """``(rel, kind, root)`` when a manifest entry names a file setup could have written there, else None.
+    """Check that a manifest entry points where setup writes that file.
 
-    Refresh and uninstall act only on these, so a corrupted or planted
-    manifest can't make them overwrite or delete anything else: the source
-    must be package data of that harness with its kind, and the path must be
-    where that file goes (the Claude plugin folder, an ``arize-tracing.ts``,
-    or ``.agents/skills/<skill>/...``).
+    Returns ``(rel, kind, owned folder)``, or None. Refresh and uninstall skip entries that fail.
     """
     rel = _source_rel(harness, entry)
-    if rel is None or rel not in PACKAGE_FILES.get(_sub(harness), []):
+    if rel is None or not _is_package_rel(rel):
         return None
     kind = _GENERATED_KINDS.get(rel, "copy")
     if entry.get("kind", "copy") != kind:
@@ -449,12 +408,9 @@ def _setup_location(harness: str, path: str, entry: dict) -> Optional[Tuple[str,
 
 
 def _foreign_link(target: Path, root: Optional[Path]) -> Optional[Path]:
-    """The first symlinked folder between ``target`` and the folder setup owns (``root``, included), if any.
+    """The first symlink between ``target`` and its owned folder, if any.
 
-    Setup writes real folders, never through a symlink, so a link there means
-    the folder is no longer ours (for example a skill folder replaced by a link
-    to the user's own copy): refresh and uninstall must leave what's behind it.
-    The same rule ``install_skills`` applies before writing.
+    A symlink there means the user replaced the folder, so refresh and uninstall leave it alone.
     """
     if root is None:
         return None
@@ -472,7 +428,6 @@ def _foreign_link(target: Path, root: Optional[Path]) -> Optional[Path]:
 
 
 def stale_entries(harness: Optional[str] = None) -> List[Tuple[str, str, dict]]:
-    """Recorded ``(harness, path, entry)`` whose version is not the running package's."""
     current = core.version()
     return [
         (h, p, e)
@@ -482,20 +437,11 @@ def stale_entries(harness: Optional[str] = None) -> List[Tuple[str, str, dict]]:
 
 
 def refresh_stale() -> List[str]:
-    """Rewrite every recorded file whose version differs from the running package's.
-
-    Called by ``setup``, ``status`` and ``uninstall`` (never ``hook`` or
-    ``update``). Writes nothing unless ``may_write_setup()``, or under
-    ``ARIZE_DRY_RUN``. A recorded file that no longer exists is not recreated
-    (the user removed it, or the project holding a skill is gone); it is
-    dropped from the manifest instead. Never raises: a file that can't be
-    rewritten is reported and left as it is, so ``status`` still runs.
-    Returns the rewritten paths.
-    """
+    """Rewrite files recorded by a different package version. Returns the paths rewritten."""
     try:
         if not stale_entries() or not may_write_setup():
-            return []  # the common case: nothing to do, and no lock file is created
-    except Exception as e:  # a malformed manifest must not take status down
+            return []
+    except Exception as e:  # a bad manifest shouldn't break status
         _setup.err(f"could not check {manifest_path()} for stale files: {e}")
         return []
     try:
@@ -508,7 +454,6 @@ def refresh_stale() -> List[str]:
 
 
 def _refresh_locked() -> List[str]:
-    """``refresh_stale`` under the manifest lock: re-read what's stale, rewrite it, record it."""
     stale = stale_entries()
     rewritten: List[Tuple[str, str]] = []
     gone: List[Tuple[str, str]] = []
@@ -522,18 +467,16 @@ def _refresh_locked() -> List[str]:
             rel, kind, root = location
             link = _foreign_link(Path(path), root)
             if link is not None:
-                # Not ours any more: never write through it, and stop tracking it.
+                # the folder was replaced by a symlink: stop tracking the file
                 _setup.info(f"leaving {path}: {link} is a symlink setup did not make")
                 gone.append((harness, path))
                 continue
             command = entry.get("command")
             if kind != "copy" and isinstance(command, str) and command != current_command:
                 if Path(command).exists():
-                    # Another install that still exists set this up; don't take its registration over.
                     _setup.info(f"leaving {path}: it runs {command}, not this {current_command}")
                     continue
-                # The install that set this up is gone (e.g. pipx uninstalled, uv tool installed):
-                # its hooks can't run, so take the file over.
+                # the install that wrote it is gone, so this one takes the file over
             target = Path(path)
             if not target.is_file():
                 gone.append((harness, path))
@@ -543,7 +486,7 @@ def _refresh_locked() -> List[str]:
                 continue
             _write_bytes(target, render(harness, rel, kind))
             rewritten.append((harness, path))
-        except (Exception, SystemExit) as e:  # AssetError is a SystemExit; reported already or here
+        except (Exception, SystemExit) as e:  # AssetError already printed its message
             if not isinstance(e, AssetError):
                 _setup.err(f"could not refresh {path}: {e}")
     if _setup.dry_run() or not (rewritten or gone):
@@ -574,7 +517,6 @@ def _refresh_locked() -> List[str]:
 
 
 def _prune(start: Path, root: Path) -> None:
-    """Remove ``start`` and its parents while empty, up to and including ``root``."""
     try:
         start.relative_to(root)
     except ValueError:
@@ -584,20 +526,14 @@ def _prune(start: Path, root: Path) -> None:
         try:
             current.rmdir()
         except OSError:
-            return  # not empty, or gone
+            return
         if current == root:
             return
         current = current.parent
 
 
 def uninstall_files(harness: str) -> bool:
-    """Remove every file the manifest lists for ``harness``, and forget the ones that are gone.
-
-    Only those files: a user's file in the same folder survives, and a folder
-    we own is removed only once it is empty. A file that can't be removed
-    stays in the manifest, so the next uninstall tries again. Honors
-    ``ARIZE_DRY_RUN``. Returns False if any file could not be removed.
-    """
+    """Remove the files the manifest lists for a harness. Returns False if any couldn't be removed."""
     key = _key(harness)
     files = load_manifest()["harnesses"].get(key)
     if not isinstance(files, dict) or not files:
@@ -611,7 +547,6 @@ def uninstall_files(harness: str) -> bool:
 
 
 def _uninstall_locked(harness: str, key: str) -> bool:
-    """``uninstall_files`` under the manifest lock, re-reading the entries so a concurrent setup is seen."""
     files = load_manifest()["harnesses"].get(key)
     if not isinstance(files, dict) or not files:
         return True
@@ -619,7 +554,7 @@ def _uninstall_locked(harness: str, key: str) -> bool:
     for path, entry in files.items():
         location = _setup_location(harness, path, entry) if isinstance(entry, dict) else None
         if location is None:
-            # Not a file setup writes: forget the entry, never delete the path.
+            # not a path setup writes to: drop the entry, keep the file
             _setup.err(f"ignoring manifest entry {path}: not a file setup writes")
             removed.add(path)
             continue
@@ -627,7 +562,7 @@ def _uninstall_locked(harness: str, key: str) -> bool:
         root = location[2]
         link = _foreign_link(target, root)
         if link is not None:
-            # The folder was replaced by a symlink: what's behind it is the user's. Forget, never delete.
+            # the folder was replaced by a symlink: drop the entry, keep the user's files
             _setup.info(f"leaving {path}: {link} is a symlink setup did not make")
             removed.add(path)
             continue
@@ -650,7 +585,6 @@ def _uninstall_locked(harness: str, key: str) -> bool:
 
 
 def refresh_and_report() -> None:
-    """``refresh_stale()``, printing one line per rewritten file."""
     for path in refresh_stale():
         _setup.info(f"Refreshed {path} for version {core.version()}")
 
@@ -665,7 +599,7 @@ def _skills_dest(target_dir: Optional[Path]) -> Path:
 
 
 def _old_skills_root(harness: str) -> Path:
-    """Where pre-manifest installs symlinked skills from: ``~/.arize/harness/tracing/<sub>/skills``."""
+    """Where older installs linked skills from: ``~/.arize/harness/tracing/<harness>/skills``."""
     return _setup.INSTALL_DIR / "tracing" / _sub(harness) / "skills"
 
 
@@ -685,15 +619,14 @@ def _points_into(link: Path, root: Path) -> bool:
 
 
 def install_skills(harness: str, target_dir: Optional[Path] = None) -> None:
-    """Copy a harness's skills into ``<target_dir>/.agents/skills/`` (default: cwd).
+    """Copy a harness's skills into ``.agents/skills/`` under ``target_dir`` (default: cwd).
 
-    Replaces our old symlinks there; each copied file is recorded in the
-    manifest. Does nothing for a harness that ships no skills.
+    Replaces our old symlinks and skips folders setup didn't create.
     """
     skills = skill_files(harness)
     if not skills:
         return
-    with _operation_lock():  # the checks below and the write see one consistent manifest
+    with _operation_lock():  # check and write under one lock
         _install_skills_locked(harness, skills, _skills_dest(target_dir))
 
 
@@ -720,7 +653,7 @@ def _install_skills_locked(harness: str, skills: List[Tuple[str, str]], dest: Pa
 
 
 def remove_old_skill_links(harness: str, target_dir: Optional[Path] = None) -> None:
-    """Remove symlinks in ``.agents/skills/`` that point into ``~/.arize/harness/tracing/<sub>/skills``."""
+    """Remove ``.agents/skills/`` symlinks left by older installs."""
     dest = _skills_dest(target_dir)
     if not dest.is_dir():
         return
@@ -742,12 +675,15 @@ def remove_old_skill_links(harness: str, target_dir: Optional[Path] = None) -> N
 
 
 def claude_plugin_dir() -> Path:
-    """The plugin folder setup writes for Claude Code: ``~/.arize/harness/claude_plugin``."""
+    """The Claude Code plugin folder, ``~/.arize/harness/claude_plugin``.
+
+    The ``settings.json`` plugin entry and ``agent_sdk.py`` point here.
+    """
     return _setup.INSTALL_DIR / CLAUDE_PLUGIN_DIR_NAME
 
 
 def install_claude_plugin() -> Path:
-    """Write the Claude plugin folder (manifest + generated ``hooks/hooks.json``) and return it."""
+    """Write the Claude plugin folder (``plugin.json`` and ``hooks.json``) and return its path."""
     root = claude_plugin_dir()
     write_files(
         "claude_code",
@@ -760,5 +696,4 @@ def install_claude_plugin() -> Path:
 
 
 def install_plugin_ts(harness: str, target: Path) -> None:
-    """Write ``harness``'s generated ``arize-tracing.ts`` to ``target`` (opencode, omp)."""
     write_file(harness, "plugin/arize-tracing.ts", target, "plugin_ts")

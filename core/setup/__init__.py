@@ -1132,35 +1132,25 @@ def list_installed_harnesses() -> list[str]:
 
 
 def harness_dir(harness: str) -> Path:
-    """Return the absolute path of <install-dir>/tracing/<harness>/.
+    """Where install.sh put a harness: ``~/.arize/harness/tracing/<harness>``.
 
-    Where install.sh's source tree put each harness. Setup no longer reads from
-    it; only cleanup of what older installs registered there uses it.
+    Only used to clean up what older installs registered there.
     """
     sub_name = harness.replace("-", "_")
     return INSTALL_DIR / "tracing" / sub_name
 
 
 def install_skills(harness: str, target_dir: Path | None = None) -> None:
-    """Copy <harness>'s packaged skills into target_dir/.agents/skills/ (default: cwd).
-
-    Copies, never symlinks, and replaces our old symlinks there. Each file is
-    recorded in the manifest, so ``remove_harness_files`` removes it again.
-    """
+    """Copy a harness's packaged skills into ``target_dir/.agents/skills/`` (default: cwd)."""
     from core.setup.assets import install_skills as _install_skills
 
     _install_skills(harness, target_dir)
 
 
 def remove_harness_files(harness: str, target_dir: Path | None = None) -> None:
-    """Remove every file setup wrote for <harness> (per the manifest), and our old skill symlinks.
+    """Remove the files setup wrote for a harness, plus skill symlinks from older installs.
 
-    The old symlinks are the ones pre-manifest installs made in
-    target_dir/.agents/skills/ (default: cwd) into ~/.arize/harness/tracing/.
-    Nothing else is removed. Idempotent; honors ARIZE_DRY_RUN.
-
-    Exits 1 (``AssetError``) when a recorded file could not be removed; it
-    stays in the manifest, so running uninstall again retries it.
+    Exits 1 if a file can't be removed; it stays in the manifest so uninstall can retry.
     """
     from core.setup.assets import AssetError, manifest_path, remove_old_skill_links, uninstall_files
 

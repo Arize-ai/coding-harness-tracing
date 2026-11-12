@@ -14,6 +14,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 
+def package_data() -> set[str]:
+    """Every file pyproject.toml ships as package data, as ``tracing/<sub>/<rel>``."""
+    data = tomllib.loads(PYPROJECT.read_text())["tool"]["setuptools"]["package-data"]
+    return {f"{pkg.replace('.', '/')}/{rel}" for pkg, files in data.items() for rel in files}
+
+
 def parse_project_scripts(text: str) -> dict[str, str]:
     """Return the ``[project.scripts]`` table from pyproject text."""
     return tomllib.loads(text)["project"]["scripts"]

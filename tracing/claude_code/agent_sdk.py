@@ -11,8 +11,7 @@ Usage::
 The returned ``ClaudeAgentOptions`` is pre-configured with:
 
   - ``plugins=[{"type": "local", "path": "<install-dir>/claude_plugin"}]``
-    so the SDK loads the plugin folder ``arize-harness setup claude`` writes
-    and fires our hooks.
+    so the SDK loads the plugin folder setup writes.
   - ``setting_sources=["user"]`` so user-level settings (including the
     Arize env vars written by ``install.py``) are honored.
 

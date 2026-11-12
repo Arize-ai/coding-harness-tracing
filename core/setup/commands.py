@@ -146,10 +146,7 @@ def _setup_one(key: str, with_skills: bool, backend: Optional[str]) -> None:
 
 
 def _refresh_files() -> None:
-    """Rewrite files another package version recorded (per the manifest), when this install may write.
-
-    Run by setup and uninstall here, and by status inside ``core.setup.status.main``; never by hook or update.
-    """
+    """Rewrite files recorded by a different package version, if this install may write."""
     from core.setup.assets import refresh_and_report
 
     refresh_and_report()
@@ -179,7 +176,7 @@ def cmd_setup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
 
     for key in keys:
         _setup_one(key, args.with_skills, args.backend)
-    # What was just set up is current; bring every other recorded file to this version.
+    # also refresh files from other harnesses
     _refresh_files()
     return 0
 

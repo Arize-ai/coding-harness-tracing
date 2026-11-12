@@ -119,10 +119,9 @@ def _write_settings(data: dict) -> None:
 
 
 def _install_plugin() -> None:
-    """Write the packaged shim, with the ``arize-harness hook`` command, into omp's extensions dir."""
+    """Write the generated plugin into omp's extensions dir."""
     plugin_file = _plugin_file()
 
-    # Overwrites any older copy (e.g. one spawning the old venv's arize-hook-omp).
     install_plugin_ts("omp", plugin_file)
 
 

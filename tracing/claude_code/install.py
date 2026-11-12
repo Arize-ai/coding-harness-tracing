@@ -128,19 +128,13 @@ def _filter_our_hooks(event_hooks: list, keep: Optional[str]) -> list:
 
 
 def _register_claude_hooks() -> None:
-    """Read SETTINGS_FILE (or init to {}), add plugin reference + hook commands.
+    """Add the plugin entry and hook commands to settings.json without duplicating them.
 
-    Registering the local plugin (path → ~/.arize/harness/claude_plugin, which
-    ``install_claude_plugin`` writes from package data) makes Claude Code
-    auto-load its hooks even in non-interactive (-p) mode, where
-    ``--setting-sources`` defaults to ``project,local`` and user-level hooks
-    would otherwise be skipped.
-
-    Each HOOK_EVENTS entry runs ``hook_command()``. Our older entries are
-    replaced: commands from another ``arize-harness``, the old venv's
-    ``arize-hook-*`` commands, and the plugin entry for
-    ``~/.arize/harness/tracing/claude_code``. Running it twice changes nothing.
-    Honors dry_run().
+    The plugin entry (``~/.arize/harness/claude_plugin``) makes Claude run our hooks
+    in ``claude -p`` too, which skips user-level hooks. Each event runs
+    ``hook_command()``; our older entries (another ``arize-harness``'s commands,
+    the old venv's ``arize-hook-*``, the ``~/.arize/harness/tracing/claude_code``
+    plugin entry) are replaced. Idempotent. Honors dry_run().
     """
     settings = _load_settings()
     plugin_dir = str(claude_plugin_dir())
@@ -201,7 +195,7 @@ def _unregister_claude_hooks() -> None:
     if not settings:
         return
 
-    # Today's plugin folder, and the one older installs registered.
+    # the current plugin folder and the one older installs used
     plugin_dirs = {str(claude_plugin_dir()), str(harness_dir("claude-code"))}
 
     # Remove our plugin entries (drops empty list).

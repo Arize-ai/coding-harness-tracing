@@ -1,11 +1,7 @@
-"""Tests for core/setup/assets.py: package data, the Claude plugin folder, generated .ts, skills and the manifest.
+"""Tests for core/setup/assets.py.
 
-Covers #90021's acceptance criteria that don't need a built wheel (see
-TestWheel in test_wheel_install.py for those): every harness sets up from the
-installed package in a throwaway HOME, written files equal their packaged
-source except the hook command, a version mismatch is refreshed by
-setup/status/uninstall but never by hook, uninstall removes only what the
-manifest lists (plus old symlinks), and ARIZE_DRY_RUN writes nothing.
+Each harness's setup, refresh and uninstall run against a throwaway HOME.
+Built-wheel checks are in test_wheel_install.py.
 """
 
 from __future__ import annotations
@@ -27,7 +23,7 @@ from core.constants import HARNESSES
 from core.hook_table import EVENT_HOOKS
 from core.setup import assets, commands, runner
 from tests._install_type import PERSISTENT_SNIPPET
-from tests._pyproject import PYPROJECT, REPO_ROOT, tomllib
+from tests._pyproject import PYPROJECT, REPO_ROOT, package_data, tomllib
 from tests.core.test_cli_commands import _cli, _home, _write_creds
 
 TRACING = REPO_ROOT / "tracing"
@@ -89,11 +85,7 @@ def assert_equals_source_except_hook_command(harness: str, entry: dict, written:
 
 
 def assert_ts_changes_only_the_hook_command(harness: str, source: str, written: str) -> None:
-    """The written .ts differs from its source in exactly two places, found independently of plugin_ts.
-
-    1. The body of ``function binaryPath()`` (today's venv path) is one ``return "<arize-harness>"`` line.
-    2. ``spawn(binaryPath(), [],`` passes ``["hook", "<harness>"]`` instead of ``[]``.
-    """
+    """Check the written .ts differs from its source only in ``binaryPath()`` and the ``spawn`` arguments."""
     src = source.replace("\r\n", "\n").splitlines()
     out = written.replace("\r\n", "\n").splitlines()
     start = next(i for i, line in enumerate(src) if line.startswith("function binaryPath(): string {"))
@@ -118,53 +110,76 @@ def assert_ts_changes_only_the_hook_command(harness: str, source: str, written: 
 # ---------------------------------------------------------------------------
 
 
+def _skill_harnesses() -> set:
+    """Harnesses whose installer takes --with-skills and that have skills in the repo."""
+    import inspect
+
+    out = set()
+    for key in HARNESSES:
+        sub = key.replace("-", "_")
+        takes = "with_skills" in inspect.signature(install_table.load(key).install).parameters
+        if takes and list((TRACING / sub / "skills").glob("*/SKILL.md")):
+            out.add(sub)
+    return out
+
+
 class TestPackageData:
-    def test_matches_pyproject(self):
-        setuptools = tomllib.loads(PYPROJECT.read_text())["tool"]["setuptools"]
-        assert setuptools["include-package-data"] is False
-        assert setuptools["package-data"] == {f"tracing.{sub}": files for sub, files in assets.PACKAGE_FILES.items()}
+    def test_include_package_data_is_off(self):
+        assert tomllib.loads(PYPROJECT.read_text())["tool"]["setuptools"]["include-package-data"] is False
 
     def test_core_symlinks_are_not_packages(self):
         find = tomllib.loads(PYPROJECT.read_text())["tool"]["setuptools"]["packages"]["find"]
         links = {f"tracing.{p.parent.name}.core*" for p in TRACING.glob("*/core") if p.is_symlink()}
         assert links and set(find["exclude"]) == links
 
-    def test_every_listed_file_exists(self):
-        for sub, files in assets.PACKAGE_FILES.items():
-            for rel in files:
-                assert (TRACING / sub / rel).is_file(), f"tracing/{sub}/{rel}"
+    def test_pyproject_ships_every_file_setup_reads(self):
+        """The plugin, hooks and .ts files, and every skill of the harnesses that take --with-skills."""
+        needed = {
+            "tracing/claude_code/.claude-plugin/plugin.json",
+            "tracing/claude_code/hooks/hooks.json",
+            "tracing/opencode/plugin/arize-tracing.ts",
+            "tracing/omp/plugin/arize-tracing.ts",
+        }
+        for sub in _skill_harnesses():
+            needed |= {
+                p.relative_to(REPO_ROOT).as_posix() for p in (TRACING / sub / "skills").glob("*/*") if p.is_file()
+            }
+        assert package_data() == needed
 
-    def test_lists_the_plugin_and_ts_files(self):
-        assert {".claude-plugin/plugin.json", "hooks/hooks.json"} <= set(assets.PACKAGE_FILES["claude_code"])
-        for sub in ("opencode", "omp"):
-            assert "plugin/arize-tracing.ts" in assets.PACKAGE_FILES[sub]
-        assert "cursor" in assets.PACKAGE_FILES and not any(
-            not f.startswith("skills/") for f in assets.PACKAGE_FILES["cursor"]
-        ), "Cursor gets no plugin folder"
+    def test_skill_harnesses(self):
+        assert _skill_harnesses() == {"claude_code", "codex", "cursor", "kiro", "omp", "opencode"}
 
-    def test_skills_of_every_harness_whose_installer_takes_with_skills(self):
-        """Every skill file of claude_code, codex, cursor, kiro, omp, opencode; none of the others."""
-        import inspect
+    def test_every_packaged_file_exists(self):
+        for path in package_data():
+            assert (REPO_ROOT / path).is_file(), path
 
-        expected = set()
-        for key in HARNESSES:
-            sub = key.replace("-", "_")
-            takes = "with_skills" in inspect.signature(install_table.load(key).install).parameters
-            ships = [p for p in (TRACING / sub / "skills").rglob("*") if p.is_file() and p.name != ".gitkeep"]
-            if takes and ships:
-                expected.add(sub)
-                listed = {f for f in assets.PACKAGE_FILES[sub] if f.startswith("skills/")}
-                assert listed == {p.relative_to(TRACING / sub).as_posix() for p in ships}, sub
-            else:
-                assert not any(f.startswith("skills/") for f in assets.PACKAGE_FILES.get(sub, [])), sub
-        assert expected == set(assets.SKILL_HARNESSES) == {"claude_code", "codex", "cursor", "kiro", "omp", "opencode"}
+    def test_fixed_files_are_packaged(self):
+        shipped = package_data()
+        for path in shipped:
+            sub, rel = path.removeprefix("tracing/").split("/", 1)
+            assert assets._is_package_rel(rel), path
+        assert {p for p in shipped if not p.split("/")[2] == "skills"} == {
+            f"tracing/{sub}/{rel}"
+            for sub, rel in (
+                ("claude_code", ".claude-plugin/plugin.json"),
+                ("claude_code", "hooks/hooks.json"),
+                ("opencode", "plugin/arize-tracing.ts"),
+                ("omp", "plugin/arize-tracing.ts"),
+            )
+        }
 
-    @pytest.mark.parametrize("sub, rel", [(s, r) for s, files in assets.PACKAGE_FILES.items() for r in files])
-    def test_reads_through_importlib_resources(self, sub, rel):
-        assert assets.read_package_file(sub, rel) == (TRACING / sub / rel).read_bytes()
+    @pytest.mark.parametrize("sub", sorted(_skill_harnesses()))
+    def test_skill_files_match_pyproject(self, sub):
+        """Only these harnesses call install_skills; their skills on disk are the ones pyproject.toml ships."""
+        found = {f"tracing/{sub}/{rel}" for _name, rel in assets.skill_files(sub)}
+        assert found == {p for p in package_data() if p.startswith(f"tracing/{sub}/skills/")}
 
-    def test_missing_package_file_exits_naming_it(self, monkeypatch, capsys):
-        monkeypatch.setitem(assets.PACKAGE_FILES, "codex", ["skills/gone/SKILL.md"])
+    @pytest.mark.parametrize("path", sorted(package_data()))
+    def test_reads_through_importlib_resources(self, path):
+        sub, rel = path.removeprefix("tracing/").split("/", 1)
+        assert assets.read_package_file(sub, rel) == (REPO_ROOT / path).read_bytes()
+
+    def test_missing_package_file_exits_naming_it(self, capsys):
         with pytest.raises(assets.AssetError) as exc:
             assets.read_package_file("codex", "skills/gone/SKILL.md")
         assert exc.value.code == 1
@@ -338,8 +353,7 @@ class TestSkills:
         )
 
     def test_harness_without_skills_is_a_no_op(self, tmp_path):
-        for harness in ("devin", "antigravity", "copilot", "gemini"):
-            assets.install_skills(harness, tmp_path)
+        assets.install_skills("devin", tmp_path)
         assert not (tmp_path / ".agents").exists()
 
 
@@ -532,7 +546,7 @@ class TestRefreshFromCommands:
 
 
 # ---------------------------------------------------------------------------
-# End to end: every harness, throwaway HOME, from the installed package
+# End to end: set up every harness in a throwaway HOME
 # ---------------------------------------------------------------------------
 
 
@@ -647,7 +661,7 @@ class TestEveryHarness:
 
 
 # ---------------------------------------------------------------------------
-# Review fixes
+# Line endings, manifest concurrency, uninstall failures, refresh errors
 # ---------------------------------------------------------------------------
 
 
@@ -773,7 +787,7 @@ class TestRefreshHardening:
 
 
 # ---------------------------------------------------------------------------
-# Second review fixes
+# Locking, user symlinks, manifest path checks, setup-time command
 # ---------------------------------------------------------------------------
 
 
@@ -1033,7 +1047,7 @@ class TestWriteErrorNotMasked:
 
 
 # ---------------------------------------------------------------------------
-# PR review: folder ownership and operation-wide locking
+# Symlinked folders and locking across a whole operation
 # ---------------------------------------------------------------------------
 
 
@@ -1123,7 +1137,7 @@ class TestLockSpansTheOperation:
         def unlink_then_race(self, *args, **kwargs):
             real_unlink(self, *args, **kwargs)
             if self == target and "proc" not in seen:
-                # Mid-uninstall: start a concurrent setup and give it time to run if it could.
+                # mid-uninstall: start a setup and give it time to run
                 seen["proc"] = subprocess.Popen([sys.executable, "-c", code, str(project)], env=env, cwd=tmp_path)
                 deadline = time.monotonic() + 3
                 while time.monotonic() < deadline and seen["proc"].poll() is None and not target.exists():

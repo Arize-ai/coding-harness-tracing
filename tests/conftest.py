@@ -60,11 +60,9 @@ def isolate_config(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolate_setup_files(tmp_path, monkeypatch):
-    """Keep the files setup writes from package data (manifest, Claude plugin folder) out of the real HOME.
+    """Point ``core.setup.INSTALL_DIR`` at a temp dir so tests never write to the real HOME.
 
-    ``core.setup.INSTALL_DIR`` is bound at import time from the real home, and
-    most installer tests patch only the harness's own settings path. Redirect it
-    to a temp dir unless a test patches it itself (its fixture runs after this one).
+    Tests that patch it themselves override this.
     """
     import core.setup
 
