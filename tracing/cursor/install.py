@@ -114,10 +114,7 @@ def _save_hooks(data: dict) -> None:
 def _register_cursor_hooks() -> None:
     """Add hook entries for all HOOK_EVENTS to ~/.cursor/hooks.json.
 
-    For each event, ensure one entry runs ``hook_command("cursor")``, and drop
-    our older ones (another ``arize-harness``, the old venv's
-    ``arize-hook-cursor``), under any event.  Merges with existing entries
-    without duplicating.  Honors dry_run().
+    Replaces our older entries and never duplicates ours. Honors dry_run().
     """
     data = _load_hooks()
     hooks = data["hooks"]

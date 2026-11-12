@@ -82,20 +82,18 @@ def _registration_paths(harness: str) -> list:
     return paths
 
 
-# Files a registration may live in. A directory candidate (Kiro's agents dir,
-# the Codex home) is scanned one level deep for these.
+# Config files that can hold a registration; directories are scanned one level deep.
 _CONFIG_SUFFIXES = (".json", ".toml", ".ts")
 
-# The generated opencode / omp plugin: binaryPath() returns the arize-harness
-# path, and spawn() gets ["hook", <harness>].
+# The arize-harness path and hook args in the generated opencode / omp plugin.
 _TS_BINARY = re.compile(r'function binaryPath\(\): string \{\s*return ("(?:[^"\\]|\\.)*");?\s*\}')
 _TS_ARGS = re.compile(r"spawn\(binaryPath\(\), (\[[^\]]*\])")
-# The plugin older installs copied, which joined the venv path in code.
+# Entry-point names in the plugin older installs copied.
 _TS_OLD_ENTRY = re.compile(r'"(arize-hook-[a-z0-9-]+)(?:\.exe)?"')
 
 
 def _strings(value: object) -> Iterator[object]:
-    """Every string, and every list of strings, inside a parsed config."""
+    """Yield every string and every list of strings in a parsed config."""
     if isinstance(value, str):
         yield value
     elif isinstance(value, list):
@@ -109,7 +107,7 @@ def _strings(value: object) -> Iterator[object]:
 
 
 def _ts_commands(text: str) -> List[object]:
-    """The command the opencode / omp plugin spawns, as an argv list (or an old venv path)."""
+    """The command the opencode / omp plugin runs: an argv list, or old venv paths."""
     binary, args = _TS_BINARY.search(text), _TS_ARGS.search(text)
     if binary and args:
         try:
@@ -125,11 +123,7 @@ def _ts_commands(text: str) -> List[object]:
 
 
 def _json_string_literals(text: str) -> Iterator[str]:
-    """Each string literal in JSON / JSONC text, quotes included.
-
-    ``//`` and ``/* */`` comments are skipped when they start outside a string,
-    so a ``"`` inside a comment does not pair up with the next string's quote.
-    """
+    """Yield each string literal in JSON / JSONC text, quotes included, skipping comments."""
     i, n = 0, len(text)
     while i < n:
         char = text[i]
@@ -152,11 +146,9 @@ def _json_string_literals(text: str) -> Iterator[str]:
 
 
 def _file_commands(path: Path) -> List[object]:
-    """Every value in ``path`` that could be a hook command: strings, and argv lists in TOML.
+    """Every string (and TOML string list) in ``path`` that could be a hook command.
 
-    JSON (and JSONC, which Devin allows) is read as its string literals, found
-    by ``_json_string_literals``, so comments or a trailing comma never hide a
-    registration.
+    JSON is scanned for string literals rather than parsed, so JSONC still works.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -185,11 +177,7 @@ def _candidate_files(path: Path) -> List[Path]:
 
 
 def _our_commands(harness: str, path: Path) -> List[Tuple[Path, str]]:
-    """``(file, executable)`` for each hook entry of ours under ``path``.
-
-    Ours: ``arize-harness hook <harness> ...`` from any ``arize-harness``, and
-    the old ``~/.arize/harness/venv`` ``arize-hook-*`` commands.
-    """
+    """``(file, executable)`` for each of our hook entries under ``path``."""
     found = []
     for file in _candidate_files(path):
         for value in _file_commands(file):
@@ -201,16 +189,10 @@ def _our_commands(harness: str, path: Path) -> List[Tuple[Path, str]]:
 
 
 def _registration_state(harness: str) -> tuple:
-    """Return (registered, path, command) for a harness.
+    """Return (registered, path, missing_command) for a harness.
 
-    Registered means at least one hook entry of ours is in the harness's
-    config, and every one of them runs a command that exists: a hook whose
-    ``arize-harness`` was removed (``uv tool uninstall``, a deleted binary)
-    fires nothing, so it counts as not registered. ``path`` is the file that
-    decided it; ``command`` the missing command, when that was the reason.
-
-    Every existing candidate is checked, not just the first: a harness can
-    register through any one of them.
+    Registered means we have at least one hook entry and every one's command exists.
+    ``path`` is the file that decided it. All candidate paths are checked.
 
     ``registered`` is None when we have no way to tell — an unknown harness, or
     one whose constants failed to import. Never guess True.
@@ -222,8 +204,7 @@ def _registration_state(harness: str) -> tuple:
     existing = [path for path in paths if path.exists()]
     found = [entry for path in existing for entry in _our_commands(harness, path)]
     if not found:
-        # Nothing of ours. Point at what we actually inspected when something
-        # was there, otherwise at where we looked first.
+        # Report the first file we read, or the first place we looked.
         return (False, str(existing[0]) if existing else str(paths[0]), None)
     for file, executable in found:
         if not Path(executable).exists():

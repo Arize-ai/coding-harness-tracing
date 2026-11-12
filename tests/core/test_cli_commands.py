@@ -466,7 +466,7 @@ def install_state(monkeypatch):
 
 
 class _Wiped(list):
-    """One True per wipe_shared_runtime call; ``kwargs`` holds each call's keyword arguments."""
+    """Records each ``wipe_shared_runtime`` call and its keyword arguments."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -656,11 +656,11 @@ class TestIsBinary:
 
 
 class TestUpdate:
-    """``update`` prints the command that updates this install, exits 1, and changes nothing."""
+    """``update`` prints how to update, exits 1, and changes nothing."""
 
     @pytest.fixture
     def prefix(self, monkeypatch, tmp_path, install_state) -> Path:
-        """A persistent-looking environment the package is installed in; ``install_state`` is not the venv."""
+        """A fake persistent environment holding the package, outside the old venv."""
         import core
 
         install_state.venv = False
@@ -724,7 +724,6 @@ class TestUpdate:
 
     def test_dev_checkout_prints_the_install_line(self, install_state, capsys) -> None:
         install_state.venv = False
-        # The test suite runs from this checkout.
         assert cli.main(["update"]) == 1
         line = self._only_err_line(capsys)
         assert "source checkout" in line and "uv tool install coding-harness-tracing" in line

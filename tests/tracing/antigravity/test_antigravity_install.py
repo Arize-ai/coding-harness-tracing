@@ -97,7 +97,7 @@ def cwd_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(_ac, "SETTINGS_DIR", antigravity_settings_dir)
     monkeypatch.setattr(_ac, "SETTINGS_FILE", antigravity_settings_dir / "hooks.json")
 
-    # A fixed arize-harness, so commands don't depend on where the tests run from
+    # Fixed path, so commands don't depend on where tests run
     from core.setup import runner
 
     monkeypatch.setattr(runner, "arize_harness_path", lambda: tmp_path / ".local" / "bin" / "arize-harness")

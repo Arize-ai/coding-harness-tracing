@@ -149,7 +149,7 @@ def _register_kiro_hooks(agent_path: Path, name: str) -> None:
     data = _load_agent(agent_path, name)
     hook_cmd = hook_command_for(HARNESS_NAME, HOOK_BIN_NAME, shell="cmd")
     hooks = data.setdefault("hooks", {})
-    # Our older entries (another arize-harness, the old venv's arize-hook-kiro) go, under any event.
+    # Clear our old entries from events we no longer register.
     for event in list(hooks):
         if event not in HOOK_EVENTS and isinstance(hooks[event], list):
             hooks[event] = filter_our_hooks(hooks[event], HARNESS_NAME)
@@ -181,8 +181,7 @@ def _register_kiro_hooks(agent_path: Path, name: str) -> None:
 
 def _unregister_all_kiro_hooks() -> None:
     """Walk KIRO_AGENTS_DIR; in each agent JSON, remove entries whose
-    command is ours (``arize-harness hook kiro``, or the old venv's
-    ``arize-hook-kiro``). Drop empty event lists. If a file ended up empty AND was created by us
+    command is ours. Drop empty event lists. If a file ended up empty AND was created by us
     (description matches the skeleton), delete it."""
     if not KIRO_AGENTS_DIR.is_dir():
         return

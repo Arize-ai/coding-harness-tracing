@@ -1,14 +1,4 @@
-"""Hooks registered as ``'<arize-harness>' hook <harness> [<event>]`` (Arize-ai/arize#90022).
-
-- the shared matchers in ``core.setup`` for today's entries and the old
-  ``~/.arize/harness/venv`` ``arize-hook-*`` ones;
-- Windows quoting per shell;
-- ``setup`` refusing non-persistent installs before writing anything;
-- every installer, run for real in a throwaway HOME: new command written, old
-  entries migrated, other hooks kept, setup twice identical, uninstall clean;
-- ``status`` reporting a harness whose registered command is gone;
-- ``uninstall --all`` keeping the running package.
-"""
+"""Tests for registering, recognising and removing ``arize-harness hook`` commands."""
 
 from __future__ import annotations
 
@@ -42,7 +32,7 @@ POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="runs the installers aga
 
 @pytest.fixture
 def venv(tmp_path, monkeypatch) -> Path:
-    """``core.setup.VENV_DIR`` pointed at a throwaway ``~/.arize/harness/venv``."""
+    """Point ``core.setup.VENV_DIR`` at a throwaway old venv."""
     path = tmp_path / "home" / ".arize" / "harness" / "venv"
     monkeypatch.setattr(setup_mod, "VENV_DIR", path)
     return path
@@ -50,7 +40,7 @@ def venv(tmp_path, monkeypatch) -> Path:
 
 @pytest.fixture
 def exe(tmp_path, monkeypatch) -> Path:
-    """The running ``arize-harness``, as a uv tool command link would give it."""
+    """Fake the running ``arize-harness`` path."""
     path = tmp_path / "local bin" / "arize-harness"
     path.parent.mkdir(parents=True)
     path.write_text("")
@@ -128,7 +118,7 @@ class TestArizeHookCommand:
         assert command_words(["a", 1]) == []
 
     def test_command_words_powershell_form(self):
-        """PowerShell's doubled apostrophe is one literal ``'``, not an empty POSIX string."""
+        """PowerShell's ``''`` is a literal ``'``."""
         ps = "& '/home/o''brien/.local/bin/arize-harness' hook copilot stop"
         assert command_words(ps) == ["&", "/home/o'brien/.local/bin/arize-harness", "hook", "copilot", "stop"]
         assert registered_command_path(ps) == "/home/o'brien/.local/bin/arize-harness"
@@ -194,7 +184,6 @@ class TestWindowsShells:
         assert is_our_hook_command(cmd, "kiro")
 
     def test_powershell_leaves_a_safe_path_unquoted(self, monkeypatch):
-        """A path with no spaces or quotes runs as written in PowerShell and in cmd.exe."""
         path = Path("C:/Users/u/.local/bin/arize-harness.exe")
         monkeypatch.setattr(runner, "arize_harness_path", lambda: path)
         monkeypatch.setattr(setup_mod, "_windows", lambda: True)
@@ -215,7 +204,7 @@ class TestWindowsShells:
 
 
 class TestCommandFields:
-    """Copilot's per-OS fields: ``bash``/``command`` run by a POSIX shell, ``windows``/``powershell`` on Windows."""
+    """Copilot's per-OS command fields."""
 
     @pytest.mark.parametrize("windows_host", [False, True])
     def test_spaced_path(self, monkeypatch, windows_host):
@@ -252,13 +241,13 @@ class TestCommandFields:
 
 
 # ---------------------------------------------------------------------------
-# setup refuses non-persistent installs before writing anything
+# Setup refusal
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def real_gate(monkeypatch, tmp_path):
-    """The real ``require_setup_writes`` (conftest stubs it), and a fake installer that records calls."""
+    """Restore the real ``require_setup_writes`` and record installer calls."""
     monkeypatch.setattr(commands, "require_setup_writes", runner.require_setup_writes)
     monkeypatch.setattr(runner, "_temp_roots", lambda: [tmp_path / "tmp"])
     calls: List[str] = []
@@ -332,14 +321,14 @@ class TestSetupGate:
 
 
 # ---------------------------------------------------------------------------
-# Every installer, for real, in a throwaway HOME
+# Installers in a throwaway HOME
 # ---------------------------------------------------------------------------
 
 USER_CMD = "echo user-hook"
 
 
 class Harness:
-    """One installer: where it writes, what an old install left there, and how to read its commands."""
+    """An installer's config files and the old-install state to seed them with."""
 
     def __init__(self, name: str, files: Callable[[Path], List[Path]], seed: Callable[[Path, Path], None]):
         self.name = name
@@ -511,7 +500,7 @@ def _snapshot(*roots: Path) -> Dict[str, bytes]:
 
 @pytest.fixture
 def link_home(tmp_path):
-    """A throwaway HOME and a command link to this checkout's ``arize-harness``, as uv tool would make."""
+    """A throwaway HOME with a uv-tool-style link to this checkout's ``arize-harness``."""
     real = Path(sys.executable).parent / ("arize-harness.exe" if os.name == "nt" else "arize-harness")
     if not real.exists():
         pytest.skip(f"{real} is not installed (run `uv sync`)")
@@ -525,7 +514,7 @@ def link_home(tmp_path):
 
 
 def _harness_cli(home: Path, link: Path, *args: str) -> "object":
-    """``arize-harness <args>`` through the link, so the link is what setup registers."""
+    """Run ``arize-harness`` through the link, so setup registers the link."""
     from tests.core.test_cli_commands import _run
 
     return _run(home, [str(link), *args], ARIZE_ENV_FILE=str(home / "creds.env"))
@@ -562,7 +551,6 @@ class TestInstallers:
             plugins = json.loads(files[0].read_text())["plugins"]
             assert "/user/plugin" in plugins
             assert not any(isinstance(p, dict) and p["path"].endswith("tracing/claude_code") for p in plugins)
-            # One command per event: nothing duplicated.
             assert len(ours) == len(set(map(str, ours)))
 
         second = _harness_cli(home, link, "setup", name, "--non-interactive")
@@ -612,7 +600,6 @@ def _status_item(home: Path, link: Path, name: str) -> dict:
 @POSIX_ONLY
 class TestApostropheInPath:
     def test_copilot_powershell_fields_count_as_registered(self, link_home):
-        """The ``windows`` / ``powershell`` fields quote ``'`` as ``''``; status must read them back."""
         home, old_link = link_home
         link = home / "o'brien" / "bin" / "arize-harness"
         link.parent.mkdir(parents=True)
@@ -654,7 +641,7 @@ class TestJsoncComments:
 
 
 # ---------------------------------------------------------------------------
-# Codex notify the user set themselves
+# Codex notify set by the user
 # ---------------------------------------------------------------------------
 
 
@@ -725,7 +712,7 @@ class TestWipeKeepsRunningPackage:
         assert sorted(p.name for p in install_dir.iterdir()) == ["bin"]
 
     def test_binary_run_by_bare_name_through_path_is_kept(self, install_dir, monkeypatch, tmp_path):
-        """Started as ``arize-harness`` from PATH, argv[0] is a bare name; the binary must still survive."""
+        """argv[0] is a bare name when the binary was found on PATH."""
         from core.setup import wipe
 
         binary = install_dir / "bin" / "arize-harness"

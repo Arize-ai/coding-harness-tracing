@@ -190,7 +190,7 @@ class TestInstallFreshWritesFlatHarnessEntry:
             assert is_arize_hook_command(cmd, "gemini") and not is_old_venv_hook(cmd)
 
     def test_mixed_block_keeps_the_users_hook(self, cwd_tmp, settings_file, monkeypatch):
-        """A block holding a user hook and one of ours loses only ours, on setup and on uninstall."""
+        """A block with a user hook and ours loses only ours, on setup and uninstall."""
         import core.setup as setup_mod
 
         old = str(setup_mod.VENV_DIR / "bin" / "arize-hook-gemini-before-tool")

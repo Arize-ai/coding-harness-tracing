@@ -226,7 +226,7 @@ def _register_hooks() -> None:
         hooks = {}
         config["hooks"] = hooks
 
-    # Our older entries (another arize-harness, the old venv's arize-hook-devin) go, under any event.
+    # Clear our old entries from events we no longer register.
     for event in list(hooks):
         if event not in HOOK_EVENT_NAMES and isinstance(hooks[event], list):
             hooks[event] = _without_our_hooks(hooks[event], keep=None)
@@ -297,7 +297,6 @@ def _unregister_hooks() -> None:
 
 
 def _without_our_hooks(event_list: list, keep: Optional[str]) -> list:
-    """``event_list`` (matcher entries) without our commands, except the first equal to ``keep``."""
     return filter_our_nested_hooks(event_list, HARNESS_NAME, keep=keep)
 
 

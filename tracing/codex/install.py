@@ -105,26 +105,19 @@ def _strip_arize_hooks(data: dict) -> bool:
 
 
 def _is_our_notify(value: object) -> bool:
-    """True when ``notify`` is ours alone: ``[<arize-harness>, "hook", "codex", "notify"]`` or the old venv command."""
+    """Whether ``notify`` is only our command, today's or the old venv's."""
     return is_arize_hook_command(value, HARNESS_NAME) or is_old_venv_hook(value)
 
 
 def _without_old_notify_words(value: list) -> list:
-    """``value`` without the old venv command, which older installers appended to the user's own ``notify``."""
+    """Drop the old venv command older installers appended to the user's ``notify`` list."""
     return [word for word in value if not is_old_venv_hook(word)]
 
 
 def _codex_toml_apply(path: Path, notify_argv: list) -> None:
-    """Set ``notify = notify_argv`` in ~/.codex/config.toml, and drop our old hook entries. Idempotent.
+    """Set ``notify`` in ~/.codex/config.toml and remove our legacy hook entries.
 
-    Codex runs one notify program (``notify`` is its argv, with the payload
-    appended), so ours replaces an older one of ours rather than joining a
-    list. A ``notify`` the user set themselves is left alone, with a warning:
-    tracing is then not registered, and ``status`` says so.
-
-    The ``[[hooks.<Event>]]`` entries older installers wrote (the venv's
-    ``arize-hook-codex-*``) are removed, as uninstall removes them; other
-    hook entries are kept.
+    Codex runs a single notify program, so a ``notify`` the user set is left alone with a warning.
     """
     if dry_run():
         info(f"would set notify in {path}")
@@ -158,7 +151,7 @@ def _codex_toml_apply(path: Path, notify_argv: list) -> None:
 
 
 def _codex_toml_remove(path: Path) -> None:
-    """Remove our notify entry (today's or the old venv's) and any legacy hook entries. Idempotent."""
+    """Remove our ``notify`` and any legacy hook entries from ~/.codex/config.toml."""
     if not path.is_file():
         return
 

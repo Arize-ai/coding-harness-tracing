@@ -136,8 +136,7 @@ unset CODEX_HOME DEVIN_PROJECT_DIR PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSE
 while IFS= read -r var; do unset "$var"; done < <(compgen -v | grep -E '^(ARIZE|PHOENIX|OTEL|PIP)_' || true)
 export PIP_CONFIG_FILE=/dev/null
 
-# setup refuses to write from anything under the temp dir, and $work is there.
-# Point the temp dir inside $work, away from the throwaway HOME.
+# setup refuses installs under the temp dir, so move the temp dir inside $work.
 mkdir -p "$work/tmp"
 export TMPDIR="$work/tmp" TEMP="$work/tmp" TMP="$work/tmp"
 
@@ -146,10 +145,9 @@ printf '%s\n' ARIZE_API_KEY=ci-not-a-real-key ARIZE_SPACE_ID=ci-space > "$creds"
 installed="$HOME/.arize/harness"
 mgr="$(manager)"
 
-# The interpreter of the installed package.
 pyenv="$installed/venv/bin/python"
 if [[ "$INSTALLER" == arize-harness ]]; then
-    # A uv tool install, as users get one: hooks register its command link.
+    # Install the way users do, so hooks register the uv tool command link.
     export UV_TOOL_DIR="$HOME/.local/share/uv/tools" UV_TOOL_BIN_DIR="$HOME/.local/bin"
     pyenv="$UV_TOOL_DIR/coding-harness-tracing/bin/python"
     step "installing the wheel with uv tool install"
@@ -182,8 +180,7 @@ EOF
     { cat "$work/status.json"; die "status --json does not list $config_key with its hooks registered"; }
 echo "$HARNESS is configured and its hooks are registered"
 
-# Every hook entry runs `arize-harness hook`, never a venv arize-hook-* command;
-# a uv tool install registers its command link, so no venv path at all.
+# Hooks must run `arize-harness hook`; a uv tool install must not use a venv path at all.
 no_venv=()
 [[ "$INSTALLER" == arize-harness ]] && no_venv=(--no-venv)
 "$pyenv" -I "$ROOT/scripts/smoke_hook_commands.py" "$HOME" "$work" ${no_venv[@]+"${no_venv[@]}"} ||
@@ -208,7 +205,6 @@ if [[ "$(uname)" == Darwin ]]; then
 fi
 
 if [[ "$INSTALLER" == arize-harness ]]; then
-    # update only says how: the package manager that installed it updates it.
     step "checking that update prints the upgrade command"
     if "$mgr" update > "$work/update.log" 2>&1; then
         cat "$work/update.log"

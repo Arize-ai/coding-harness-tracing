@@ -88,12 +88,12 @@ def _mock_prompts_arize(monkeypatch):
 
 
 def _expected_notify_cmd(fake_home: Path) -> str:
-    """The old venv command older installers wrote for notify (still ours, still removed)."""
+    """The old venv notify command."""
     return str(fake_home / ".arize" / "harness" / "venv" / "bin" / NOTIFY_BIN_NAME)
 
 
 def _expected_notify_argv() -> list:
-    """What install writes: ``notify`` is the argv of ``arize-harness hook codex notify``."""
+    """The ``notify`` argv install writes."""
     from core.setup.runner import hook_argv
 
     return hook_argv("codex", "notify")
@@ -419,7 +419,7 @@ class TestInstall:
         second = toml_path.read_text()
         assert first == second
 
-        # notify stays our argv; the notify-only layout writes no hooks.
+        # The notify-only layout writes no hooks.
         data = codex_toml._toml_load_strict(toml_path)
         assert data["notify"] == _expected_notify_argv()
         assert "hooks" not in data
@@ -1017,7 +1017,7 @@ OURS = ["/x/arize-harness", "hook", "codex", "notify"]
 
 
 class TestTomlApplyRemove:
-    """Unit tests for the notify-only TOML mutators: ``notify`` is one argv, ours or the user's."""
+    """Tests for the notify-only TOML helpers."""
 
     def _apply(self, p: Path, argv=OURS) -> None:
         codex_install._codex_toml_apply(p, argv)
@@ -1075,7 +1075,7 @@ class TestTomlApplyRemove:
         assert data["notify"] == OURS
 
     def test_apply_removes_our_old_hook_entries_and_keeps_others(self, tmp_path):
-        """apply drops the [[hooks.<Event>]] entries older installers wrote, and keeps the user's."""
+        """apply drops our legacy ``[[hooks.<Event>]]`` entries and keeps the user's."""
         p = tmp_path / "config.toml"
         p.write_text(
             "[[hooks.PreToolUse]]\nhooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-tool' }]\n"
@@ -1098,7 +1098,7 @@ class TestTomlApplyRemove:
         assert "Codex runs one notify program" in capsys.readouterr().err
 
     def test_old_install_ends_with_only_the_new_notify(self, fake_home):
-        """A config an old installer wrote (venv notify + venv lifecycle hooks) ends with only the new notify."""
+        """An old install's venv notify and lifecycle hooks become just the new notify."""
         venv_bin = fake_home / ".arize" / "harness" / "venv" / "bin"
         p = fake_home / ".codex" / "config.toml"
         p.parent.mkdir(parents=True)

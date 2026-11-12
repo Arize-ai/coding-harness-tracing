@@ -197,7 +197,7 @@ class TestIdempotent:
     def test_reinstalling_with_old_values_ensures_correct_registrations(
         self, fake_home, monkeypatch, include_corrected
     ):
-        """Reinstall replaces the old venv's Windows commands, and keeps commands that only look alike."""
+        """Reinstall replaces old venv Windows commands and keeps look-alikes."""
         import core.setup as setup_mod
         import tracing.claude_code.install as claude_install
 
@@ -222,7 +222,7 @@ class TestIdempotent:
         hooks["SessionStart"][0]["hooks"].extend(session_start_siblings[0]["hooks"])
         hooks["SessionStart"].extend(session_start_siblings[1:])
         if include_corrected:
-            # The shell-quoted spelling a later installer wrote: also ours.
+            # Shell-quoted form a later installer wrote.
             corrected = f"'{(root / 'arize-hook-session-start.exe').as_posix()}'"
             hooks["SessionStart"].append({"hooks": [{"type": "command", "command": corrected}]})
         settings_file = fake_home / ".claude" / "settings.json"

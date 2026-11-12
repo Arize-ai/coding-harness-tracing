@@ -158,7 +158,7 @@ class TestInstallFreshWritesFlatHarnessEntry:
             assert entries[0] == {"type": "command", **hook_command_fields("copilot", HOOK_EVENTS[event])}
 
     def test_reinstall_replaces_an_older_entry_in_place(self, hooks_dir, monkeypatch):
-        """An entry of ours without the per-OS fields is rewritten where it was; the user's stay put."""
+        """Our entry without per-OS fields is rewritten in place; the user's are untouched."""
         import core.setup as setup_mod
         from core.setup import hook_command_fields
 

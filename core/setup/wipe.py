@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full teardown: remove ~/.arize/harness (config, state, logs, the files setup wrote, and old installs)."""
+"""Remove ~/.arize/harness: config, state, logs, the files setup wrote, and old installs."""
 
 from __future__ import annotations
 
@@ -21,12 +21,11 @@ def _norm(path: Path) -> Path:
 
 
 def _running_package() -> List[Path]:
-    """Where the running ``arize-harness`` lives: the binary, or the environment holding the package."""
+    """Paths of the running ``arize-harness``: the binary, or its environment and package."""
     import core
 
     if is_binary():
-        # sys.executable is the binary's real path; sys.argv[0] is only the
-        # name it was started by, a bare word when it was found on PATH.
+        # sys.argv[0] may be a bare name found on PATH; sys.executable is the real path.
         return [_norm(Path(sys.executable))]
     return [_norm(Path(sys.prefix)), _norm(Path(core.__file__).parent)]
 
@@ -49,11 +48,8 @@ def _remove(path: Path) -> None:
 def wipe_shared_runtime(keep_running_package: bool = False) -> None:
     """Remove ~/.arize/harness.
 
-    With ``keep_running_package`` (``arize-harness uninstall --all``), anything
-    under it that holds the running package (``venv/`` when run from the old
-    install.sh / install.bat venv, or a binary kept there) stays, and only the
-    rest goes. install.sh and install.bat call it without, as their full
-    uninstall removes the venv too.
+    With ``keep_running_package``, anything holding the running ``arize-harness`` is kept.
+    install.sh and install.bat call it without, since they remove the venv too.
 
     Respects ARIZE_DRY_RUN. Does NOT touch harness-specific config files
     (~/.claude/settings.json, .github/hooks/*, ~/.codex/config.toml,

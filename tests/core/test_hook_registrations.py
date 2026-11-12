@@ -462,7 +462,7 @@ class TestCodexHookReference:
     """Verify Codex docs reference the correct notify hook command."""
 
     def test_codex_skill_notify_command(self):
-        """Codex SKILL.md notify is the argv of ``arize-harness hook codex notify``, as setup writes it."""
+        """Codex SKILL.md shows notify as the argv setup writes."""
         skill = (REPO_ROOT / "tracing" / "codex" / "skills" / "manage-codex-tracing" / "SKILL.md").read_text()
         assert 'arize-harness", "hook", "codex", "notify"]' in skill
         assert "venv/bin/arize-hook-codex-notify" not in skill

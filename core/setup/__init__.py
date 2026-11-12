@@ -789,7 +789,7 @@ def ensure_shared_runtime() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Hook commands: what setup registers, and what older installs registered
+# Hook commands
 # ---------------------------------------------------------------------------
 
 _COMMAND_NAMES = ("arize-harness", "arize-harness.exe")
@@ -801,7 +801,7 @@ def _windows() -> bool:
 
 
 def _hook_target(harness: str, entry_point: str) -> tuple:
-    """The hook table's ``(harness, event)`` for an ``arize-hook-*`` entry point; ValueError when unknown."""
+    """Map an ``arize-hook-*`` entry point to its ``(harness, event)``; raises ValueError if unknown."""
     from core.hook_table import canonical_harness, iter_hooks, legacy_entry_point
 
     name = canonical_harness(harness)
@@ -811,17 +811,14 @@ def _hook_target(harness: str, entry_point: str) -> tuple:
     raise ValueError(f"no hook for entry point {entry_point!r} in harness '{harness}'")
 
 
-# A path PowerShell, cmd.exe and a POSIX shell all run as written, unquoted
-# (VS Code's own rule for when a hook path needs no quoting).
+# Paths every shell runs unquoted (the same rule VS Code uses).
 _UNQUOTED_PATH = re.compile(r"[A-Za-z0-9_./:-]+")
 
 
 def _powershell_command(harness: str, entry_point: str) -> str:
-    """``<path> hook ...`` when the path needs no quoting, else ``& '<path>' hook ...``.
+    """The hook command for PowerShell: unquoted when safe, else ``& '<path>' hook ...``.
 
-    PowerShell runs a bare path as a command but treats a leading quoted
-    string as a value, hence the call operator. The unquoted form also runs
-    under cmd.exe, which some harness runners use instead.
+    The unquoted form also runs under cmd.exe.
     """
     from core.setup.runner import hook_argv
 
@@ -833,22 +830,9 @@ def _powershell_command(harness: str, entry_point: str) -> str:
 
 
 def hook_command_for(harness: str, entry_point: str, shell: str = "posix") -> str:
-    """The command a harness config runs for the hook an ``arize-hook-*`` entry point ran.
+    """The hook command for an ``arize-hook-*`` entry point, quoted for the harness's Windows shell.
 
-    Installers keep their event -> entry-point tables; this finds the entry
-    point's (harness, event) in the hook table and returns ``hook_command()``,
-    ``'<path>' hook <harness> <event>``.
-
-    ``shell`` is how the harness runs the command on Windows (macOS and Linux
-    always get the POSIX form):
-
-    - ``"posix"``: a POSIX shell (Claude Code's Git Bash), or a runner that
-      fixes quoting itself (Cursor adds PowerShell's ``&``);
-    - ``"powershell"``: ``_powershell_command`` (Gemini CLI);
-    - ``"cmd"``: ``"<path>" hook ...``, since cmd.exe does not treat single
-      quotes as quotes (Kiro).
-
-    Raises ValueError for an unknown entry point or shell.
+    ``shell`` is ``"posix"``, ``"powershell"`` or ``"cmd"``; macOS and Linux always get POSIX.
     """
     from core.setup.runner import hook_argv, hook_command
 
@@ -864,14 +848,9 @@ def hook_command_for(harness: str, entry_point: str, shell: str = "posix") -> st
 
 
 def hook_command_fields(harness: str, entry_point: str) -> dict:
-    """Per-OS command fields for a harness that reads them (VS Code Copilot, Copilot CLI).
+    """The ``command``/``bash`` (POSIX) and ``windows``/``powershell`` fields Copilot reads.
 
-    - ``command`` and ``bash``: the POSIX form, which macOS and Linux run
-      (``bash`` wins there; ``command`` is the fallback everywhere);
-    - ``windows`` and ``powershell``: ``_powershell_command``, which Windows
-      runs (VS Code prefers ``windows``, Copilot CLI reads ``powershell``).
-
-    Written the same on every OS, so re-running setup anywhere gives the same entry.
+    Identical on every OS, so setup writes the same entry everywhere.
     """
     from core.setup.runner import hook_command
 
@@ -881,10 +860,7 @@ def hook_command_fields(harness: str, entry_point: str) -> dict:
 
 
 def _powershell_words(command: str) -> list[str]:
-    """``& '<path>' rest...`` split by PowerShell rules: ``''`` inside the quotes is one ``'``.
-
-    Returns [] when the quoted path is not closed.
-    """
+    """Split ``& '<path>' ...`` by PowerShell rules (``''`` is a literal ``'``); [] if unclosed."""
     path, i = [], 3  # after "& '"
     while i < len(command):
         if command[i] == "'":
@@ -899,10 +875,9 @@ def _powershell_words(command: str) -> list[str]:
 
 
 def command_words(command: object) -> list[str]:
-    """A registered command split into words: an argv list as is, a shell string by POSIX rules.
+    """Split a registered command into words; [] if it can't be parsed.
 
-    ``& '<path>' ...`` (the PowerShell form setup writes) is split by PowerShell
-    rules instead. Returns [] for anything else, or a string a shell could not parse.
+    Argv lists pass through, ``& '...'`` uses PowerShell rules, other strings POSIX rules.
     """
     if isinstance(command, (list, tuple)):
         return list(command) if all(isinstance(word, str) for word in command) else []
@@ -917,12 +892,7 @@ def command_words(command: object) -> list[str]:
 
 
 def is_arize_hook_command(command: object, harness: str | None = None) -> bool:
-    """True for ``'<.../arize-harness>' hook <harness> ...``, as a shell string or an argv list.
-
-    Any ``arize-harness`` path counts, so re-running setup from another install
-    replaces the entry instead of adding a second one. With ``harness``, only
-    that harness's hooks match (``claude-code`` and ``claude`` are the same).
-    """
+    """Whether ``command`` runs ``arize-harness hook <harness>``, from any ``arize-harness`` path."""
     from core.hook_table import canonical_harness
 
     words = command_words(command)
@@ -936,12 +906,7 @@ def is_arize_hook_command(command: object, harness: str | None = None) -> bool:
 
 
 def _old_venv_path(command: object) -> str | None:
-    """The path of an ``arize-hook-*`` command in ``~/.arize/harness/venv`` that older installers wrote.
-
-    Those commands had no arguments, and were written native
-    (``C:\\...\\Scripts\\arize-hook-stop.exe``), shell-quoted
-    (``'/home/u/.arize/harness/venv/bin/arize-hook-stop'``), or as a one-word argv list.
-    """
+    """The path of an old ``~/.arize/harness/venv`` ``arize-hook-*`` command, quoted or not; else None."""
     if isinstance(command, (list, tuple)):
         if len(command) != 1:
             return None
@@ -971,21 +936,17 @@ def _old_venv_path(command: object) -> str | None:
 
 
 def is_old_venv_hook(command: object) -> bool:
-    """True for an ``arize-hook-*`` command in ``~/.arize/harness/venv``, in any form older installers wrote."""
+    """Whether ``command`` is an ``arize-hook-*`` command from the old ``~/.arize/harness/venv``."""
     return _old_venv_path(command) is not None
 
 
 def is_our_hook_command(command: object, harness: str | None = None) -> bool:
-    """True for a hook entry we own in ``harness``'s config: today's command or an old venv one."""
+    """Whether ``command`` is ours: an ``arize-harness hook`` command or an old venv one."""
     return is_arize_hook_command(command, harness) or is_old_venv_hook(command)
 
 
 def filter_our_hooks(entries: list, harness: str, keep: str | None = None) -> list:
-    """``entries`` (hook dicts with a ``command``) without ours, except the first whose command is ``keep``.
-
-    What re-running setup and uninstall do to one event's list: our older
-    entries go, today's stays once, and every other entry is kept as it is.
-    """
+    """Drop our hook entries from ``entries``, keeping the first one whose command is ``keep``."""
     kept_keep = False
     result = []
     for entry in entries:
@@ -1004,13 +965,9 @@ def filter_our_nested_hooks(
     keep: str | None = None,
     is_ours: Callable[[dict], bool] | None = None,
 ) -> list:
-    """``filter_our_hooks`` for configs that group hooks: ``[{"matcher": ..., "hooks": [hook, ...]}, ...]``.
+    """``filter_our_hooks`` inside each ``{"hooks": [...]}`` group.
 
-    Our hooks are filtered inside each group, except the first whose command
-    is ``keep``; the user's hooks and every other key of the group stay as
-    they are. A group is dropped only when removing ours leaves it empty (a
-    group that was empty to begin with is kept). ``is_ours`` decides which
-    hooks are ours; by default, any hook whose ``command`` is ours.
+    A group is dropped only when removing ours empties it.
     """
     if is_ours is None:
 
@@ -1039,7 +996,7 @@ def filter_our_nested_hooks(
 
 
 def registered_command_path(command: object) -> str | None:
-    """The executable one of our hook entries runs, or None when the entry is not ours."""
+    """The executable our hook entry runs, or None if the entry isn't ours."""
     if is_arize_hook_command(command):
         words = command_words(command)
         return words[1] if words[0] == "&" else words[0]

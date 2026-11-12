@@ -77,8 +77,7 @@ def _install_hooks(hooks_dir: Path) -> None:
     data = _read_json(filepath)
     hooks_map: dict = data.setdefault("hooks", {})
 
-    # Our old entries go (another arize-harness, the old venv's arize-hook-*),
-    # including under events we no longer register.
+    # Clear our old entries from events we no longer register.
     for event in list(hooks_map):
         if event not in HOOK_EVENTS and isinstance(hooks_map[event], list):
             hooks_map[event] = filter_our_hooks(hooks_map[event], HARNESS_NAME)
@@ -86,8 +85,7 @@ def _install_hooks(hooks_dir: Path) -> None:
                 del hooks_map[event]
 
     for event, entry_point in HOOK_EVENTS.items():
-        # One entry with a command per OS (bash / windows / powershell), so each
-        # shell gets a form it can run; it replaces our first older entry in place.
+        # Replace our first older entry in place, so the user's ordering is kept.
         wanted = {"type": "command", **hook_command_fields(HARNESS_NAME, entry_point)}
         event_list: list = hooks_map.setdefault(event, [])
         placed = False

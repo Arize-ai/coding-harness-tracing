@@ -58,13 +58,7 @@ def running_from_install_venv() -> bool:
 
 
 def update_hint() -> str:
-    """How to update the ``arize-harness`` that is running, as one line.
-
-    - a Nuitka binary: download a new one;
-    - ``uv tool install``: ``uv tool upgrade``; ``pipx install``: ``pipx upgrade``;
-    - ``~/.arize/harness/venv``: ``install.bat update`` on Windows, re-run install.sh elsewhere;
-    - anything else (``uvx``, ``uv run``, a dev checkout): the install line, as setup prints it.
-    """
+    """One line telling the user how to update this install, based on how it was installed."""
     if is_binary():
         return f"This is a binary install ({arize_harness_path()}); download a new arize-harness binary to replace it."
     if running_from_install_venv():
@@ -153,8 +147,7 @@ def _refresh_files() -> None:
 
 
 def cmd_setup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    # Before anything is asked or written: hooks registered from uvx, uv run or
-    # a dev checkout would point at something that goes away.
+    # Checked before any prompt: hooks registered from a temporary install would break.
     try:
         require_setup_writes()
     except SetupRefused:
@@ -216,7 +209,7 @@ def cmd_uninstall(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             install_table.load(key).uninstall()
         except (Exception, SystemExit) as e:
             warn(f"{key} uninstall failed (continuing): {e}")
-    # Config, state, logs and the files setup wrote; never the package that is running.
+    # Keep the running package, which may live under ~/.arize/harness.
     wipe_shared_runtime(keep_running_package=True)
     return 0
 
@@ -238,11 +231,9 @@ def cmd_status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
 
 
 def cmd_update(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    """Print the command that updates this install and exit 1; nothing is changed.
+    """Print how to update this install and exit 1 without changing anything.
 
-    The package manager that installed ``arize-harness`` is the one that can
-    replace it, and re-running ``setup`` afterwards is not needed: hooks run
-    the command link, which then points at the new version.
+    Setup needn't be re-run: hooks run the command link, which follows the upgrade.
     """
     err(f"{update_hint()} Nothing was changed.")
     return 1

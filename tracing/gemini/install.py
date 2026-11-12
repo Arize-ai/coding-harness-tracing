@@ -95,12 +95,11 @@ def _write_settings(data: dict) -> None:
 
 
 def _is_our_hook(hook: dict) -> bool:
-    """True for a hook we wrote: named ``HOOK_NAME``, or running our command (today's or the old venv's)."""
+    """Whether a hook is ours: named ``HOOK_NAME``, or running our command."""
     return hook.get("name") == HOOK_NAME or is_our_hook_command(hook.get("command"), HARNESS_NAME)
 
 
 def _without_our_blocks(event_list: list) -> list:
-    """``event_list`` with our hooks taken out of each matcher block; a block is dropped only if that empties it."""
     return filter_our_nested_hooks(event_list, HARNESS_NAME, is_ours=_is_our_hook)
 
 
@@ -113,7 +112,7 @@ def _install_hooks() -> None:
     data = _read_settings()
     hooks_map: dict = data.setdefault("hooks", {})
 
-    # Our blocks go under every event, including ones we no longer register.
+    # Clear our old hooks from events we no longer register.
     for event in list(hooks_map):
         if event not in EVENTS and isinstance(hooks_map[event], list):
             hooks_map[event] = _without_our_blocks(hooks_map[event])
@@ -124,7 +123,6 @@ def _install_hooks() -> None:
         cmd = hook_command_for(HARNESS_NAME, entry_point, shell="powershell")
         event_list: list = hooks_map.setdefault(event, [])
 
-        # Take our hooks out of every block (the user's stay), then append our block.
         event_list[:] = _without_our_blocks(event_list)
 
         # Append our block

@@ -2,12 +2,9 @@
 
     python -I scripts/smoke_hook_commands.py <home> <cwd> [--no-venv]
 
-Run with the installed package's interpreter (``-I``: the installed package,
-never this checkout). Exits 1, listing each offender, when a config holds an
-old ``~/.arize/harness/venv`` ``arize-hook-*`` command (or an old plugin that
-spawns one), or when no config holds an ``arize-harness hook`` command at all.
-``--no-venv`` also fails an ``arize-harness hook`` command that runs from
-``~/.arize/harness/venv``: a uv tool install registers its command link.
+Run with the installed package's interpreter. Exits 1, listing offenders, if any
+config runs an old venv ``arize-hook-*`` command or none runs ``arize-harness hook``.
+``--no-venv`` also fails an ``arize-harness hook`` command under the old venv.
 """
 
 from __future__ import annotations
