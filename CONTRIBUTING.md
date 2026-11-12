@@ -91,6 +91,13 @@ To inspect the install afterwards, set `SMOKE_KEEP=1`. The script then skips the
 SMOKE_KEEP=1 scripts/smoke-install.sh
 ```
 
+To check a built wheel the way PyPI users install it, run the wheel smoke test. It installs the wheel with `uv tool install` and, for every harness in its own throwaway `HOME`, runs setup, status, a second setup and uninstall. Pass a folder holding the `python-dotenv` wheel to stay offline. CI's `wheel-smoke` job runs it on Linux and macOS:
+
+```bash
+uv build --wheel --out-dir dist
+scripts/smoke-wheel.sh dist/coding_harness_tracing-*.whl
+```
+
 To run the same smoke test in a clean Linux container, use the container helper. CI's `linux-distro-offline` job runs this same helper, so a failure there reproduces with the same command:
 
 ```bash
