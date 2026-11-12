@@ -19,8 +19,7 @@ from pathlib import Path
 import pytest
 
 from core.constants import HARNESSES
-from core.setup import assets
-from tests._pyproject import REPO_ROOT
+from tests._pyproject import REPO_ROOT, package_data
 from tests.core.test_assets import assert_equals_source_except_hook_command
 
 pytestmark = [
@@ -86,7 +85,7 @@ class TestWheelContents:
     def test_ships_the_listed_files(self, wheel_dir):
         names = zipfile.ZipFile(_wheel(wheel_dir)).namelist()
         data = {n for n in names if not n.endswith(".py") and ".dist-info/" not in n}
-        expected = {f"tracing/{sub}/{rel}" for sub, files in assets.PACKAGE_FILES.items() for rel in files}
+        expected = package_data()
         assert data == expected
 
     def test_exactly_one_core(self, wheel_dir):

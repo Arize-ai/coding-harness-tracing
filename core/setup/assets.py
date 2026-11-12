@@ -27,18 +27,9 @@ MANIFEST_NAME = "manifest.json"
 MANIFEST_SCHEMA = 1
 CLAUDE_PLUGIN_DIR_NAME = "claude_plugin"
 
-# Non-python files to be included in the build.
-# pyproject.toml's [tool.setuptools.package-data] lists the same files.
-PACKAGE_FILES: Dict[str, List[str]] = {
-    "claude_code": [".claude-plugin/plugin.json", "hooks/hooks.json", "skills/manage-claude-code-tracing/SKILL.md"],
-    "codex": ["skills/manage-codex-tracing/SKILL.md"],
-    "cursor": ["skills/manage-cursor-tracing/SKILL.md"],
-    "kiro": ["skills/manage-kiro-tracing/SKILL.md"],
-    "omp": ["plugin/arize-tracing.ts", "skills/manage-omp-tracing/SKILL.md"],
-    "opencode": ["plugin/arize-tracing.ts", "skills/manage-opencode-tracing/SKILL.md"],
-}
-
-SKILL_HARNESSES = ("claude_code", "codex", "cursor", "kiro", "omp", "opencode")
+# Packaged files setup reads by name. Skills are found under each harness's skills/
+# folder. pyproject.toml's [tool.setuptools.package-data] decides what ships.
+FIXED_FILES = (".claude-plugin/plugin.json", "hooks/hooks.json", "plugin/arize-tracing.ts")
 
 
 class AssetError(SystemExit):
@@ -72,8 +63,6 @@ def _key(harness: str) -> str:
 
 def read_package_file(harness: str, rel: str) -> bytes:
     sub = _sub(harness)
-    if rel not in PACKAGE_FILES.get(sub, []):
-        raise _fail(f"tracing/{sub}/{rel} is not package data")
     try:
         node = resources.files(f"tracing.{sub}").joinpath(*rel.split("/"))
         return node.read_bytes()
@@ -82,12 +71,26 @@ def read_package_file(harness: str, rel: str) -> bytes:
 
 
 def skill_files(harness: str) -> List[Tuple[str, str]]:
-    out = []
-    for rel in PACKAGE_FILES.get(_sub(harness), []):
-        parts = rel.split("/")
-        if parts[0] == "skills" and len(parts) >= 3:
-            out.append((parts[1], rel))
-    return out
+    """The skill files the installed package ships for a harness, as ``(skill name, package path)``."""
+    try:
+        skills = resources.files(f"tracing.{_sub(harness)}").joinpath("skills")
+    except ModuleNotFoundError:
+        return []
+    if not skills.is_dir():
+        return []
+    return [
+        (folder.name, f"skills/{folder.name}/{file.name}")
+        for folder in sorted(skills.iterdir(), key=lambda f: f.name)
+        if folder.is_dir()
+        for file in sorted(folder.iterdir(), key=lambda f: f.name)
+        if file.is_file()
+    ]
+
+
+def _is_package_rel(rel: str) -> bool:
+    """True for a fixed file setup reads, or a ``skills/<skill>/<file>`` path."""
+    parts = rel.split("/")
+    return rel in FIXED_FILES or (len(parts) == 3 and parts[0] == "skills" and ".." not in parts)
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +385,7 @@ def _setup_location(harness: str, path: str, entry: dict) -> Optional[Tuple[str,
     Returns ``(rel, kind, owned folder)``, or None. Refresh and uninstall skip entries that fail.
     """
     rel = _source_rel(harness, entry)
-    if rel is None or rel not in PACKAGE_FILES.get(_sub(harness), []):
+    if rel is None or not _is_package_rel(rel):
         return None
     kind = _GENERATED_KINDS.get(rel, "copy")
     if entry.get("kind", "copy") != kind:
