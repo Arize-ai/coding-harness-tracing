@@ -31,7 +31,7 @@ Transcript parsing and hook observations are fail-soft. Unknown or malformed rec
 ## Setup
 The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers the hooks in `~/.claude/settings.json`.
 
-Pass `--with-skills` to also symlink the `manage-claude-code-tracing` skill into the current directory's `.agents/skills/` so Claude can help you manage the configuration interactively.
+Pass `--with-skills` to also copy the `manage-claude-code-tracing` skill into the current directory's `.agents/skills/` so Claude can help you manage the configuration interactively.
 
 ### Claude Code marketplace
 

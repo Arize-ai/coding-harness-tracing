@@ -136,6 +136,13 @@ def _setup_one(key: str, with_skills: bool, backend: Optional[str]) -> None:
     info("Setup complete!")
 
 
+def _refresh_files() -> None:
+    """Rewrite files recorded by a different package version, if this install may write."""
+    from core.setup.assets import refresh_and_report
+
+    refresh_and_report()
+
+
 def cmd_setup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.non_interactive:
         os.environ["ARIZE_NONINTERACTIVE"] = "1"
@@ -154,6 +161,8 @@ def cmd_setup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
 
     for key in keys:
         _setup_one(key, args.with_skills, args.backend)
+    # also refresh files from other harnesses
+    _refresh_files()
     return 0
 
 
@@ -171,6 +180,7 @@ def cmd_uninstall(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             parser.error(f"unknown harness '{args.harness}'")
         header(f"Uninstalling {key} tracing")
         install_table.load(key).uninstall()
+        _refresh_files()
         return 0
     if not args.all:
         err("uninstall needs a harness name, or --all to remove everything. Nothing was changed.")
@@ -318,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="ask nothing; read settings from the environment or ARIZE_ENV_FILE",
     )
-    setup.add_argument("--with-skills", action="store_true", help="symlink harness skills into .agents/skills/")
+    setup.add_argument("--with-skills", action="store_true", help="copy harness skills into .agents/skills/")
     setup.set_defaults(func=cmd_setup, parser=setup)
 
     uninstall = sub.add_parser(

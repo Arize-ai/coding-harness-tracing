@@ -13,18 +13,19 @@ from core.setup import (
     ensure_shared_runtime,
     harness_dir,
     info,
+    install_skills,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    symlink_skills,
-    unlink_skills,
+    remove_harness_files,
     venv_bin,
     write_config,
     write_logging_config,
 )
+from core.setup.assets import claude_plugin_dir, install_claude_plugin
 from tracing.claude_code.constants import (
     ARIZE_ENV_KEYS,
     DISPLAY_NAME,
@@ -37,7 +38,7 @@ from tracing.claude_code.constants import (
 
 
 def install(with_skills: bool = False) -> None:
-    """Install Claude Code tracing: configure backend, register hooks, optionally symlink skills."""
+    """Install Claude Code tracing: configure backend, register hooks, optionally copy skills."""
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -76,17 +77,18 @@ def install(with_skills: bool = False) -> None:
     else:
         info("Using existing logging settings from config.json")
 
+    install_claude_plugin()
     _register_claude_hooks()
     if with_skills:
-        symlink_skills(HARNESS_NAME)
+        install_skills(HARNESS_NAME)
     info(f"Claude Code tracing installed ({SETTINGS_FILE})")
 
 
 def uninstall() -> None:
-    """Remove Claude Code tracing hooks, harness entry, and skill symlinks."""
+    """Remove Claude Code tracing hooks, harness entry, plugin folder and skills."""
     _unregister_claude_hooks()
     remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
+    remove_harness_files(HARNESS_NAME)
     info("Claude Code tracing uninstalled")
 
 
@@ -107,18 +109,13 @@ def _save_settings(settings: dict) -> None:
 
 
 def _register_claude_hooks() -> None:
-    """Read SETTINGS_FILE (or init to {}), add plugin reference + hook commands.
+    """Add the plugin entry and hook commands to settings.json without duplicating them.
 
-    Registering the local plugin (path → ~/.arize/harness/tracing/claude_code)
-    makes Claude Code auto-load its bundled hooks even in non-interactive
-    (-p) mode, where ``--setting-sources`` defaults to ``project,local`` and
-    user-level hooks would otherwise be skipped.
-
-    Merges with existing entries without duplicating. Uses venv_bin() for each
-    HOOK_EVENTS entry point. Honors dry_run().
+    The plugin entry (``~/.arize/harness/claude_plugin``) makes Claude run our hooks
+    in ``claude -p`` too, which skips user-level hooks. Honors dry_run().
     """
     settings = _load_settings()
-    plugin_dir = str(harness_dir("claude-code"))
+    plugin_dir = str(claude_plugin_dir())
 
     # Add plugin reference (idempotent — skip if the path is already listed
     # under either the string or {path: ...} shape used by the marketplace).
@@ -185,14 +182,15 @@ def _unregister_claude_hooks() -> None:
     if not settings:
         return
 
-    plugin_dir = str(harness_dir("claude-code"))
+    # the current plugin folder and the one older installs used
+    plugin_dirs = {str(claude_plugin_dir()), str(harness_dir("claude-code"))}
 
     # Remove our plugin entries (drops empty list).
     if "plugins" in settings:
         settings["plugins"] = [
             p
             for p in settings["plugins"]
-            if not ((isinstance(p, str) and p == plugin_dir) or (isinstance(p, dict) and p.get("path") == plugin_dir))
+            if not ((isinstance(p, str) and p in plugin_dirs) or (isinstance(p, dict) and p.get("path") in plugin_dirs))
         ]
         if not settings["plugins"]:
             del settings["plugins"]

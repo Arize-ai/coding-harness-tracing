@@ -12,26 +12,25 @@ Usage (called by the shell router):
 
 from __future__ import annotations
 
-import shutil
 import sys
-from pathlib import Path
 
 from core.config import get_value, load_config
 from core.setup import (
     dry_run,
     ensure_shared_runtime,
     info,
+    install_skills,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    symlink_skills,
-    unlink_skills,
+    remove_harness_files,
     write_config,
     write_logging_config,
 )
+from core.setup.assets import install_plugin_ts
 from tracing.opencode.constants import HARNESS_NAME
 
 # Header-marker the installer writes into the shim and checks on uninstall so
@@ -56,34 +55,16 @@ def _plugin_file():
     return PLUGIN_FILE
 
 
-def _plugin_source():
-    """Resolve the bundled plugin asset relative to THIS installer file.
-
-    Deliberately NOT via ``constants.PLUGIN_SOURCE``: at runtime the shell router
-    executes install.py from the rsynced ~/.arize/harness tree (where the .ts
-    ships alongside it), while ``tracing.opencode.constants`` is imported from the
-    venv site-packages copy, which does not carry the data asset. Resolving from
-    install.py's own location works in every delivery (repo, INSTALL_DIR) and
-    avoids the FileNotFoundError seen in real installs.
-    """
-    return Path(__file__).resolve().parent / "plugin" / "arize-tracing.ts"
-
-
 # ---------------------------------------------------------------------------
 # Plugin file-drop / removal
 # ---------------------------------------------------------------------------
 
 
 def _install_plugin() -> None:
-    """Copy the shipped plugin source into opencode's global plugin dir."""
+    """Write the generated plugin into opencode's plugin dir."""
     plugin_file = _plugin_file()
 
-    if dry_run():
-        info(f"would write opencode plugin to {plugin_file}")
-        return
-
-    _plugin_dir().mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(_plugin_source(), plugin_file)
+    install_plugin_ts("opencode", plugin_file)
 
 
 def _uninstall_plugin() -> None:
@@ -142,7 +123,7 @@ def install(with_skills: bool = False) -> None:
     _install_plugin()
 
     if with_skills:
-        symlink_skills(HARNESS_NAME)
+        install_skills(HARNESS_NAME)
 
     info("opencode tracing installed")
 
@@ -152,7 +133,7 @@ def uninstall() -> None:
     _uninstall_plugin()
 
     remove_harness_entry(HARNESS_NAME)
-    unlink_skills(HARNESS_NAME)
+    remove_harness_files(HARNESS_NAME)
     info("opencode tracing uninstalled")
 
 

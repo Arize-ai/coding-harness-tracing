@@ -29,7 +29,7 @@ from core.setup import (
     prompt_project_name,
     prompt_user_id,
     remove_harness_entry,
-    unlink_skills,
+    remove_harness_files,
     venv_bin,
     write_config,
     write_logging_config,
@@ -179,7 +179,7 @@ def uninstall() -> None:
     _uninstall_hooks()
 
     remove_harness_entry(_c.HARNESS_NAME)
-    unlink_skills(_c.HARNESS_NAME)
+    remove_harness_files(_c.HARNESS_NAME)
     info("Antigravity tracing uninstalled")
 
 

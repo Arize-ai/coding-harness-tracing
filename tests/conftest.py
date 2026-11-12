@@ -58,6 +58,17 @@ def isolate_config(tmp_path, monkeypatch):
     env.invalidate_caches()
 
 
+@pytest.fixture(autouse=True)
+def isolate_setup_files(tmp_path, monkeypatch):
+    """Point ``core.setup.INSTALL_DIR`` at a temp dir so tests never write to the real HOME.
+
+    Tests that patch it themselves override this.
+    """
+    import core.setup
+
+    monkeypatch.setattr(core.setup, "INSTALL_DIR", tmp_path / "isolated-home" / ".arize" / "harness")
+
+
 @pytest.fixture
 def tmp_harness_dir(tmp_path, monkeypatch):
     """Create the full ~/.arize/harness directory tree in a temp location.

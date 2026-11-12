@@ -459,7 +459,7 @@ class TestUninstallEntryPoint:
 
         calls = {}
         monkeypatch.setattr(install_mod, "remove_harness_entry", lambda name: calls.__setitem__("remove", name))
-        monkeypatch.setattr(install_mod, "unlink_skills", lambda name: calls.__setitem__("unlink", name))
+        monkeypatch.setattr(install_mod, "remove_harness_files", lambda name: calls.__setitem__("files", name))
 
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text(json.dumps({"version": 1}))
@@ -470,4 +470,4 @@ class TestUninstallEntryPoint:
         data = json.loads(config_file.read_text())
         assert "hooks" not in data
         assert data["version"] == 1
-        assert calls == {"remove": "devin", "unlink": "devin"}
+        assert calls == {"remove": "devin", "files": "devin"}

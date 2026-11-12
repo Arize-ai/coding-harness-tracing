@@ -129,8 +129,10 @@ def plugin_file(cwd_tmp):
 
 @pytest.fixture
 def plugin_source_text(cwd_tmp):
-    """Return the text contents of the shipped plugin source asset."""
-    return _omp.PLUGIN_SOURCE.read_text(encoding="utf-8")
+    """The shipped plugin source with the ``arize-harness hook`` command substituted, as install writes it."""
+    from core.setup.assets import plugin_ts
+
+    return plugin_ts("omp", _omp.PLUGIN_SOURCE.read_text(encoding="utf-8"))
 
 
 def _read_settings(settings_file):
@@ -194,7 +196,7 @@ class TestInstallCopiesShim:
         assert plugin_file.parent.is_dir()
 
     def test_plugin_file_content_matches_source(self, plugin_file, plugin_source_text, monkeypatch):
-        """The installed shim content must equal the shipped source asset (not inline text)."""
+        """The installed shim is the shipped source asset with only the hook command substituted."""
         _mock_prompts(monkeypatch)
         install()
         assert plugin_file.read_text(encoding="utf-8") == plugin_source_text
@@ -532,11 +534,11 @@ class TestPluginSourceResolution:
         assert plugin_file.is_file()
         assert plugin_file.read_text(encoding="utf-8").startswith(_HEADER_MARKER)
 
-    def test_plugin_source_points_at_existing_asset(self):
-        """_plugin_source() resolves to a file that actually exists on disk."""
-        src = _install._plugin_source()
-        assert src.is_file()
-        assert src.name == "arize-tracing.ts"
+    def test_plugin_source_is_package_data(self):
+        """The installer reads the .ts from the installed package, which ships the repo's file."""
+        from core.setup.assets import read_package_file
+
+        assert read_package_file("omp", "plugin/arize-tracing.ts") == _omp.PLUGIN_SOURCE.read_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -786,19 +788,19 @@ class TestMainDispatchSkillsFlag:
 
 
 class TestInstallSkillsWiring:
-    """install() honors with_skills and symlinks the management skill."""
+    """install() honors with_skills and copies the management skill."""
 
-    def test_install_with_skills_true_calls_symlink(self, cwd_tmp, monkeypatch):
+    def test_install_with_skills_true_copies_skills(self, cwd_tmp, monkeypatch):
         _mock_prompts(monkeypatch)
         calls = []
-        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        monkeypatch.setattr(_install, "install_skills", lambda harness: calls.append(harness))
         install(with_skills=True)
         assert calls == ["omp"]
 
-    def test_install_default_does_not_symlink(self, cwd_tmp, monkeypatch):
+    def test_install_default_does_not_copy_skills(self, cwd_tmp, monkeypatch):
         _mock_prompts(monkeypatch)
         calls = []
-        monkeypatch.setattr(_install, "symlink_skills", lambda harness: calls.append(harness))
+        monkeypatch.setattr(_install, "install_skills", lambda harness: calls.append(harness))
         install()
         assert calls == []
 
