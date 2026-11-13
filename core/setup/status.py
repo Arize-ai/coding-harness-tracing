@@ -19,7 +19,7 @@ import sys
 import tomllib
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
-from typing import Iterator, List, Optional, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple
 
 import core.setup as _setup
 from core.config import load_config
@@ -174,6 +174,12 @@ def _candidate_files(path: Path) -> List[Path]:
     if path.is_dir():
         return [child for child in sorted(path.iterdir()) if child.is_file() and child.suffix in _CONFIG_SUFFIXES]
     return [path] if path.is_file() else []
+
+
+def registration_values(harness: str, extra: Sequence[Path] = ()) -> List[Tuple[Path, List[object]]]:
+    """``(file, values)`` for each registration file of ``harness`` and each file under ``extra``, as status reads."""
+    paths = [*_registration_paths(harness), *extra]
+    return [(file, _file_commands(file)) for path in paths for file in _candidate_files(path)]
 
 
 def _our_commands(harness: str, path: Path) -> List[Tuple[Path, str]]:
