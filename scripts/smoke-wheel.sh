@@ -119,7 +119,7 @@ show_log() { sed 's/^/    | /' "$log" >&2; }
 # Checks that hold for any install type.
 check_install() {
     cmd="$1"
-    local h rc
+    local h rc span_checked=0 h_failed
 
     fresh hook-list
     rc=0
@@ -132,6 +132,7 @@ check_install() {
 
     for h in "${HARNESSES[@]}"; do
         echo "smoke-wheel: $h"
+        h_failed=0
         fresh "$h"
         ah setup "$h" --non-interactive --backend arize ||
             { rc=$?; show_log; fail "$h" "setup exited $rc"; continue; }
@@ -150,11 +151,17 @@ check_install() {
             { show_log; fail "$h" "snapshot after setup re-run failed"; continue; }
         check same "$work/$h/before.json" "$work/$h/after.json" 2>> "$log" ||
             { show_log; fail "$h" "setup re-run changed files"; continue; }
+        if [[ $h == claude-code ]]; then
+            span_checked=1
+            in_home check claude-turn "$cmd" >> "$log" 2>&1 ||
+                { show_log; fail "$h" "Claude span check failed"; h_failed=1; }
+        fi
         ah uninstall "$h" || { rc=$?; show_log; fail "$h" "uninstall exited $rc"; continue; }
         in_home check no-entries "$h" 2>> "$log" ||
             { show_log; fail "$h" "uninstall left an entry of ours"; continue; }
-        echo "  ok"
+        [[ $h_failed -eq 1 ]] || echo "  ok"
     done
+    [[ $span_checked -eq 1 || " ${HARNESSES[*]} " != *" claude-code "* ]] || fail claude-code "Claude span check not run: an earlier check failed"
 
     echo "smoke-wheel: all harnesses in one HOME"
     fresh all
