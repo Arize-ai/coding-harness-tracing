@@ -5,7 +5,7 @@ description: Set up and configure Arize tracing for opencode terminal coding ses
 
 # Setup opencode Tracing
 
-Configure OpenInference tracing for **opencode** terminal coding sessions to Arize AX (cloud) or Phoenix (self-hosted). Unlike the other harnesses in this repo, opencode loads its extensions [in-process inside its Bun runtime](https://opencode.ai/docs/plugins/) — there is no per-event subprocess. The integration ships as a small TypeScript plugin shim that pulls snapshots via the [opencode SDK](https://opencode.ai/docs/sdk/) and spawns a Python reconciler (`arize-hook-opencode`) which emits spans. Spans are sent directly to the backend from the reconciler — no separate buffer/collector service is required.
+Configure OpenInference tracing for **opencode** terminal coding sessions to Arize AX (cloud) or Phoenix (self-hosted). Unlike the other harnesses in this repo, opencode loads its extensions [in-process inside its Bun runtime](https://opencode.ai/docs/plugins/) — there is no per-event subprocess. The integration ships as a small TypeScript plugin shim that pulls snapshots via the [opencode SDK](https://opencode.ai/docs/sdk/) and spawns a Python reconciler (`arize-harness hook opencode`) which emits spans. Spans are sent directly to the backend from the reconciler — no separate buffer/collector service is required.
 
 ## How to Use This Skill
 
@@ -162,7 +162,7 @@ Uninstall deletes the plugin file at `~/.config/opencode/plugin/arize-tracing.ts
 1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials under `harnesses.opencode`.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
 3. **Plugin installed**: Verify `~/.config/opencode/plugin/arize-tracing.ts` exists and starts with the Arize header marker.
-4. **Reconciler entry point**: Verify the reconciler binary exists at `~/.arize/harness/venv/bin/arize-hook-opencode` (or `~/.arize/harness/venv/Scripts/arize-hook-opencode.exe` on Windows). The shim spawns this binary by absolute path — it does not rely on PATH resolution. `install.sh` installs it as a venv entry point.
+4. **Reconciler entry point**: The shim spawns `arize-harness hook opencode` by absolute path (the `arize-harness` that ran setup, named in the plugin's `binaryPath()`); it does not rely on PATH resolution. `arize-harness status` reports the harness as not registered when that path no longer exists.
 
 ### Confirm
 
@@ -183,8 +183,8 @@ Tell the user:
 
 opencode is fundamentally different from every other harness in this repo: extensions are [plugins](https://opencode.ai/docs/plugins/) loaded **in-process** inside opencode's Bun runtime. The Arize integration is split into two pieces:
 
-1. **TypeScript plugin bridge** at `~/.config/opencode/plugin/arize-tracing.ts`. On `message.updated` (assistant completed) and `session.idle` it pulls the authoritative root snapshot via `client.session.messages({ path: { id } })` (see the [opencode SDK docs](https://opencode.ai/docs/sdk/)), follows completed `task` metadata to fetch authoritative child-session snapshots, validates session ownership, then spawns `arize-hook-opencode` detached and pipes the combined snapshot to stdin.
-2. **Python snapshot reconciler** (`arize-hook-opencode`). Reads the snapshot, reconstructs `Turn → LLM → TOOL → AGENT → child LLM/TOOL`, and emits only new spans deduped by message ID, tool `callID`, and child session ID. opencode's `AssistantMessage` already carries final, cumulative `tokens` and `cost`, so no per-delta coalescing is needed.
+1. **TypeScript plugin bridge** at `~/.config/opencode/plugin/arize-tracing.ts`. On `message.updated` (assistant completed) and `session.idle` it pulls the authoritative root snapshot via `client.session.messages({ path: { id } })` (see the [opencode SDK docs](https://opencode.ai/docs/sdk/)), follows completed `task` metadata to fetch authoritative child-session snapshots, validates session ownership, then spawns `arize-harness hook opencode` detached and pipes the combined snapshot to stdin.
+2. **Python snapshot reconciler** (`arize-harness hook opencode`). Reads the snapshot, reconstructs `Turn → LLM → TOOL → AGENT → child LLM/TOOL`, and emits only new spans deduped by message ID, tool `callID`, and child session ID. opencode's `AssistantMessage` already carries final, cumulative `tokens` and `cost`, so no per-delta coalescing is needed.
 
 ## Span tree
 
@@ -207,7 +207,7 @@ Common issues and fixes for opencode:
 |---------|-----|
 | Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check reconciler log: `tail -20 ~/.arize/harness/logs/opencode.log`. Confirm the plugin is in place: `ls ~/.config/opencode/plugin/arize-tracing.ts`. |
 | Plugin not loading | opencode loads plugins from `~/.config/opencode/plugin/` on startup. If the file exists but isn't loading, restart opencode and check the opencode CLI output for plugin errors. |
-| Reconciler entry point missing | The shim spawns the reconciler by absolute path; verify the binary exists at `~/.arize/harness/venv/bin/arize-hook-opencode` (or `~/.arize/harness/venv/Scripts/arize-hook-opencode.exe` on Windows). Rerun `./install.sh opencode` to reinstall the venv entry point. |
+| Reconciler entry point missing | The shim spawns the reconciler by absolute path; `arize-harness status` reports it as not registered when the `arize-harness` it names is gone. Reinstall (`uv tool install coding-harness-tracing`), then rerun `arize-harness setup opencode` to rewrite the plugin. |
 | Spans appear partial / missing tool spans | Snapshots are pulled on `message.updated` (assistant complete) and `session.idle`. Pending or running tool parts won't emit a span until they reach `completed` or `error` state. Wait for the turn to finish. |
 | Duplicate spans | The reconciler dedupes by message id and tool `callID`. If you still see duplicates, set `ARIZE_VERBOSE=true` and check `~/.arize/harness/logs/opencode.log` for dedup hits to confirm state tracking is working. |
 | Sub-agent (`task` tool) trace not linked to parent | Wait for the parent session to reach `session.idle`. Linking requires a completed `task` part with `state.metadata.sessionId` plus an SDK child session whose `Session.parentID` matches the requesting session; mismatched or foreign snapshots are rejected. Sessions already active during an integration upgrade may need to be restarted. |

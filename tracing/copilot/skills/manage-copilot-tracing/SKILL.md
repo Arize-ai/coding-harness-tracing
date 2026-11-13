@@ -136,26 +136,26 @@ Copilot hooks are registered in a single `.github/hooks/hooks.json` file. Create
 ```json
 {
   "hooks": {
-    "SessionStart":      [{"type": "command", "command": "~/.arize/harness/venv/bin/arize-hook-copilot-session-start"}],
-    "UserPromptSubmit":  [{"type": "command", "command": "~/.arize/harness/venv/bin/arize-hook-copilot-user-prompt"}],
-    "PreToolUse":        [{"type": "command", "command": "~/.arize/harness/venv/bin/arize-hook-copilot-pre-tool"}],
-    "PostToolUse":       [{"type": "command", "command": "~/.arize/harness/venv/bin/arize-hook-copilot-post-tool"}],
-    "Stop":              [{"type": "command", "command": "~/.arize/harness/venv/bin/arize-hook-copilot-stop"}],
-    "SubagentStop":      [{"type": "command", "command": "~/.arize/harness/venv/bin/arize-hook-copilot-subagent-stop"}]
+    "SessionStart":      [{"type": "command", "command": "'/home/you/.local/bin/arize-harness' hook copilot session-start"}],
+    "UserPromptSubmit":  [{"type": "command", "command": "'/home/you/.local/bin/arize-harness' hook copilot user-prompt"}],
+    "PreToolUse":        [{"type": "command", "command": "'/home/you/.local/bin/arize-harness' hook copilot pre-tool"}],
+    "PostToolUse":       [{"type": "command", "command": "'/home/you/.local/bin/arize-harness' hook copilot post-tool"}],
+    "Stop":              [{"type": "command", "command": "'/home/you/.local/bin/arize-harness' hook copilot stop"}],
+    "SubagentStop":      [{"type": "command", "command": "'/home/you/.local/bin/arize-harness' hook copilot subagent-stop"}]
   }
 }
 ```
 
-All `command` values should be absolute paths to the venv binary (e.g. `~/.arize/harness/venv/bin/arize-hook-copilot-<event>`).
+Each `command` runs `'<path>' hook copilot <event>`, where `<path>` is the `arize-harness` that ran setup (`~/.local/bin/arize-harness` for a `uv tool install`). On Windows it is written `& '<path>' hook copilot <event>`, because Copilot runs hook commands through PowerShell there.
 
 ### Validate
 
 1. **Config exists**: Run `cat ~/.arize/harness/config.json` to verify the config file exists and has correct backend credentials.
 2. **Phoenix** (if applicable): Run `curl -sf <endpoint>/v1/traces >/dev/null` to check connectivity.
-3. **Hooks active**: Verify `.github/hooks/hooks.json` exists in the project root and each `command` path is the absolute venv binary path.
+3. **Hooks active**: Verify `.github/hooks/hooks.json` exists in the project root and each `command` runs `arize-harness hook copilot <event>` from an `arize-harness` that still exists (`arize-harness status` checks this).
 4. **Quick dry-run test** (optional):
    ```bash
-   echo '{"hookEventName":"PreToolUse","tool_name":"test"}' | ARIZE_DRY_RUN=true arize-hook-copilot-pre-tool
+   echo '{"hookEventName":"PreToolUse","tool_name":"test"}' | ARIZE_DRY_RUN=true arize-harness hook copilot pre-tool
    ```
 
 ### Confirm
@@ -197,8 +197,8 @@ All other handlers print `{"continue": true}`.
 | Problem | Fix |
 |---------|-----|
 | Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/copilot.log` |
-| Hooks not firing | Verify `.github/hooks/hooks.json` exists in the project root and each `command` path is the absolute venv binary path |
-| `PreToolUse` blocking tools | Check the handler prints the correct permission JSON. Test: `echo '{"hookEventName":"PreToolUse","tool_name":"test"}' \| arize-hook-copilot-pre-tool` |
+| Hooks not firing | Verify `.github/hooks/hooks.json` exists in the project root and each `command` runs `arize-harness hook copilot <event>` from an `arize-harness` that still exists |
+| `PreToolUse` blocking tools | Check the handler prints the correct permission JSON. Test: `echo '{"hookEventName":"PreToolUse","tool_name":"test"}' \| arize-harness hook copilot pre-tool` |
 | Config missing | Run the installer or create `~/.arize/harness/config.json` manually (include `harnesses.copilot` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Copilot |

@@ -20,7 +20,7 @@ Timestamps come from opencode's own millisecond clocks (`message.time.created` /
 opencode is fundamentally different from every other harness in this repo: extensions are [plugins](https://opencode.ai/docs/plugins/) that opencode loads **in-process** inside its Bun runtime — there is no per-event subprocess and no stdin payload. The integration is split into two pieces:
 
 1. **TypeScript plugin shim** (`~/.config/opencode/plugin/arize-tracing.ts`). A bridge. On `message.updated` (assistant completed) and `session.idle` it pulls authoritative session snapshots through the SDK. Completed `task` parts are followed to their child sessions through `state.metadata.sessionId`; child lifecycle events are suppressed as independent roots and exported with their parent snapshot instead.
-2. **Python snapshot reconciler** (`arize-hook-opencode`). Reads the snapshot, reconstructs `Turn → LLM → TOOL → AGENT → child LLM`, and emits only new spans using stable IDs durably reserved under keys derived from message IDs, `callID`, and session IDs. Same-session hook processes are serialized to make dedup safe across concurrent lifecycle events.
+2. **Python snapshot reconciler** (`arize-harness hook opencode`). Reads the snapshot, reconstructs `Turn → LLM → TOOL → AGENT → child LLM`, and emits only new spans using stable IDs durably reserved under keys derived from message IDs, `callID`, and session IDs. Same-session hook processes are serialized to make dedup safe across concurrent lifecycle events.
 
 Snapshots repeat across firings — that's what dedup is for. There is no streaming-chunk forwarding.
 

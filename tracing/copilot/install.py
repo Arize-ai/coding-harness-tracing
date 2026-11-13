@@ -20,7 +20,10 @@ from core.config import get_value, load_config
 from core.setup import (
     dry_run,
     ensure_shared_runtime,
+    filter_our_hooks,
+    hook_command_fields,
     info,
+    is_our_hook_command,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
@@ -28,7 +31,6 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_config,
     write_logging_config,
 )
@@ -75,15 +77,29 @@ def _install_hooks(hooks_dir: Path) -> None:
     data = _read_json(filepath)
     hooks_map: dict = data.setdefault("hooks", {})
 
+    # Clear our old entries from events we no longer register.
+    for event in list(hooks_map):
+        if event not in HOOK_EVENTS and isinstance(hooks_map[event], list):
+            hooks_map[event] = filter_our_hooks(hooks_map[event], HARNESS_NAME)
+            if not hooks_map[event]:
+                del hooks_map[event]
+
     for event, entry_point in HOOK_EVENTS.items():
-        cmd = str(venv_bin(entry_point))
+        # Replace our first older entry in place, so the user's ordering is kept.
+        wanted = {"type": "command", **hook_command_fields(HARNESS_NAME, entry_point)}
         event_list: list = hooks_map.setdefault(event, [])
-
-        already = any(h.get("command") == cmd and h.get("type") == "command" for h in event_list)
-        if already:
-            continue
-
-        event_list.append({"type": "command", "command": cmd})
+        placed = False
+        updated = []
+        for entry in event_list:
+            ours = isinstance(entry, dict) and is_our_hook_command(entry.get("command"), HARNESS_NAME)
+            if not ours:
+                updated.append(entry)
+            elif not placed:
+                updated.append(wanted)
+                placed = True
+        if not placed:
+            updated.append(wanted)
+        event_list[:] = updated
 
     _write_json(filepath, data)
 
@@ -101,10 +117,11 @@ def _uninstall_hooks(hooks_dir: Path) -> None:
     data = _read_json(filepath)
     hooks_map = data.get("hooks", {})
 
-    for event, entry_point in HOOK_EVENTS.items():
-        cmd = str(venv_bin(entry_point))
-        event_list = hooks_map.get(event, [])
-        filtered = [h for h in event_list if h.get("command") != cmd]
+    for event in list(hooks_map):
+        event_list = hooks_map[event]
+        if not isinstance(event_list, list):
+            continue
+        filtered = filter_our_hooks(event_list, HARNESS_NAME)
         if filtered:
             hooks_map[event] = filtered
         else:

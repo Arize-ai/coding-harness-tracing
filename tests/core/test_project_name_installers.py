@@ -1,6 +1,5 @@
 import importlib
 import json
-from pathlib import Path
 
 import pytest
 
@@ -62,9 +61,10 @@ def test_ax_project_default_is_persisted_and_reinstall_is_preserved(
     if module_name == "tracing.codex.install":
         monkeypatch.setattr(module, "CONFIG_FILE", config_file)
         monkeypatch.setattr(module, "get_codex_home", lambda: tmp_path / ".codex")
-        monkeypatch.setattr(module, "venv_bin", lambda name: Path("/tmp") / name)
+        monkeypatch.setattr(module, "hook_argv", lambda harness, event: ["/tmp/arize-harness", "hook", harness, event])
     for name in side_effects:
-        monkeypatch.setattr(module, name, lambda *args, **kwargs: None)
+        # True: _codex_toml_apply reports whether notify was registered.
+        monkeypatch.setattr(module, name, lambda *args, **kwargs: True)
     monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
     monkeypatch.setenv("ARIZE_PROJECT_NAME", "inherited-project")
     monkeypatch.delenv("ARIZE_USER_ID", raising=False)

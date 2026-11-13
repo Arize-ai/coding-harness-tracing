@@ -434,16 +434,16 @@ class TestDocumentationConsistency:
     """Verify documentation is internally consistent."""
 
     def test_cursor_skill_references_cli_entry_points(self):
-        """Cursor SKILL.md should use CLI entry points for hooks."""
+        """Cursor SKILL.md should show the ``arize-harness hook cursor`` command for hooks."""
         skill = (REPO_ROOT / "tracing" / "cursor" / "skills" / "manage-cursor-tracing" / "SKILL.md").read_text()
-        assert "arize-hook-cursor" in skill
+        assert "arize-harness' hook cursor" in skill
         assert "send_span()" in skill
         assert "hook-handler.sh" not in skill
 
     def test_codex_skill_references_cli_entry_points(self):
-        """Codex SKILL.md should use CLI entry points."""
+        """Codex SKILL.md should show the ``arize-harness hook codex notify`` argv."""
         skill = (REPO_ROOT / "tracing" / "codex" / "skills" / "manage-codex-tracing" / "SKILL.md").read_text()
-        assert "arize-hook-codex-notify" in skill
+        assert '"hook", "codex", "notify"]' in skill
         assert "notify.sh" not in skill
 
     def test_claude_skill_references_cli_entry_points(self):
@@ -462,9 +462,10 @@ class TestCodexHookReference:
     """Verify Codex docs reference the correct notify hook command."""
 
     def test_codex_skill_notify_command(self):
-        """Codex SKILL.md notify hook should use the CLI entry point."""
+        """Codex SKILL.md shows notify as the argv setup writes."""
         skill = (REPO_ROOT / "tracing" / "codex" / "skills" / "manage-codex-tracing" / "SKILL.md").read_text()
-        assert "arize-hook-codex-notify" in skill
+        assert 'arize-harness", "hook", "codex", "notify"]' in skill
+        assert "venv/bin/arize-hook-codex-notify" not in skill
 
 
 # --- Cursor hooks.json pattern ---
@@ -474,7 +475,7 @@ class TestCursorHookReference:
     """Verify Cursor docs reference the correct handler command."""
 
     def test_cursor_skill_hook_command(self):
-        """Cursor SKILL.md should show arize-hook-cursor for all 12 events."""
+        """Cursor SKILL.md should show ``arize-harness hook cursor`` for all 12 events."""
         skill = (REPO_ROOT / "tracing" / "cursor" / "skills" / "manage-cursor-tracing" / "SKILL.md").read_text()
         # All events should reference the same entry point
         events = [
@@ -493,9 +494,10 @@ class TestCursorHookReference:
         ]
         for event in events:
             assert event in skill, f"Cursor SKILL.md missing event: {event}"
-        # Count occurrences of arize-hook-cursor — should be at least 12 (one per event)
-        count = skill.count("arize-hook-cursor")
-        assert count >= 12, f"Expected at least 12 arize-hook-cursor references, got {count}"
+        # One `arize-harness hook cursor` command per event, and no old venv command.
+        count = skill.count("arize-harness' hook cursor")
+        assert count >= 12, f"Expected at least 12 arize-harness hook cursor commands, got {count}"
+        assert "venv/bin/arize-hook-cursor" not in skill
 
 
 # --- State file extension ---

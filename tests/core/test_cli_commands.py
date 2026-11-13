@@ -21,7 +21,8 @@ import pytest
 
 from core import cli, install_table, runtime
 from core.constants import HARNESSES
-from core.setup import commands
+from core.setup import commands, runner
+from tests._install_type import PERSISTENT_PYTHONPATH
 from tests._pyproject import REPO_ROOT
 
 INSTALL_SH = REPO_ROOT / "install.sh"
@@ -60,7 +61,7 @@ def _env(home: Path, **extra: str) -> Dict[str, str]:
         {
             "HOME": str(home),
             "USERPROFILE": str(home),
-            "PYTHONPATH": str(REPO_ROOT),
+            "PYTHONPATH": PERSISTENT_PYTHONPATH,
             "NO_COLOR": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": str(home / ".gitconfig"),
@@ -421,7 +422,7 @@ class TestSetupMenu:
 
     def test_sets_up_each_comma_separated_name_in_order(self, fake_installers, detected, monkeypatch) -> None:
         order: List[str] = []
-        monkeypatch.setattr(commands, "_setup_one", lambda key, with_skills, backend: order.append(key))
+        monkeypatch.setattr(commands, "_setup_one", lambda key, with_skills, backend: order.append(key) or True)
         self._answer(monkeypatch, " codex, claude ,cursor")
         assert cli.main(["setup"]) == 0
         assert order == ["codex", "claude-code", "cursor"]
@@ -464,15 +465,28 @@ def install_state(monkeypatch):
     return state
 
 
+class _Wiped(list):
+    """Records each ``wipe_shared_runtime`` call and its keyword arguments."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.kwargs: List[dict] = []
+
+
 class TestUninstall:
     @pytest.fixture
     def wipe(self, monkeypatch, fake_installers):
         # Never import the real core.setup.wipe here: it binds INSTALL_DIR at
         # import, so importing it in this process before a test that patches
         # core.setup.INSTALL_DIR would point that test's wipe at the real HOME.
-        wiped: List[bool] = []
+        wiped = _Wiped()
+
+        def fake_wipe(**kwargs):
+            wiped.append(True)
+            wiped.kwargs.append(kwargs)
+
         fake = types.ModuleType("core.setup.wipe")
-        fake.wipe_shared_runtime = lambda: wiped.append(True)  # type: ignore[attr-defined]
+        fake.wipe_shared_runtime = fake_wipe  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "core.setup.wipe", fake)
         monkeypatch.setattr(commands, "list_installed_harnesses", lambda: ["claude-code", "codex", "bogus"])
         return wiped
@@ -515,26 +529,18 @@ class TestUninstall:
         assert fake_installers["codex"] == [("uninstall", {})]
         assert wipe == [True]
 
-    @pytest.mark.parametrize("venv, windows", [(True, False), (False, False), (True, True)])
-    def test_all_on_a_binary_install_refuses(self, venv, windows, wipe, fake_installers, install_state, capsys):
-        install_state.binary, install_state.venv, install_state.windows = True, venv, windows
-        assert cli.main(["uninstall", "--all"]) == 1
-        err = capsys.readouterr().err
-        assert "not supported on a binary install" in err and len(err.strip().splitlines()) == 1
-        assert not wipe and all(not calls for calls in fake_installers.values())
-
-    def test_all_in_the_windows_venv_refuses(self, wipe, fake_installers, install_state, capsys) -> None:
-        install_state.windows = True
-        assert cli.main(["uninstall", "--all"]) == 1
-        err = capsys.readouterr().err
-        assert "install.bat uninstall" in err and len(err.strip().splitlines()) == 1
-        assert not wipe and all(not calls for calls in fake_installers.values())
-
-    @pytest.mark.parametrize("windows", [False, True])
-    def test_all_from_another_interpreter_runs(self, windows, wipe, fake_installers, install_state) -> None:
-        install_state.venv, install_state.windows = False, windows
+    @pytest.mark.parametrize(
+        "binary, venv, windows", [(True, False, False), (True, False, True), (False, True, True), (False, False, True)]
+    )
+    def test_all_runs_on_every_install_type(self, binary, venv, windows, wipe, fake_installers, install_state):
+        install_state.binary, install_state.venv, install_state.windows = binary, venv, windows
         assert cli.main(["uninstall", "--all"]) == 0
+        assert fake_installers["claude-code"] == [("uninstall", {})]
         assert wipe == [True]
+
+    def test_all_keeps_the_running_package(self, wipe, fake_installers, install_state) -> None:
+        assert cli.main(["uninstall", "--all"]) == 0
+        assert wipe.kwargs == [{"keep_running_package": True}]
 
 
 @POSIX_ONLY
@@ -649,156 +655,96 @@ class TestIsBinary:
 # ---------------------------------------------------------------------------
 
 
-class _Calls(list):
-    """Commands update ran, in order; a command fails when one of its words is in ``fail``."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.fail: List[str] = []
-
-
 class TestUpdate:
+    """``update`` prints how to update, exits 1, and changes nothing."""
+
     @pytest.fixture
-    def calls(self, monkeypatch, install_state, tmp_path) -> _Calls:
-        recorded = _Calls()
-
-        def fake_run(cmd):
-            recorded.append(cmd)
-            return not any(word in cmd for word in recorded.fail)
-
-        monkeypatch.setattr(commands, "_run", fake_run)
-        monkeypatch.setattr(commands, "INSTALL_DIR", tmp_path / "harness")
-        monkeypatch.setattr(commands, "list_installed_harnesses", lambda: ["claude-code", "codex", "cursor"])
-        (tmp_path / "harness").mkdir()
-        return recorded
-
-    def _only_err_line(self, capsys) -> str:
-        err = capsys.readouterr().err.strip().splitlines()
-        assert len(err) == 1, err
-        return err[0]
-
-    @pytest.mark.parametrize("venv, windows", [(True, False), (False, False), (False, True), (True, True)])
-    def test_binary_refuses_first(self, venv, windows, calls, install_state, capsys) -> None:
-        install_state.binary, install_state.venv, install_state.windows = True, venv, windows
-        assert cli.main(["update"]) == 1
-        assert "not supported on a binary install" in self._only_err_line(capsys)
-        assert calls == []
-
-    @pytest.mark.parametrize("windows", [False, True])
-    def test_other_interpreter_says_how_to_update_it(self, windows, calls, install_state, capsys) -> None:
-        install_state.venv, install_state.windows = False, windows
-        assert cli.main(["update"]) == 1
-        line = self._only_err_line(capsys)
-        # The test suite runs from this checkout.
-        assert f"source checkout at {REPO_ROOT.resolve()}" in line
-        assert "`git pull` and `uv sync`" in line
-        assert calls == []
-
-    @pytest.mark.parametrize(
-        "prefix, expected",
-        [
-            ("/home/u/.local/share/uv/tools/coding-harness-tracing", ["uv tool upgrade coding-harness-tracing"]),
-            (
-                "/opt/other-venv",
-                [
-                    "re-run the installer that created it",
-                    "-m pip install -U --no-index --find-links <dir> coding-harness-tracing",
-                ],
-            ),
-        ],
-    )
-    def test_other_interpreter_hints(self, prefix, expected, monkeypatch, tmp_path) -> None:
+    def prefix(self, monkeypatch, tmp_path, install_state) -> Path:
+        """A fake persistent environment holding the package, outside the old venv."""
         import core
 
-        monkeypatch.setattr(commands.sys, "prefix", prefix)
-        monkeypatch.setattr(core, "__file__", str(tmp_path / "site-packages" / "core" / "__init__.py"))
-        hint = commands._other_install_update_hint()
-        assert all(part in hint for part in expected)
-        # Nothing is on an index yet, so no hint may send pip to one.
-        assert "--no-index" in hint or "pip install" not in hint
+        install_state.venv = False
+        env = tmp_path / "env"
+        package = env / "lib" / "site-packages" / "core"
+        package.mkdir(parents=True)
+        monkeypatch.setattr(commands.sys, "prefix", str(env))
+        monkeypatch.setattr(runner.sys, "prefix", str(env))
+        monkeypatch.setattr(core, "__file__", str(package / "__init__.py"))
+        monkeypatch.setattr(runner, "_temp_roots", lambda: [])
+        return env
 
-    def test_windows_venv_points_to_install_bat(self, calls, install_state, capsys) -> None:
+    def _only_err_line(self, capsys) -> str:
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        err = captured.err.strip().splitlines()
+        assert len(err) == 1, err
+        assert err[0].endswith("Nothing was changed.")
+        return err[0]
+
+    def test_uv_tool(self, prefix, capsys) -> None:
+        (prefix / "uv-receipt.toml").write_text("")
+        assert cli.main(["update"]) == 1
+        assert "`uv tool upgrade coding-harness-tracing`" in self._only_err_line(capsys)
+
+    def test_pipx(self, prefix, capsys) -> None:
+        (prefix / "pipx_metadata.json").write_text("{}")
+        assert cli.main(["update"]) == 1
+        assert "`pipx upgrade coding-harness-tracing`" in self._only_err_line(capsys)
+
+    def test_old_venv_says_rerun_install_sh(self, install_state, capsys) -> None:
+        assert cli.main(["update"]) == 1
+        line = self._only_err_line(capsys)
+        assert "re-running install.sh" in line and "install.sh` update" not in line
+        assert "install.sh update" in line
+
+    def test_windows_venv_says_install_bat_update(self, install_state, capsys) -> None:
         install_state.windows = True
         assert cli.main(["update"]) == 1
-        assert "install.bat update" in self._only_err_line(capsys)
-        assert calls == []
+        assert "`install.bat update`" in self._only_err_line(capsys)
 
-    def test_wheel_dir_installs_from_it_only(self, calls, tmp_path) -> None:
-        wheels = tmp_path / "wheels"
-        wheels.mkdir()
-        (wheels / "coding_harness_tracing-9.9.9-py3-none-any.whl").write_text("")
-        # A git checkout too: --wheel-dir wins, and nothing is pulled.
-        (tmp_path / "harness" / ".git").mkdir()
-        assert cli.main(["update", "--wheel-dir", str(wheels)]) == 0
-        pip = calls[0]
-        assert pip[:4] == [sys.executable, "-m", "pip", "install"]
-        assert "--no-index" in pip and pip[pip.index("--find-links") + 1] == str(wheels.resolve())
-        assert not any("--index-url" in arg or "--extra-index-url" in arg for cmd in calls for arg in cmd)
-        assert not any(cmd[0] == "git" for cmd in calls)
-
-    @pytest.mark.parametrize("make", ["missing", "no-wheel"])
-    def test_wheel_dir_must_hold_a_wheel(self, make, calls, tmp_path, capsys) -> None:
-        wheels = tmp_path / "wheels"
-        if make == "no-wheel":
-            wheels.mkdir()
-        assert cli.main(["update", "--wheel-dir", str(wheels)]) == 1
-        assert calls == []
-
-    def test_git_checkout_pulls_then_reinstalls(self, calls, tmp_path) -> None:
-        install_dir = tmp_path / "harness"
-        (install_dir / ".git").mkdir()
-        assert cli.main(["update"]) == 0
-        assert calls[0] == ["git", "-C", str(install_dir), "pull", "--ff-only"]
-        assert calls[1][:4] == [sys.executable, "-m", "pip", "install"] and calls[1][-1] == str(install_dir)
-
-    def test_failed_pull_says_run_install_sh(self, calls, tmp_path, capsys) -> None:
-        (tmp_path / "harness" / ".git").mkdir()
-        calls.fail.append("pull")
+    @pytest.mark.parametrize("venv, windows", [(True, False), (False, False), (False, True)])
+    def test_binary_says_download(self, venv, windows, install_state, capsys) -> None:
+        install_state.binary, install_state.venv, install_state.windows = True, venv, windows
         assert cli.main(["update"]) == 1
-        assert "run `install.sh update`" in capsys.readouterr().err
-        assert len(calls) == 1
+        assert "download a new arize-harness binary" in self._only_err_line(capsys)
 
-    def test_tarball_install_says_run_install_sh_and_changes_nothing(self, calls, tmp_path, capsys) -> None:
-        install_dir = tmp_path / "harness"
-        (install_dir / "pyproject.toml").write_text("[project]\n")
-        before = sorted(p.name for p in install_dir.iterdir())
+    def test_uvx_prints_the_install_line(self, prefix, monkeypatch, capsys) -> None:
+        # uvx runs from uv's cache: no receipt, and an archive-v0 path.
+        cache = prefix.parent / "cache" / "archive-v0" / "abc"
+        (cache / "lib" / "site-packages" / "core").mkdir(parents=True)
+        import core
+
+        monkeypatch.setattr(runner.sys, "prefix", str(cache))
+        monkeypatch.setattr(commands.sys, "prefix", str(cache))
+        monkeypatch.setattr(core, "__file__", str(cache / "lib" / "site-packages" / "core" / "__init__.py"))
         assert cli.main(["update"]) == 1
-        assert "run `install.sh update`" in self._only_err_line(capsys)
-        assert calls == []
-        assert sorted(p.name for p in install_dir.iterdir()) == before
+        line = self._only_err_line(capsys)
+        assert "temporary environment" in line
+        assert "uv tool install coding-harness-tracing" in line and "pipx install coding-harness-tracing" in line
 
-    def test_no_source_refuses(self, calls, capsys) -> None:
+    def test_dev_checkout_prints_the_install_line(self, install_state, capsys) -> None:
+        install_state.venv = False
         assert cli.main(["update"]) == 1
-        err = capsys.readouterr().err
-        assert "no source tree to update" in err and "--wheel-dir" in err
-        assert calls == []
+        line = self._only_err_line(capsys)
+        assert "source checkout" in line and "uv tool install coding-harness-tracing" in line
 
-    def test_failed_reinstall_stops(self, calls, tmp_path) -> None:
-        (tmp_path / "harness" / ".git").mkdir()
-        calls.fail.append("pip")
+    def test_runs_nothing_and_writes_nothing(self, prefix, monkeypatch, tmp_path) -> None:
+        (prefix / "uv-receipt.toml").write_text("")
+        import subprocess as _subprocess
+
+        def no_subprocess(*args, **kwargs):
+            raise AssertionError("update must not run anything")
+
+        monkeypatch.setattr(_subprocess, "run", no_subprocess)
+        monkeypatch.setattr(_subprocess, "Popen", no_subprocess)
+        before = sorted(str(p) for p in tmp_path.rglob("*"))
         assert cli.main(["update"]) == 1
-        assert len(calls) == 2
+        assert sorted(str(p) for p in tmp_path.rglob("*")) == before
 
-    def test_migrates_then_sets_up_every_harness_past_failures(self, calls, tmp_path, monkeypatch, capsys) -> None:
-        (tmp_path / "harness" / ".git").mkdir()
-        monkeypatch.setattr(commands, "list_installed_harnesses", lambda: ["claude-code", "bogus", "codex", "cursor"])
-        calls.fail.append("codex")
-        assert cli.main(["update"]) == 0
-        after_pip = calls[2:]
-        assert after_pip[0] == [sys.executable, "-I", "-m", "core.config", "migrate"]
-        assert [cmd[-1] for cmd in after_pip[1:]] == ["claude-code", "codex", "cursor"]
-        assert all(cmd[:5] == [sys.executable, "-I", "-m", "core.cli", "setup"] for cmd in after_pip[1:])
-        out = capsys.readouterr().out
-        assert "codex re-registration failed (continuing)" in out
-        assert "Unknown harness: bogus (skipping)" in out
-
-    @pytest.mark.parametrize("tty", [False, True])
-    def test_non_interactive_only_without_a_terminal(self, tty, calls, tmp_path, monkeypatch) -> None:
-        (tmp_path / "harness" / ".git").mkdir()
-        monkeypatch.setattr(commands.sys.stdin, "isatty", lambda: tty, raising=False)
-        monkeypatch.delenv("ARIZE_NONINTERACTIVE", raising=False)
-        assert cli.main(["update"]) == 0
-        assert (os.environ.get("ARIZE_NONINTERACTIVE") == "1") is (not tty)
+    def test_takes_no_wheel_dir(self, install_state) -> None:
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["update", "--wheel-dir", "x"])
+        assert exc.value.code == 2
 
 
 # ---------------------------------------------------------------------------

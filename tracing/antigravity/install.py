@@ -22,6 +22,7 @@ from core.config import get_value, load_config
 from core.setup import dry_run, ensure_shared_runtime
 from core.setup import err as _err
 from core.setup import (
+    hook_command_for,
     info,
     merge_harness_entry,
     prompt_backend,
@@ -30,7 +31,6 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_config,
     write_logging_config,
 )
@@ -108,7 +108,7 @@ def _install_hooks() -> None:
         event: [
             {
                 "type": "command",
-                "command": str(venv_bin(entry_point)),
+                "command": hook_command_for(_c.HARNESS_NAME, entry_point),
                 "timeout": _c.HOOK_TIMEOUT_SECONDS,
             }
         ]

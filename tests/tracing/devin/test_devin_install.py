@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 # The hook command string install.py should write into config.json.
-FAKE_VENV_BIN = Path("/fake/venv/bin/arize-hook-devin")
-HOOK_CMD = str(FAKE_VENV_BIN)
+# What hook_command_for() gives a uv tool install at /fake/bin.
+HOOK_CMD = "'/fake/bin/arize-harness' hook devin"
 
 
 @pytest.fixture(autouse=True)
-def _mock_venv_bin(monkeypatch):
-    """Make venv_bin() always return our fake path."""
-    monkeypatch.setattr("tracing.devin.install.venv_bin", lambda name: FAKE_VENV_BIN)
+def _mock_hook_command(monkeypatch):
+    """Make hook_command_for() always return our fake command."""
+    monkeypatch.setattr("tracing.devin.install.hook_command_for", lambda *args, **kwargs: HOOK_CMD)
 
 
 @pytest.fixture(autouse=True)

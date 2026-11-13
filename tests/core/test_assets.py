@@ -22,6 +22,7 @@ from core import install_table
 from core.constants import HARNESSES
 from core.hook_table import EVENT_HOOKS
 from core.setup import assets, commands, runner
+from tests._install_type import PERSISTENT_SNIPPET
 from tests._pyproject import PYPROJECT, REPO_ROOT, package_data, tomllib
 from tests.core.test_cli_commands import _cli, _home, _write_creds
 
@@ -633,6 +634,7 @@ class TestEveryHarness:
         empty = tmp_path / "empty-package"
         empty.mkdir()
         (shim / "sitecustomize.py").write_text(
+            PERSISTENT_SNIPPET + "\n"
             "import importlib.resources as r, pathlib\n"
             "_files = r.files\n"
             f"r.files = lambda pkg: pathlib.Path({str(empty)!r}) if pkg == 'tracing.opencode' else _files(pkg)\n"

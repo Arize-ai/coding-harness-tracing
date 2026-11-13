@@ -18,9 +18,9 @@ def status_paths(tmp_path, monkeypatch):
     config_file = install_dir / "config.json"
 
     monkeypatch.setattr(status, "INSTALL_DIR", install_dir)
-    monkeypatch.setattr(status, "VENV_DIR", install_dir / "venv")
     monkeypatch.setattr(status, "CONFIG_FILE", config_file)
     monkeypatch.setattr(setup, "INSTALL_DIR", install_dir)
+    monkeypatch.setattr(setup, "VENV_DIR", install_dir / "venv")
 
     # Registration lookups otherwise read the developer's real ~/.claude,
     # ~/.codex and friends, so results would vary by machine. Tests that care
@@ -44,14 +44,20 @@ class TestCollectStatus:
 
         assert result["harnesses"] == []
         assert result["config_exists"] is False
-        assert result["installed"] is False
 
-    def test_installed_reflects_venv(self, status_paths):
+    def test_installed_reflects_the_install_dir_not_the_venv(self, status_paths):
         from core.setup.status import collect_status
 
-        (status_paths["install_dir"] / "venv").mkdir()
-
+        assert not (status_paths["install_dir"] / "venv").exists()
         assert collect_status()["installed"] is True
+        status_paths["config_file"].parent.rmdir()
+        assert collect_status()["installed"] is False
+
+    def test_reports_the_running_arize_harness(self, status_paths, monkeypatch, tmp_path):
+        from core.setup import status as status_mod
+
+        monkeypatch.setattr(status_mod, "arize_harness_path", lambda: tmp_path / "arize-harness")
+        assert status_mod.collect_status()["arize_harness"] == str(tmp_path / "arize-harness")
 
     def test_reports_harness_fields(self, status_paths):
         from core.setup.status import collect_status
@@ -141,25 +147,64 @@ class TestCollectStatus:
 
 
 class TestRegistrationDetection:
-    """Tests for whether a harness's hooks are actually wired up."""
+    """Tests for whether a harness's hooks are actually wired up.
 
-    def test_registered_when_file_references_install_dir(self, status_paths, tmp_path, monkeypatch):
+    Ours: an ``arize-harness hook <harness>`` command (from any arize-harness)
+    or an old ``~/.arize/harness/venv`` ``arize-hook-*`` one. Registered only
+    when every such command exists.
+    """
+
+    @pytest.fixture
+    def exe(self, tmp_path) -> Path:
+        path = tmp_path / "local bin" / "arize-harness"
+        path.parent.mkdir(parents=True)
+        path.write_text("")
+        return path
+
+    def _settings(self, tmp_path, monkeypatch, data, name="settings.json") -> Path:
         from core.setup import status as status_mod
 
-        settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"hooks": {"Stop": str(status_paths["install_dir"] / "venv" / "bin" / "hook")}}))
+        settings = tmp_path / name
+        settings.write_text(data if isinstance(data, str) else json.dumps(data))
         monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
+        return settings
 
-        assert status_mod._registration_state("claude-code") == (True, str(settings))
+    def test_registered_when_our_command_exists(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
+
+        cmd = f"'{exe.as_posix()}' hook claude stop"
+        settings = self._settings(tmp_path, monkeypatch, {"hooks": {"Stop": [{"hooks": [{"command": cmd}]}]}})
+        assert status_mod._registration_state("claude-code") == (True, str(settings), None)
+
+    def test_not_registered_when_the_command_is_gone(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
+
+        cmd = f"'{exe.as_posix()}' hook claude stop"
+        settings = self._settings(tmp_path, monkeypatch, {"hooks": {"Stop": [{"hooks": [{"command": cmd}]}]}})
+        exe.unlink()
+        assert status_mod._registration_state("claude-code") == (False, str(settings), exe.as_posix())
+
+    def test_another_harnesses_command_does_not_count(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
+
+        settings = self._settings(tmp_path, monkeypatch, {"hooks": {"stop": [{"command": f"'{exe}' hook cursor"}]}})
+        assert status_mod._registration_state("claude-code") == (False, str(settings), None)
+
+    def test_old_venv_entry_counts_while_the_venv_exists(self, status_paths, tmp_path, monkeypatch):
+        from core.setup import status as status_mod
+
+        old = status_paths["install_dir"] / "venv" / "bin" / "arize-hook-stop"
+        settings = self._settings(tmp_path, monkeypatch, {"hooks": {"Stop": [{"hooks": [{"command": str(old)}]}]}})
+        assert status_mod._registration_state("claude-code") == (False, str(settings), str(old))
+        old.parent.mkdir(parents=True)
+        old.write_text("")
+        assert status_mod._registration_state("claude-code") == (True, str(settings), None)
 
     def test_not_registered_when_file_is_someone_elses(self, status_paths, tmp_path, monkeypatch):
         from core.setup import status as status_mod
 
-        settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"hooks": {"Stop": "/usr/bin/unrelated"}}))
-        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
-
-        assert status_mod._registration_state("claude-code") == (False, str(settings))
+        settings = self._settings(tmp_path, monkeypatch, {"hooks": {"Stop": "/usr/bin/unrelated"}})
+        assert status_mod._registration_state("claude-code") == (False, str(settings), None)
 
     def test_not_registered_when_file_absent(self, status_paths, tmp_path, monkeypatch):
         from core.setup import status as status_mod
@@ -167,83 +212,93 @@ class TestRegistrationDetection:
         missing = tmp_path / "nope.json"
         monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [missing])
 
-        registered, path = status_mod._registration_state("claude-code")
+        registered, path, _ = status_mod._registration_state("claude-code")
 
         assert registered is False
         assert path == str(missing)
 
-    def test_json_escaped_windows_path_counts(self, tmp_path, monkeypatch):
-        """A Windows hook path inside JSON has doubled separators.
-
-        Regression: matching only the raw marker reported every JSON-registered
-        harness as NOT registered on Windows, while the install had actually
-        worked — `status` exited 2, and the onboarding prompt gates on exit 0, so
-        Step 4A could never succeed there. Caught by running install.bat for real
-        on windows-latest; invisible on macOS and Linux, where `/` needs no
-        escaping.
-        """
-        import json
-
+    def test_windows_path_inside_json(self, status_paths, tmp_path, monkeypatch):
+        """JSON escapes backslashes; status reads the decoded string, so either spelling is found."""
         from core.setup import status as status_mod
 
-        win_install = "D:\\a\\repo\\fakehome\\.arize\\harness"
-        monkeypatch.setattr(status_mod, "INSTALL_DIR", Path(win_install))
+        exe = tmp_path / "arize-harness.exe"
+        exe.write_text("")
+        cmd = "& '" + exe.as_posix() + "' hook gemini before-tool"
+        settings = self._settings(tmp_path, monkeypatch, {"hooks": {"BeforeTool": [{"hooks": [{"command": cmd}]}]}})
+        assert status_mod._registration_state("gemini") == (True, str(settings), None)
 
-        settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"hooks": {"Stop": win_install + "\\venv\\Scripts\\arize-hook-stop"}}))
-        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
-
-        assert status_mod._registration_state("claude-code") == (True, str(settings))
-
-    def test_forward_slash_windows_path_counts(self, tmp_path, monkeypatch):
-        """Some tools write Windows paths with forward slashes."""
+    def test_jsonc_comments_do_not_hide_a_registration(self, status_paths, tmp_path, monkeypatch, exe):
         from core.setup import status as status_mod
 
-        win_install = "D:\\a\\repo\\.arize\\harness"
-        monkeypatch.setattr(status_mod, "INSTALL_DIR", Path(win_install))
+        text = (
+            '// devin config\n{"hooks": {"Stop": [{"hooks": [{"command": "\''
+            + exe.as_posix()
+            + "' hook devin\"}]}],}}\n"
+        )
+        settings = self._settings(tmp_path, monkeypatch, text)
+        assert status_mod._registration_state("devin") == (True, str(settings), None)
 
-        settings = tmp_path / "hooks.json"
-        settings.write_text("D:/a/repo/.arize/harness/venv/Scripts/arize-hook-stop")
-        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
+    def test_codex_notify_argv(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
 
-        assert status_mod._registration_state("claude-code")[0] is True
+        text = f'notify = ["{exe.as_posix()}", "hook", "codex", "notify"]\n'
+        settings = self._settings(tmp_path, monkeypatch, text, name="config.toml")
+        assert status_mod._registration_state("codex") == (True, str(settings), None)
+
+    def test_generated_ts_plugin(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
+
+        text = (
+            "function binaryPath(): string {\n  return " + json.dumps(str(exe)) + "\n}\n"
+            'const child = spawn(binaryPath(), ["hook","opencode"], {\n'
+        )
+        plugin = self._settings(tmp_path, monkeypatch, text, name="arize-tracing.ts")
+        assert status_mod._registration_state("opencode") == (True, str(plugin), None)
+        exe.unlink()
+        assert status_mod._registration_state("opencode")[0] is False
+
+    def test_old_ts_plugin_points_at_the_venv(self, status_paths, tmp_path, monkeypatch):
+        from core.setup import status as status_mod
+
+        text = (
+            'const base = join(homedir(), ".arize", "harness", "venv")\n'
+            'return platform() === "win32" ? join(base, "Scripts", "arize-hook-omp.exe") : join(base, "bin", "arize-hook-omp")\n'
+        )
+        plugin = self._settings(tmp_path, monkeypatch, text, name="arize-tracing.ts")
+        registered, path, missing = status_mod._registration_state("omp")
+        assert (registered, path) == (False, str(plugin))
+        assert missing.endswith("arize-hook-omp")
 
     def test_sibling_install_dir_does_not_count(self, status_paths, tmp_path, monkeypatch):
-        """`harness-old` must not match the marker `harness` on prefix.
-
-        Reporting a stale install as wired up is a false positive in the one
-        command whose job is to tell the truth about that.
-        """
+        """`harness-old` is not `harness`: a stale install must not read as wired up."""
         from core.setup import status as status_mod
 
         stale = str(status_paths["install_dir"]) + "-old"
-        settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"hook": f"{stale}/venv/bin/arize-hook-stop"}))
-        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
-
-        assert status_mod._registration_state("claude-code") == (False, str(settings))
+        settings = self._settings(tmp_path, monkeypatch, {"hook": f"{stale}/venv/bin/arize-hook-stop"})
+        assert status_mod._registration_state("claude-code") == (False, str(settings), None)
 
     def test_unknown_harness_reports_none_not_false(self, status_paths):
         """Never claim 'not registered' for something we cannot check."""
         from core.setup.status import _registration_state
 
-        assert _registration_state("not-a-real-harness") == (None, None)
+        assert _registration_state("not-a-real-harness") == (None, None, None)
 
     def test_later_path_can_match_when_first_does_not(self, status_paths, tmp_path, monkeypatch):
-        """omp registers via settings.json OR a plugin file — either counts.
-
-        Stopping at the first existing path reported a false negative when the
-        second was the one that matched.
-        """
+        """omp registers via settings.json OR a plugin file — either counts."""
         from core.setup import status as status_mod
 
+        exe = tmp_path / "arize-harness"
+        exe.write_text("")
         settings = tmp_path / "settings.json"
         settings.write_text(json.dumps({"unrelated": True}))
         plugin = tmp_path / "arize-tracing.ts"
-        plugin.write_text(f"// hook at {status_paths['install_dir']}/venv/bin/arize-hook-omp")
+        plugin.write_text(
+            "function binaryPath(): string {\n  return " + json.dumps(str(exe)) + ";\n}\n"
+            'spawn(binaryPath(), ["hook","omp"], {'
+        )
         monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings, plugin])
 
-        assert status_mod._registration_state("omp") == (True, str(plugin))
+        assert status_mod._registration_state("omp") == (True, str(plugin), None)
 
     def test_reports_inspected_path_when_none_match(self, status_paths, tmp_path, monkeypatch):
         """A False verdict should name a file that actually exists."""
@@ -254,27 +309,18 @@ class TestRegistrationDetection:
         present.write_text(json.dumps({"unrelated": True}))
         monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [missing, present])
 
-        assert status_mod._registration_state("omp") == (False, str(present))
+        assert status_mod._registration_state("omp") == (False, str(present), None)
 
-    def test_symlinked_plugin_counts_as_registered(self, status_paths, tmp_path, monkeypatch):
-        from core.setup import status as status_mod
-
-        source = status_paths["install_dir"] / "plugin.ts"
-        source.write_text("// tracing plugin")
-        link = tmp_path / "arize-tracing.ts"
-        link.symlink_to(source)
-        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [link])
-
-        assert status_mod._registration_state("opencode")[0] is True
-
-    def test_directory_scanned_for_marker(self, status_paths, tmp_path, monkeypatch):
+    def test_directory_scanned_for_our_command(self, status_paths, tmp_path, monkeypatch):
         """Kiro registers into an agents directory, not a single file."""
         from core.setup import status as status_mod
 
+        exe = tmp_path / "arize-harness"
+        exe.write_text("")
         agents = tmp_path / "agents"
         agents.mkdir()
         (agents / "other.json").write_text("{}")
-        (agents / "arize-traced.json").write_text(str(status_paths["install_dir"] / "venv" / "bin" / "arize-hook-kiro"))
+        (agents / "arize-traced.json").write_text(json.dumps({"hooks": {"stop": [{"command": f"'{exe}' hook kiro"}]}}))
         monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [agents])
 
         assert status_mod._registration_state("kiro")[0] is True
@@ -349,11 +395,26 @@ class TestCli:
         from core.setup import status as status_mod
 
         _write_config(status_paths, {"harnesses": {"codex": {"target": "arize", "api_key": "k"}}})
+        exe = tmp_path / "arize-harness"
+        exe.write_text("")
         settings = tmp_path / "config.toml"
-        settings.write_text(str(status_paths["install_dir"] / "venv" / "bin" / "arize-hook-codex-notify"))
+        settings.write_text(f'notify = ["{exe}", "hook", "codex", "notify"]\n')
         monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
 
         assert status_mod.main([]) == 0
+
+    def test_exit_2_and_names_the_missing_command(self, status_paths, tmp_path, monkeypatch, capsys):
+        from core.setup import status as status_mod
+
+        _write_config(status_paths, {"harnesses": {"codex": {"target": "arize", "api_key": "k"}}})
+        gone = tmp_path / "gone" / "arize-harness"
+        settings = tmp_path / "config.toml"
+        settings.write_text(f'notify = ["{gone}", "hook", "codex", "notify"]\n')
+        monkeypatch.setattr(status_mod, "_registration_paths", lambda h: [settings])
+
+        assert status_mod.main([]) == 2
+        out = capsys.readouterr().out
+        assert "NOT registered" in out and f"{gone} does not exist" in out
 
     def test_unknown_registration_is_not_treated_as_failure(self, status_paths):
         """Cannot-tell must not be reported as broken — that is guessing too."""
