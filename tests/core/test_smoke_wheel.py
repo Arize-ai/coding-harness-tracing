@@ -369,6 +369,140 @@ class TestChecker:
         assert _check(tmp_path, tmp_path, "json", tmp_path / "bad.json").returncode == 1
 
 
+FAKE_HOOK = """#!/bin/sh
+cat > /dev/null
+[ "$ARIZE_DRY_RUN" = true ] && [ "$ARIZE_VERBOSE" = true ] || exit 3
+[ -z "${ARIZE_LOG_FILE+x}${ARIZE_TRACE_ENABLED+x}" ] || exit 4
+! env | grep -qE '^(PHOENIX|OTEL)_' || exit 4
+[ -z "$SMOKE_FAKE_FAIL" ] || exit 5
+[ -z "$SMOKE_FAKE_HANG" ] || sleep 600
+logs="$HOME/.arize/harness/logs"
+mkdir -p "$logs"
+[ "$3" != stop ] || [ -n "$SMOKE_FAKE_SILENT" ] || echo "[dry-run] would send span: Turn 1" >> "$logs/claude-code.log"
+"""
+
+
+def _claude_turn_home(home: Path, events=("SessionStart", "UserPromptSubmit", "Stop"), plugin_command=None) -> str:
+    """A HOME with a fake arize-harness registered for ``events`` in settings.json and the Claude plugin."""
+    command = home / "bin" / "arize-harness"
+    command.parent.mkdir(parents=True)
+    command.write_text(FAKE_HOOK)
+    command.chmod(0o755)
+    plugin = home / ".arize" / "harness" / "claude_plugin"
+    hooks = {e: [{"hooks": [{"type": "command", "command": f"'{command}' hook claude {e.lower()}"}]}] for e in events}
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"plugins": [{"type": "local", "path": str(plugin)}], "hooks": hooks}))
+    hooks_json = plugin / "hooks" / "hooks.json"
+    hooks_json.parent.mkdir(parents=True)
+    other = f"'{plugin_command or command}' hook claude stop"
+    hooks_json.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": other}]}]}}))
+    return str(command)
+
+
+def _claude_turn(home: Path, command: str, **env) -> subprocess.CompletedProcess:
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        return _check(home, home, "claude-turn", command)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+@posix_only
+class TestClaudeTurn:
+    def test_passes_when_the_turn_logs_a_span(self, tmp_path):
+        command = _claude_turn_home(tmp_path)
+        result = _claude_turn(tmp_path, command)
+        assert result.returncode == 0, result.stderr
+        assert "span logged" in result.stdout
+
+    def test_clears_inherited_arize_variables(self, tmp_path):
+        command = _claude_turn_home(tmp_path)
+        result = _claude_turn(
+            tmp_path,
+            command,
+            ARIZE_LOG_FILE=str(tmp_path / "elsewhere.log"),
+            ARIZE_DRY_RUN="false",
+            ARIZE_TRACE_ENABLED="false",
+            PHOENIX_COLLECTOR_ENDPOINT="x",
+            OTEL_SDK_DISABLED="true",
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_fails_when_no_span_is_logged(self, tmp_path):
+        command = _claude_turn_home(tmp_path)
+        result = _claude_turn(tmp_path, command, SMOKE_FAKE_SILENT="1")
+        assert result.returncode == 1
+        assert "would send span" in result.stderr
+
+    def test_fails_when_a_hook_exits_non_zero(self, tmp_path):
+        command = _claude_turn_home(tmp_path)
+        result = _claude_turn(tmp_path, command, SMOKE_FAKE_FAIL="1")
+        assert result.returncode == 1
+        assert "exited 5" in result.stderr
+
+    def test_fails_when_a_hook_hangs(self, tmp_path, monkeypatch):
+        command = _claude_turn_home(tmp_path)
+        # A copy with a 1s timeout; it finds core and the fixtures through links beside it.
+        root = tmp_path / "repo"
+        (root / "scripts").mkdir(parents=True)
+        for name in ("core", "tracing", "scripts/smoke_fixtures"):
+            (root / name).symlink_to(REPO_ROOT / name)
+        copy = root / "scripts" / CHECK.name
+        copy.write_text(CHECK.read_text().replace("HOOK_TIMEOUT = 60", "HOOK_TIMEOUT = 1"))
+        monkeypatch.setattr(sys.modules[__name__], "CHECK", copy)
+        result = _claude_turn(tmp_path, command, SMOKE_FAKE_HANG="1")
+        assert result.returncode == 1
+        assert "did not exit within 1s" in result.stderr
+
+    def test_fails_when_no_claude_hook_is_registered(self, tmp_path):
+        command = _claude_turn_home(tmp_path, events=())
+        result = _claude_turn(tmp_path, command)
+        assert result.returncode == 1
+        assert "no Claude hook command registered" in result.stderr
+
+    def test_fails_when_a_turn_event_is_not_registered(self, tmp_path):
+        command = _claude_turn_home(tmp_path, events=("SessionStart", "Stop"))
+        result = _claude_turn(tmp_path, command)
+        assert result.returncode == 1
+        assert "no UserPromptSubmit hook command registered" in result.stderr
+
+    def test_fails_when_the_plugin_runs_another_arize_harness(self, tmp_path):
+        command = _claude_turn_home(tmp_path, plugin_command="/elsewhere/arize-harness")
+        result = _claude_turn(tmp_path, command)
+        assert result.returncode == 1
+        assert "runs /elsewhere/arize-harness" in result.stderr
+
+    def test_fails_when_the_plugin_hooks_have_no_claude_command(self, tmp_path):
+        command = _claude_turn_home(tmp_path)
+        (tmp_path / ".arize" / "harness" / "claude_plugin" / "hooks" / "hooks.json").write_text('{"hooks": {}}')
+        result = _claude_turn(tmp_path, command)
+        assert result.returncode == 1
+        assert "hooks.json: no Claude hook command" in result.stderr
+
+    def test_fails_without_the_plugin_hooks(self, tmp_path):
+        command = _claude_turn_home(tmp_path)
+        (tmp_path / ".arize" / "harness" / "claude_plugin" / "hooks" / "hooks.json").unlink()
+        result = _claude_turn(tmp_path, command)
+        assert result.returncode == 1
+        assert "hooks.json: cannot read" in result.stderr
+
+    def test_fails_without_the_plugin_entry(self, tmp_path):
+        command = _claude_turn_home(tmp_path)
+        settings = tmp_path / ".claude" / "settings.json"
+        data = json.loads(settings.read_text())
+        del data["plugins"]
+        settings.write_text(json.dumps(data))
+        result = _claude_turn(tmp_path, command)
+        assert result.returncode == 1
+        assert "no plugin entry" in result.stderr
+
+
 # ---------------------------------------------------------------------------
 # The script against real wheels
 # ---------------------------------------------------------------------------
@@ -472,6 +606,55 @@ class TestAgainstWheels:
         result = _smoke(broken, deps)
         assert result.returncode == 1
         assert "claude-code: uninstall left an entry of ours" in result.stderr
+
+    def test_fails_when_the_claude_turn_logs_no_span(self, built, tmp_path):
+        wheel, deps = built
+        broken = _patched(
+            wheel,
+            tmp_path / "w",
+            replace={"core/common.py": ('log(f"[dry-run] would send span:', 'log(f"[dry-run] skipped span:')},
+        )
+        result = _smoke(broken, deps)
+        assert result.returncode == 1
+        assert "claude-code: Claude span check failed" in result.stderr
+        assert "smoke-wheel: claude-code\n  ok\n" not in result.stdout
+        assert "  ok\n" in result.stdout
+
+    def test_still_checks_uninstall_after_a_claude_span_failure(self, built, tmp_path):
+        wheel, deps = built
+        broken = _patched(
+            wheel,
+            tmp_path / "w",
+            replace={
+                "core/common.py": ('log(f"[dry-run] would send span:', 'log(f"[dry-run] skipped span:'),
+                "core/setup/commands.py": (
+                    "        install_table.load(key).uninstall()\n        _refresh_files()\n",
+                    "        _refresh_files()\n",
+                ),
+            },
+        )
+        result = _smoke(broken, deps)
+        assert result.returncode == 1
+        assert "claude-code: Claude span check failed" in result.stderr
+        assert "claude-code: uninstall left an entry of ours" in result.stderr
+        assert "smoke-wheel: claude-code\n  ok\n" not in result.stdout
+
+    def test_reports_the_span_check_not_run_when_an_earlier_claude_check_fails(self, built, tmp_path):
+        wheel, deps = built
+        broken = _patched(
+            wheel,
+            tmp_path / "w",
+            replace={
+                "tracing/claude_code/install.py": (
+                    'event_hooks.append({"hooks": [{"type": "command", "command": hook_cmd}]})',
+                    "pass",
+                )
+            },
+        )
+        result = _smoke(broken, deps)
+        assert result.returncode == 1
+        assert "claude-code: status exited" in result.stderr
+        assert "claude-code: Claude span check not run" in result.stderr
 
     def test_stays_offline_with_a_dependency_dir(self, built):
         wheel, deps = built
