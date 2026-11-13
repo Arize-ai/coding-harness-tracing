@@ -204,35 +204,13 @@ If the user wants to associate spans with a user ID, add `export ARIZE_USER_ID="
 
 ### Step 3: Add the hook entries to config.toml
 
-Read `~/.codex/config.toml`. Add the `notify` line at the top level (NOT inside any `[section]`) — this is the token-usage backstop:
+Read `~/.codex/config.toml`. If it has no `notify`, add this line at the top level (NOT inside any `[section]`) — this is the token-usage backstop:
 
 ```toml
 notify = ["/home/you/.local/bin/arize-harness", "hook", "codex", "notify"]
 ```
 
-Then add one `[[hooks.<Event>]]` entry per real Codex lifecycle event:
-
-```toml
-[[hooks.SessionStart]]
-command = ["~/.arize/harness/venv/bin/arize-hook-codex-session"]
-
-[[hooks.UserPromptSubmit]]
-command = ["~/.arize/harness/venv/bin/arize-hook-codex-session"]
-
-[[hooks.PreToolUse]]
-command = ["~/.arize/harness/venv/bin/arize-hook-codex-tool"]
-
-[[hooks.PostToolUse]]
-command = ["~/.arize/harness/venv/bin/arize-hook-codex-tool"]
-
-[[hooks.PermissionRequest]]
-command = ["~/.arize/harness/venv/bin/arize-hook-codex-tool"]
-
-[[hooks.Stop]]
-command = ["~/.arize/harness/venv/bin/arize-hook-codex-stop"]
-```
-
-**Important:** If `notify` already exists in the config, update the existing line. If `[[hooks.<Event>]]` entries already exist that match our handlers (managed block), leave them alone — the installer manages the block idempotently.
+**Important:** If `notify` is already set to the user's own command, stop: Codex runs only one notify program, so tell the user tracing can't be registered until they remove that `notify` line, as `arize-harness setup` does. Never overwrite it. If it already runs `arize-harness hook codex notify`, leave it as is.
 
 ### Step 4: Approve the hooks inside Codex
 
@@ -253,7 +231,7 @@ After writing the config, validate:
 ```bash
 cat ~/.codex/config.toml
 ```
-Visually confirm the `notify` line is at the top level and the `[[hooks.SessionStart]]`, `[[hooks.UserPromptSubmit]]`, `[[hooks.PreToolUse]]`, `[[hooks.PostToolUse]]`, `[[hooks.PermissionRequest]]`, and `[[hooks.Stop]]` entries are present.
+Visually confirm the `notify` line is at the top level and runs `arize-harness hook codex notify`.
 
 2. **Check env file:**
 ```bash

@@ -19,15 +19,16 @@ from pathlib import Path
 from core.config import get_value, load_config
 from core.setup import (
     CONFIG_FILE,
+    NotRegistered,
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
     err,
+    filter_our_nested_hooks,
     info,
     install_skills,
     is_arize_hook_command,
     is_old_venv_hook,
-    is_our_hook_command,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
@@ -59,29 +60,10 @@ _HOOK_EVENTS = (
 # ---------------------------------------------------------------------------
 
 
-def _entry_is_arize_managed(entry: object) -> bool:
-    """Return True if *entry* is a hook-array element whose ``command`` path
-    looks like one of our managed entry points (``arize-hook-codex-*``)."""
-    if not isinstance(entry, dict):
-        return False
-    inner = entry.get("hooks")
-    if not isinstance(inner, list):
-        return False
-    for h in inner:
-        if not isinstance(h, dict):
-            continue
-        cmd = h.get("command") or ""
-        if isinstance(cmd, str) and ("arize-hook-codex-" in cmd or is_our_hook_command(cmd, HARNESS_NAME)):
-            return True
-    return False
-
-
 def _strip_arize_hooks(data: dict) -> bool:
-    """Remove any ``[[hooks.<Event>]]`` entries we previously wrote.
+    """Remove our hooks from each ``[[hooks.<Event>]]`` group; returns True if anything changed.
 
-    Walks every known event and drops entries whose command path matches an
-    ``arize-hook-codex-*`` pattern (covers session/tool/stop from older
-    installer versions). Returns True if anything was removed.
+    A group is dropped only when removing ours empties it.
     """
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
@@ -91,8 +73,8 @@ def _strip_arize_hooks(data: dict) -> bool:
         existing = hooks.get(event)
         if not isinstance(existing, list):
             continue
-        kept = [e for e in existing if not _entry_is_arize_managed(e)]
-        if len(kept) != len(existing):
+        kept = filter_our_nested_hooks(existing, HARNESS_NAME)
+        if kept != existing:
             changed = True
             if kept:
                 hooks[event] = kept
@@ -114,18 +96,22 @@ def _without_old_notify_words(value: list) -> list:
     return [word for word in value if not is_old_venv_hook(word)]
 
 
-def _codex_toml_apply(path: Path, notify_argv: list) -> None:
+def _foreign_notify_message(path: Path, notify: object) -> str:
+    return (
+        f"{path} already sets notify = {notify!r}. Codex runs one notify program, so tracing "
+        "was not registered; remove that notify line and re-run setup to trace Codex."
+    )
+
+
+def _codex_toml_apply(path: Path, notify_argv: list) -> bool:
     """Set ``notify`` in ~/.codex/config.toml and remove our legacy hook entries.
 
-    Codex runs a single notify program, so a ``notify`` the user set is left alone with a warning.
+    Returns False, leaving it alone, when the user already set their own ``notify``.
     """
-    if dry_run():
-        info(f"would set notify in {path}")
-        return
-
     data = _toml_load_strict(path)
     changed = _strip_arize_hooks(data)
     existing = data.get("notify")
+    registered = True
 
     if existing in (None, "", []) or _is_our_notify(existing):
         data["notify"] = list(notify_argv)
@@ -136,18 +122,17 @@ def _codex_toml_apply(path: Path, notify_argv: list) -> None:
             data["notify"] = list(notify_argv)
             changed = True
         else:
-            err(
-                f"{path} already sets notify = {remaining!r}. Codex runs one notify program, so tracing "
-                "was not registered; remove that notify line and re-run setup to trace Codex."
-            )
+            registered = False
             if remaining != existing:
                 data["notify"] = remaining
                 changed = True
 
-    if not changed:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _toml_write(data, path)
+    if dry_run():
+        info(f"would set notify in {path}" if registered else f"would leave notify in {path} as it is")
+    elif changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _toml_write(data, path)
+    return registered
 
 
 def _codex_toml_remove(path: Path) -> None:
@@ -279,7 +264,7 @@ def install(with_skills: bool = False) -> None:
     _write_env_file(codex_env_file, user_id=user_id)
 
     # 4. Write the notify-only TOML layout.
-    _codex_toml_apply(codex_config_file, hook_argv(HARNESS_NAME, "notify"))
+    registered = _codex_toml_apply(codex_config_file, hook_argv(HARNESS_NAME, "notify"))
     info(f"Updated TOML config: {codex_config_file}")
 
     # 5. Skills.
@@ -287,6 +272,11 @@ def install(with_skills: bool = False) -> None:
         install_skills(HARNESS_NAME)
         info("Copied skills")
 
+    if not registered:
+        notify = _toml_load_strict(codex_config_file)["notify"]
+        if isinstance(notify, list):
+            notify = _without_old_notify_words(notify)
+        raise NotRegistered(_foreign_notify_message(codex_config_file, notify))
     info("")
     info("Codex tracing installed.")
 
@@ -350,6 +340,9 @@ def cli_main(argv: list[str] | None = None) -> None:
 if __name__ == "__main__":
     try:
         cli_main()
+    except NotRegistered as e:
+        err(str(e))
+        sys.exit(1)
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.")
         sys.exit(1)

@@ -647,17 +647,98 @@ class TestJsoncComments:
 
 @POSIX_ONLY
 class TestCodexForeignNotify:
-    def test_left_alone_with_a_warning_and_status_says_not_registered(self, link_home):
+    def test_setup_fails_and_leaves_the_users_notify(self, link_home):
         home, link = link_home
         _write_creds(home)
         config = home / ".codex" / "config.toml"
         config.write_text('notify = ["notify-send", "codex"]\n')
         result = _harness_cli(home, link, "setup", "codex", "--non-interactive")
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.returncode == 1, result.stdout + result.stderr
         assert "Codex runs one notify program" in result.stderr
+        assert "Setup complete!" not in result.stdout + result.stderr
+        assert "Codex tracing installed" not in result.stdout
+        assert (home / ".codex" / "arize-env.sh").is_file()
         assert tomllib.loads(config.read_text())["notify"] == ["notify-send", "codex"]
         status = _harness_cli(home, link, "status", "--json")
         assert status.returncode == 2
+
+    def test_other_harnesses_still_set_up(self, link_home):
+        """Picking codex and cursor from the menu registers cursor and exits 1."""
+        from tests.core.test_cli_commands import _run
+
+        home, link = link_home
+        _write_creds(home)
+        (home / ".codex" / "config.toml").write_text('notify = ["notify-send", "codex"]\n')
+        result = _run(
+            home,
+            [str(link), "setup"],
+            "codex,cursor\n",
+            ARIZE_ENV_FILE=str(home / "creds.env"),
+            ARIZE_NONINTERACTIVE="1",
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "Codex runs one notify program" in result.stderr
+        assert result.stdout.count("Setup complete!") == 1
+        cursor = [v for v in _commands(home / ".cursor" / "hooks.json") if is_arize_hook_command(v, "cursor")]
+        assert cursor and {registered_command_path(v) for v in cursor} == {link.as_posix()}
+
+    def test_installer_module_exits_1_without_a_traceback(self, link_home):
+        """``python -m tracing.codex.install install``, as install.sh and install.bat run it."""
+        from tests.core.test_cli_commands import _run
+
+        home, _link = link_home
+        _write_creds(home)
+        config = home / ".codex" / "config.toml"
+        config.write_text('notify = ["notify-send", "codex"]\n')
+        before = config.read_bytes()
+        result = _run(
+            home,
+            [sys.executable, "-m", "tracing.codex.install", "install"],
+            ARIZE_ENV_FILE=str(home / "creds.env"),
+            ARIZE_NONINTERACTIVE="1",
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "Codex runs one notify program" in result.stderr
+        assert "Traceback" not in result.stderr
+        assert config.read_bytes() == before
+
+    def test_dry_run_reports_the_conflict(self, link_home):
+        from tests.core.test_cli_commands import _run
+
+        home, link = link_home
+        _write_creds(home)
+        config = home / ".codex" / "config.toml"
+        config.write_text('notify = ["notify-send", "codex"]\n')
+        before = config.read_bytes()
+        result = _run(
+            home,
+            [str(link), "setup", "codex", "--non-interactive"],
+            ARIZE_ENV_FILE=str(home / "creds.env"),
+            ARIZE_DRY_RUN="true",
+        )
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert "Codex runs one notify program" in result.stderr
+        assert "Setup complete!" not in result.stdout + result.stderr
+        assert config.read_bytes() == before
+
+    @pytest.mark.parametrize("ours", [False, True], ids=["no-notify", "our-notify"])
+    def test_dry_run_without_a_conflict_succeeds_and_writes_nothing(self, link_home, ours):
+        from tests.core.test_cli_commands import _run
+
+        home, link = link_home
+        _write_creds(home)
+        config = home / ".codex" / "config.toml"
+        config.write_text(f"notify = {json.dumps([link.as_posix(), 'hook', 'codex', 'notify'])}\n" if ours else "")
+        before = _snapshot(home)
+        result = _run(
+            home,
+            [str(link), "setup", "codex", "--non-interactive"],
+            ARIZE_ENV_FILE=str(home / "creds.env"),
+            ARIZE_DRY_RUN="true",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Setup complete!" in result.stdout
+        assert _snapshot(home) == before
 
     def test_old_command_appended_to_the_users_list_is_removed(self, link_home):
         home, link = link_home
@@ -665,7 +746,7 @@ class TestCodexForeignNotify:
         config = home / ".codex" / "config.toml"
         config.write_text(f'notify = ["notify-send", "{_old(home, "arize-hook-codex-notify")}"]\n')
         result = _harness_cli(home, link, "setup", "codex", "--non-interactive")
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.returncode == 1, result.stdout + result.stderr
         assert tomllib.loads(config.read_text())["notify"] == ["notify-send"]
 
 

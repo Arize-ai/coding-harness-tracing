@@ -422,7 +422,7 @@ class TestSetupMenu:
 
     def test_sets_up_each_comma_separated_name_in_order(self, fake_installers, detected, monkeypatch) -> None:
         order: List[str] = []
-        monkeypatch.setattr(commands, "_setup_one", lambda key, with_skills, backend: order.append(key))
+        monkeypatch.setattr(commands, "_setup_one", lambda key, with_skills, backend: order.append(key) or True)
         self._answer(monkeypatch, " codex, claude ,cursor")
         assert cli.main(["setup"]) == 0
         assert order == ["codex", "claude-code", "cursor"]

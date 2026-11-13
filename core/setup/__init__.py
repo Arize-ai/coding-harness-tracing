@@ -71,6 +71,10 @@ def err(msg: str) -> None:
         sys.stderr.write(f"[arize] {msg}\n")
 
 
+class NotRegistered(Exception):
+    """Raised by an installer that finished but could not register its hooks."""
+
+
 # ---------------------------------------------------------------------------
 # Harness presence check (soft signal)
 # ---------------------------------------------------------------------------

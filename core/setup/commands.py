@@ -19,7 +19,16 @@ from core import install_table
 from core.config import load_config, migrate_yaml_config
 from core.constants import HARNESSES
 from core.runtime import is_binary
-from core.setup import INSTALL_DIR, VENV_DIR, err, info, is_harness_installed, list_installed_harnesses, print_color
+from core.setup import (
+    INSTALL_DIR,
+    VENV_DIR,
+    NotRegistered,
+    err,
+    info,
+    is_harness_installed,
+    list_installed_harnesses,
+    print_color,
+)
 from core.setup.runner import (
     DIST_NAME,
     INSTALL_HINT,
@@ -118,7 +127,8 @@ def _prompt_harnesses(parser: argparse.ArgumentParser) -> List[str]:
     return keys
 
 
-def _setup_one(key: str, with_skills: bool, backend: Optional[str]) -> None:
+def _setup_one(key: str, with_skills: bool, backend: Optional[str]) -> bool:
+    """Set up one harness; returns False if its hooks could not be registered."""
     header(f"Installing {key} tracing")
     info("Migrating legacy config.yaml to config.json (if present)...")
     if migrate_yaml_config():
@@ -130,13 +140,18 @@ def _setup_one(key: str, with_skills: bool, backend: Optional[str]) -> None:
             warn(f"{key} is already configured for {entry['target']}; keeping it and ignoring --backend {backend}")
 
     installer = install_table.load(key)
-    if with_skills and "with_skills" in inspect.signature(installer.install).parameters:
-        installer.install(with_skills=True)
-    else:
-        if with_skills:
-            warn(f"{key} has no skills to install; ignoring --with-skills")
-        installer.install()
+    try:
+        if with_skills and "with_skills" in inspect.signature(installer.install).parameters:
+            installer.install(with_skills=True)
+        else:
+            if with_skills:
+                warn(f"{key} has no skills to install; ignoring --with-skills")
+            installer.install()
+    except NotRegistered as e:
+        err(str(e))
+        return False
     info("Setup complete!")
+    return True
 
 
 def _refresh_files() -> None:
@@ -167,11 +182,10 @@ def cmd_setup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     else:
         keys = _prompt_harnesses(parser)
 
-    for key in keys:
-        _setup_one(key, args.with_skills, args.backend)
+    registered = [_setup_one(key, args.with_skills, args.backend) for key in keys]
     # also refresh files from other harnesses
     _refresh_files()
-    return 0
+    return 0 if all(registered) else 1
 
 
 # ---------------------------------------------------------------------------

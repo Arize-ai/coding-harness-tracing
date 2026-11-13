@@ -11,6 +11,7 @@ import pytest
 
 import tracing.codex._toml as codex_toml
 import tracing.codex.install as codex_install
+from core.setup import NotRegistered
 from tracing.codex.constants import NOTIFY_BIN_NAME
 
 # ---------------------------------------------------------------------------
@@ -560,8 +561,9 @@ class TestUninstall:
         toml_path = fake_home / ".codex" / "config.toml"
         toml_path.parent.mkdir(parents=True, exist_ok=True)
         toml_path.write_text('notify = ["/usr/local/bin/my-custom-hook", "--flag"]\n')
-        codex_install.install()
-        # A notify the user set is left alone on install, and on uninstall.
+        with pytest.raises(NotRegistered, match="Codex runs one notify program"):
+            codex_install.install()
+        assert (fake_home / ".codex" / "arize-env.sh").is_file()
         assert codex_toml._toml_load_strict(toml_path)["notify"] == ["/usr/local/bin/my-custom-hook", "--flag"]
 
         codex_install.uninstall()
@@ -1019,12 +1021,51 @@ OURS = ["/x/arize-harness", "hook", "codex", "notify"]
 class TestTomlApplyRemove:
     """Tests for the notify-only TOML helpers."""
 
-    def _apply(self, p: Path, argv=OURS) -> None:
-        codex_install._codex_toml_apply(p, argv)
+    @pytest.fixture
+    def old_hook(self, fake_home):
+        """The old venv's ``arize-hook-codex-<name>`` path."""
+        return lambda name: (fake_home / ".arize" / "harness" / "venv" / "bin" / f"arize-hook-codex-{name}").as_posix()
+
+    def _write_mixed_group(self, p: Path, old_hook) -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "[[hooks.PreToolUse]]\n"
+            'matcher = "Bash"\n'
+            f"hooks = [{{ type = 'command', command = '{old_hook('tool')}' }}, "
+            "{ type = 'command', command = '/usr/local/bin/my-audit-hook' }]\n"
+            "[[hooks.Stop]]\n"
+            "hooks = [{ type = 'command', command = '/home/me/bin/my-arize-hook-codex-wrapper.sh' }]\n"
+        )
+
+    def _assert_only_users_hooks(self, data: dict) -> None:
+        assert data["hooks"]["PreToolUse"] == [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/my-audit-hook"}]}
+        ]
+        assert _hook_commands(data, "Stop") == ["/home/me/bin/my-arize-hook-codex-wrapper.sh"]
+
+    def test_apply_keeps_the_users_hooks_in_a_group_with_ours(self, fake_home, old_hook):
+        p = fake_home / ".codex" / "config.toml"
+        self._write_mixed_group(p, old_hook)
+        self._apply(p)
+        first = p.read_text()
+        data = codex_toml._toml_load_strict(p)
+        assert data["notify"] == OURS
+        self._assert_only_users_hooks(data)
+        self._apply(p)
+        assert p.read_text() == first
+
+    def test_remove_keeps_the_users_hooks_in_a_group_with_ours(self, fake_home, old_hook):
+        p = fake_home / ".codex" / "config.toml"
+        self._write_mixed_group(p, old_hook)
+        codex_install._codex_toml_remove(p)
+        self._assert_only_users_hooks(codex_toml._toml_load_strict(p))
+
+    def _apply(self, p: Path, argv=OURS) -> bool:
+        return codex_install._codex_toml_apply(p, argv)
 
     def test_apply_to_empty_file(self, tmp_path):
         p = tmp_path / "config.toml"
-        self._apply(p)
+        assert self._apply(p) is True
         data = codex_toml._toml_load_strict(p)
         assert data["notify"] == OURS
         assert "hooks" not in data
@@ -1050,21 +1091,19 @@ class TestTomlApplyRemove:
         self._apply(p)
         assert codex_toml._toml_load_strict(p)["notify"] == OURS
 
-    def test_apply_drops_the_old_command_appended_to_a_users_list(self, fake_home, capsys):
+    def test_apply_drops_the_old_command_appended_to_a_users_list(self, fake_home):
         p = fake_home / ".codex" / "config.toml"
         p.parent.mkdir(parents=True)
         p.write_text(f'notify = ["/usr/bin/other-hook", "{_expected_notify_cmd(fake_home)}"]\n')
-        self._apply(p)
+        assert self._apply(p) is False
         assert codex_toml._toml_load_strict(p)["notify"] == ["/usr/bin/other-hook"]
-        assert "Codex runs one notify program" in capsys.readouterr().err
 
-    def test_apply_leaves_a_users_notify_alone(self, tmp_path, capsys):
+    def test_apply_leaves_a_users_notify_alone(self, tmp_path):
         p = tmp_path / "config.toml"
         p.write_text('notify = ["/usr/bin/other-hook"]\n')
         before = p.read_text()
-        self._apply(p)
+        assert self._apply(p) is False
         assert p.read_text() == before
-        assert "Codex runs one notify program" in capsys.readouterr().err
 
     def test_apply_preserves_unrelated_sections(self, tmp_path):
         p = tmp_path / "config.toml"
@@ -1074,11 +1113,11 @@ class TestTomlApplyRemove:
         assert data["model"]["name"] == "gpt-4"
         assert data["notify"] == OURS
 
-    def test_apply_removes_our_old_hook_entries_and_keeps_others(self, tmp_path):
+    def test_apply_removes_our_old_hook_entries_and_keeps_others(self, tmp_path, old_hook):
         """apply drops our legacy ``[[hooks.<Event>]]`` entries and keeps the user's."""
         p = tmp_path / "config.toml"
         p.write_text(
-            "[[hooks.PreToolUse]]\nhooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-tool' }]\n"
+            f"[[hooks.PreToolUse]]\nhooks = [{{ type = 'command', command = '{old_hook('tool')}' }}]\n"
             "[[hooks.PreToolUse]]\nhooks = [{ type = 'command', command = '/usr/local/bin/their-hook' }]\n"
         )
         self._apply(p)
@@ -1086,16 +1125,15 @@ class TestTomlApplyRemove:
         assert data["notify"] == OURS
         assert _hook_commands(data, "PreToolUse") == ["/usr/local/bin/their-hook"]
 
-    def test_apply_with_a_users_notify_still_removes_our_old_hook_entries(self, tmp_path, capsys):
+    def test_apply_with_a_users_notify_still_removes_our_old_hook_entries(self, tmp_path, old_hook):
         p = tmp_path / "config.toml"
         p.write_text(
             'notify = ["/usr/bin/other-hook"]\n'
-            "[[hooks.Stop]]\nhooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-stop' }]\n"
+            f"[[hooks.Stop]]\nhooks = [{{ type = 'command', command = '{old_hook('stop')}' }}]\n"
         )
-        self._apply(p)
+        assert self._apply(p) is False
         data = codex_toml._toml_load_strict(p)
         assert data == {"notify": ["/usr/bin/other-hook"]}
-        assert "Codex runs one notify program" in capsys.readouterr().err
 
     def test_old_install_ends_with_only_the_new_notify(self, fake_home):
         """An old install's venv notify and lifecycle hooks become just the new notify."""
@@ -1134,15 +1172,15 @@ class TestTomlApplyRemove:
         codex_install._codex_toml_remove(p)
         assert codex_toml._toml_load_strict(p)["notify"] == ["/usr/bin/other"]
 
-    def test_remove_strips_legacy_hook_entries(self, tmp_path):
+    def test_remove_strips_legacy_hook_entries(self, tmp_path, old_hook):
         """remove strips both our notify entry and any leftover arize-managed hooks."""
         p = tmp_path / "config.toml"
         p.write_text(
             'notify = ["/x/arize-harness", "hook", "codex", "notify"]\n'
             "[[hooks.PreToolUse]]\n"
-            "hooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-tool' }]\n"
+            f"hooks = [{{ type = 'command', command = '{old_hook('tool')}' }}]\n"
             "[[hooks.SessionStart]]\n"
-            "hooks = [{ type = 'command', command = '/venv/bin/arize-hook-codex-session' }]\n"
+            f"hooks = [{{ type = 'command', command = '{old_hook('session')}' }}]\n"
         )
         codex_install._codex_toml_remove(p)
         remaining = codex_toml._toml_load_strict(p)
