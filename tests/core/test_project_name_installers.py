@@ -65,6 +65,8 @@ def test_ax_project_default_is_persisted_and_reinstall_is_preserved(
         monkeypatch.setattr(module, "venv_bin", lambda name: Path("/tmp") / name)
     for name in side_effects:
         monkeypatch.setattr(module, name, lambda *args, **kwargs: None)
+    if module_name == "tracing.codex.install":
+        monkeypatch.setattr(module, "_toml_load_strict", lambda *args, **kwargs: {})
     monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
     monkeypatch.setenv("ARIZE_PROJECT_NAME", "inherited-project")
     monkeypatch.delenv("ARIZE_USER_ID", raising=False)
