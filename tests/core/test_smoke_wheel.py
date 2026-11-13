@@ -120,6 +120,66 @@ class TestBadInput:
         assert "uv not found" in result.stderr
 
 
+# macOS's /bin/bash is 3.2, where an EXIT trap turned a set -u stop into exit 0.
+SYSTEM_BASH = "/bin/bash" if Path("/bin/bash").exists() else shutil.which("bash")
+
+FAKE_UV = """#!/bin/sh
+case "$1 $2" in
+  "python find") echo "{python}" ;;
+  venv*) for d; do :; done; mkdir -p "$d/bin" && ln -s "{python}" "$d/bin/python" ;;
+  "pip install") ;;
+  *) echo "fake uv: $*" >&2; exit 9 ;;
+esac
+"""
+
+
+def _stubbed(tmp_path: Path, harnesses: str = "claude-code", inject: str = "") -> subprocess.CompletedProcess:
+    """Run a copy of the script with a fake uv and a checker whose ``harnesses`` prints ``harnesses``."""
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    anchor = "read -r -a HARNESSES"
+    script = SCRIPT.read_text()
+    if inject:
+        assert anchor in script, f"{anchor!r} not in {SCRIPT}"
+        script = script.replace(anchor, f"{inject}\n{anchor}", 1)
+    (root / "scripts" / "smoke-wheel.sh").write_text(script)
+    (root / "scripts" / "smoke_wheel_check.py").write_text(f"print({harnesses!r})\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(FAKE_UV.replace("{python}", sys.executable))
+    uv.chmod(0o755)
+    wheel = tmp_path / "x-1-py3-none-any.whl"
+    wheel.write_bytes(b"")
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "TMPDIR": str(tmp_path)}
+    return subprocess.run(
+        [SYSTEM_BASH, str(root / "scripts" / "smoke-wheel.sh"), str(wheel)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+@posix_only
+class TestFailsClosed:
+    def test_no_harnesses_fails(self, tmp_path):
+        result = _stubbed(tmp_path, harnesses="")
+        assert result.returncode == 1, result.stderr
+        assert "no harnesses to check" in result.stderr
+
+    def test_unbound_variable_fails(self, tmp_path):
+        result = _stubbed(tmp_path, inject=': "$smoke_unset_var"')
+        assert "unbound variable" in result.stderr
+        assert result.returncode == 1, result.stderr
+
+    def test_early_exit_zero_fails(self, tmp_path):
+        result = _stubbed(tmp_path, inject="exit 0")
+        assert result.returncode == 1, result.stderr
+        assert "FAIL" not in result.stderr
+
+
 # ---------------------------------------------------------------------------
 # The checker
 # ---------------------------------------------------------------------------

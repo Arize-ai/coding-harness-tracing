@@ -48,7 +48,9 @@ fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/smoke-wheel.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
-trap 'rm -rf "$work"' EXIT
+# bash 3.2 exits 0 when set -u stops a script with an EXIT trap, so only the OK path may exit 0.
+smoke_ok=0
+trap 'rc=$?; rm -rf "$work"; [[ $rc -ne 0 || ${smoke_ok:-0} == 1 ]] || rc=1; exit $rc' EXIT
 cd "$work"
 
 # Before the environment is cleared, so UV_PYTHON counts. --system: never a project or active venv.
@@ -83,6 +85,7 @@ uv pip install --quiet --python "$work/checker/bin/python" ${offline[@]+"${offli
 check() { "$work/checker/bin/python" -I -B "$ROOT/scripts/smoke_wheel_check.py" "$@"; }
 
 read -r -a HARNESSES <<< "$(check harnesses)"
+[[ ${#HARNESSES[@]} -gt 0 ]] || die "no harnesses to check"
 echo "smoke-wheel: $(basename "$wheel") with $("$py" --version 2>&1) ($py)${deps:+, offline from $deps}"
 echo "smoke-wheel: harnesses: ${HARNESSES[*]}"
 
@@ -211,4 +214,5 @@ if [[ ${#failures[@]} -gt 0 ]]; then
     printf '  %s\n' "${failures[@]}" >&2
     exit 1
 fi
+smoke_ok=1
 echo "smoke-wheel: OK"
