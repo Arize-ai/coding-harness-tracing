@@ -159,6 +159,84 @@ class TestExtractTurnFromRollout:
         assert turn["turn_end_ms"] == 1010 * 1000
         assert turn["duration_ms"] == 10000
 
+    def test_extracts_user_prompt_from_paginated_item_completed(self, tmp_path):
+        """Codex >= 0.148 in paginated history mode (the default for `codex exec`)
+        persists the prompt as item_completed(UserMessage), not user_message."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}),
+            _resp(
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "fix the bug"}],
+                }
+            ),
+            _evt(
+                {
+                    "type": "item_completed",
+                    "thread_id": "s1",
+                    "turn_id": "t1",
+                    "item": {
+                        "type": "UserMessage",
+                        "id": "u1",
+                        "content": [{"type": "text", "text": "fix the bug", "text_elements": []}],
+                    },
+                    "completed_at_ms": 1000500,
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1", "last_agent_message": "done"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "fix the bug"
+        assert turn["assistant_output"] == "done"
+
+    def test_paginated_prompt_joins_multiple_text_parts(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}),
+            _evt(
+                {
+                    "type": "item_completed",
+                    "turn_id": "t1",
+                    "item": {
+                        "type": "UserMessage",
+                        "id": "u1",
+                        "content": [
+                            {"type": "text", "text": "first", "text_elements": []},
+                            {"type": "local_image", "path": "/tmp/x.png"},
+                            {"type": "text", "text": "second", "text_elements": []},
+                        ],
+                    },
+                    "completed_at_ms": 1000500,
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "first\nsecond"
+
+    def test_other_item_completed_items_do_not_set_prompt(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}),
+            _evt({"type": "user_message", "message": "hello"}),
+            _evt(
+                {
+                    "type": "item_completed",
+                    "turn_id": "t1",
+                    "item": {"type": "AgentMessage", "id": "a1", "content": [{"type": "text", "text": "nope"}]},
+                    "completed_at_ms": 1000500,
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "hello"
+
     def test_task_complete_overrides_intermediate_agent_message(self, tmp_path):
         path = _write_rollout(
             tmp_path,
