@@ -1126,8 +1126,9 @@ class TestHandleNotify:
         assert child_attrs["tool.name"]["stringValue"] == "exec_command"
 
     def test_turn_span_input_value_populated_on_codex_0_148_plus(self, _isolate_sessions_root):
-        """Regression: every Turn span had an empty input.value on Codex >= 0.148,
-        whose rollouts carry the prompt only in item_completed(UserMessage)."""
+        """Codex >= 0.148 rollouts carry the prompt only in item_completed(UserMessage).
+        The Turn span's input.value must still be populated from it; before this was
+        handled, every such span had an empty input.value."""
         _write_rollout(
             _isolate_sessions_root,
             "sess-new",
