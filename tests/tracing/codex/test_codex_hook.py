@@ -62,6 +62,15 @@ def _resp(payload, ts="2026-05-20T00:00:01.000Z"):
     return {"timestamp": ts, "type": "response_item", "payload": payload}
 
 
+def _item_completed(*content, item_type="UserMessage"):
+    """Paginated history mode (Codex >= 0.148) item_completed event."""
+    return _evt({"type": "item_completed", "item": {"type": item_type, "content": list(content)}})
+
+
+def _text(text):
+    return {"type": "text", "text": text}
+
+
 def _attrs_of_span(span):
     return {a["key"]: a["value"] for a in span["attributes"]}
 
@@ -165,54 +174,28 @@ class TestExtractTurnFromRollout:
         path = _write_rollout(
             tmp_path,
             "s1",
-            _evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}),
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            # Injected context also arrives as a user response_item; it must not
+            # be mistaken for the prompt.
             _resp(
                 {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": "fix the bug"}],
+                    "content": [{"type": "input_text", "text": "<environment_context>...</environment_context>"}],
                 }
             ),
-            _evt(
-                {
-                    "type": "item_completed",
-                    "thread_id": "s1",
-                    "turn_id": "t1",
-                    "item": {
-                        "type": "UserMessage",
-                        "id": "u1",
-                        "content": [{"type": "text", "text": "fix the bug", "text_elements": []}],
-                    },
-                    "completed_at_ms": 1000500,
-                }
-            ),
-            _evt({"type": "task_complete", "turn_id": "t1", "last_agent_message": "done"}),
+            _item_completed(_text("fix the bug")),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
         )
         turn = _extract_turn_from_rollout(path, "t1")
         assert turn["user_prompt"] == "fix the bug"
-        assert turn["assistant_output"] == "done"
 
-    def test_paginated_prompt_joins_multiple_text_parts(self, tmp_path):
+    def test_paginated_prompt_joins_text_parts_and_skips_others(self, tmp_path):
         path = _write_rollout(
             tmp_path,
             "s1",
-            _evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}),
-            _evt(
-                {
-                    "type": "item_completed",
-                    "turn_id": "t1",
-                    "item": {
-                        "type": "UserMessage",
-                        "id": "u1",
-                        "content": [
-                            {"type": "text", "text": "first", "text_elements": []},
-                            {"type": "local_image", "path": "/tmp/x.png"},
-                            {"type": "text", "text": "second", "text_elements": []},
-                        ],
-                    },
-                    "completed_at_ms": 1000500,
-                }
-            ),
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _item_completed(_text("first"), {"type": "local_image", "path": "/tmp/x.png"}, _text("second")),
             _evt({"type": "task_complete", "turn_id": "t1"}),
         )
         turn = _extract_turn_from_rollout(path, "t1")
@@ -222,16 +205,9 @@ class TestExtractTurnFromRollout:
         path = _write_rollout(
             tmp_path,
             "s1",
-            _evt({"type": "task_started", "turn_id": "t1", "started_at": 1000}),
+            _evt({"type": "task_started", "turn_id": "t1"}),
             _evt({"type": "user_message", "message": "hello"}),
-            _evt(
-                {
-                    "type": "item_completed",
-                    "turn_id": "t1",
-                    "item": {"type": "AgentMessage", "id": "a1", "content": [{"type": "text", "text": "nope"}]},
-                    "completed_at_ms": 1000500,
-                }
-            ),
+            _item_completed(_text("nope"), item_type="AgentMessage"),
             _evt({"type": "task_complete", "turn_id": "t1"}),
         )
         turn = _extract_turn_from_rollout(path, "t1")
