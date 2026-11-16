@@ -169,8 +169,9 @@ class TestExtractTurnFromRollout:
         assert turn["duration_ms"] == 10000
 
     def test_extracts_user_prompt_from_paginated_item_completed(self, tmp_path):
-        """Codex >= 0.148 in paginated history mode (the default for `codex exec`)
-        persists the prompt as item_completed(UserMessage), not user_message."""
+        """Without this, Codex >= 0.148 Turn spans have an empty input.value: in
+        paginated history mode (the default for `codex exec`) the prompt is
+        persisted as item_completed(UserMessage), not user_message."""
         path = _write_rollout(
             tmp_path,
             "s1",
@@ -1123,6 +1124,27 @@ class TestHandleNotify:
         assert parent_attrs["llm.token_count.total"]["intValue"] == 6
         child_attrs = _attrs_of_span(spans[1])
         assert child_attrs["tool.name"]["stringValue"] == "exec_command"
+
+    def test_turn_span_input_value_populated_on_codex_0_148_plus(self, _isolate_sessions_root):
+        """Regression: every Turn span had an empty input.value on Codex >= 0.148,
+        whose rollouts carry the prompt only in item_completed(UserMessage)."""
+        _write_rollout(
+            _isolate_sessions_root,
+            "sess-new",
+            _evt({"type": "task_started", "turn_id": "turn-1"}),
+            _item_completed(_text("do something")),
+            _evt({"type": "task_complete", "turn_id": "turn-1", "last_agent_message": "done"}),
+        )
+
+        sent = []
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
+        ):
+            _handle_notify({"type": "agent-turn-complete", "thread-id": "sess-new", "turn-id": "turn-1"})
+
+        parent = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert _attrs_of_span(parent)["input.value"]["stringValue"] == "do something"
 
 
 # ---------------------------------------------------------------------------
