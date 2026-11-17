@@ -40,6 +40,14 @@ def _isolate_sessions_root(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _isolate_harness_config(monkeypatch):
+    """Keep notify() from reading the developer's real ~/.arize/harness/config.json."""
+    import tracing.codex.hooks.handlers as h
+
+    monkeypatch.setattr(h, "load_config", lambda *a, **k: {})
+
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -158,6 +166,41 @@ class TestExtractTurnFromRollout:
         assert turn["turn_start_ms"] == 1000 * 1000
         assert turn["turn_end_ms"] == 1010 * 1000
         assert turn["duration_ms"] == 10000
+
+    def test_extracts_user_prompt_from_item_completed_user_message(self, tmp_path):
+        """Current Codex (CLI and SDK) records the prompt only as an
+        item_completed UserMessage item -- there is no user_message event."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt(
+                {
+                    "type": "item_completed",
+                    "turn_id": "t1",
+                    "item": {
+                        "type": "UserMessage",
+                        "id": "i1",
+                        "content": [
+                            {"type": "text", "text": "Create add.py", "text_elements": []},
+                            {"type": "image", "image_url": "file:///x.png"},
+                            {"type": "text", "text": "then run it", "text_elements": []},
+                        ],
+                    },
+                }
+            ),
+            _evt(
+                {
+                    "type": "item_completed",
+                    "turn_id": "t1",
+                    "item": {"type": "AgentMessage", "id": "i2", "content": [{"type": "Text", "text": "ok"}]},
+                }
+            ),
+            _evt({"type": "task_complete", "turn_id": "t1", "last_agent_message": "done"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "Create add.py\nthen run it"
+        assert turn["assistant_output"] == "done"
 
     def test_task_complete_overrides_intermediate_agent_message(self, tmp_path):
         path = _write_rollout(
@@ -1095,6 +1138,57 @@ class TestNotifyEntryPoint:
         monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
         with mock.patch.object(sys, "argv", ["hook", "not json"]):
             notify()  # caught internally; no raise
+
+    def test_reads_payload_from_last_argument(self, monkeypatch):
+        """Codex appends the payload after any arguments listed in notify."""
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        payload = json.dumps({"type": "agent-turn-complete", "thread-id": "th", "turn-id": "tu"})
+        with mock.patch.object(sys, "argv", ["hook", "--some-arg", payload]):
+            with mock.patch("tracing.codex.hooks.handlers._handle_notify") as handle:
+                notify()
+        handle.assert_called_once()
+        assert handle.call_args.args[0]["thread-id"] == "th"
+
+    def test_forwards_event_to_previous_notify(self, monkeypatch):
+        import tracing.codex.hooks.handlers as h
+
+        monkeypatch.setattr(
+            h, "load_config", lambda *a, **k: {"harnesses": {"codex": {"previous_notify": ["python3", "/n.py"]}}}
+        )
+        with mock.patch.object(sys, "argv", ["hook", '{"type":"agent-turn-complete"}']):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:
+                with mock.patch("tracing.codex.hooks.handlers._handle_notify"):
+                    notify()
+        popen.assert_called_once()
+        assert popen.call_args.args[0] == ["python3", "/n.py", '{"type":"agent-turn-complete"}']
+
+    def test_forwards_even_when_tracing_disabled(self, monkeypatch):
+        """Turning tracing off must not break the user's own notify command."""
+        import tracing.codex.hooks.handlers as h
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "false")
+        monkeypatch.setattr(h, "load_config", lambda *a, **k: {"harnesses": {"codex": {"previous_notify": ["/n"]}}})
+        with mock.patch.object(sys, "argv", ["hook", "{}"]):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:
+                notify()
+        popen.assert_called_once()
+
+    def test_no_forward_without_previous_notify(self, monkeypatch):
+        with mock.patch.object(sys, "argv", ["hook", "{}"]):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:
+                notify()
+        popen.assert_not_called()
+
+    def test_forward_failure_does_not_stop_tracing(self, monkeypatch):
+        import tracing.codex.hooks.handlers as h
+
+        monkeypatch.setenv("ARIZE_TRACE_ENABLED", "true")
+        monkeypatch.setattr(h, "load_config", lambda *a, **k: {"harnesses": {"codex": {"previous_notify": ["/gone"]}}})
+        with mock.patch.object(sys, "argv", ["hook", '{"type":"agent-turn-complete"}']):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen", side_effect=OSError("nope")):
+                with mock.patch("tracing.codex.hooks.handlers._handle_notify") as handle:
+                    notify()
+        handle.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from core.common import (
     redact_content,
 )
 from core.common import send_span as send_span_to_backend
+from core.config import get_value, load_config
 from core.constants import MODEL_FAMILY_SYSTEMS
 from tracing.codex.constants import get_codex_home
 from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
@@ -101,6 +103,21 @@ def _iso_to_ms(ts: str) -> int:
         return int(dt.timestamp() * 1000)
     except (ValueError, TypeError):
         return 0
+
+
+def _user_message_item_text(item: dict) -> str:
+    """Join the text parts of a rollout ``UserMessage`` item (images are skipped)."""
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        piece["text"]
+        for piece in content
+        if isinstance(piece, dict) and piece.get("type") == "text" and isinstance(piece.get("text"), str)
+    ]
+    return "\n".join(p for p in parts if p)
 
 
 def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None":
@@ -208,11 +225,22 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                         duration_ms = d
                     continue
 
-                # User prompt
+                # User prompt (older Codex)
                 if outer == "event_msg" and ptype == "user_message":
                     msg = payload.get("message")
                     if msg:
                         user_prompt = msg
+                    continue
+
+                # User prompt (current Codex): the CLI and the SDK both record
+                # the prompt as an item_completed event carrying a UserMessage
+                # item, and write no user_message event.
+                if outer == "event_msg" and ptype == "item_completed":
+                    item = payload.get("item") or {}
+                    if isinstance(item, dict) and item.get("type") == "UserMessage":
+                        msg = _user_message_item_text(item)
+                        if msg:
+                            user_prompt = msg
                     continue
 
                 # Intermediate assistant message (overwritten by task_complete if both present)
@@ -686,17 +714,46 @@ def _handle_notify(input_json: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _forward_to_previous_notify(raw: str) -> None:
+    """Pass the event on to the notify command our install displaced, if any.
+
+    Codex runs a single ``notify`` command, so installing tracing replaces
+    whatever the user had there. The installer saves that command as
+    ``harnesses.codex.previous_notify``; forwarding keeps it working.
+    Detached and best-effort: it must never delay or break tracing.
+    """
+    try:
+        previous = get_value(load_config(), "harnesses.codex.previous_notify")
+    except Exception as e:
+        error(f"codex notify: could not read previous notify command: {e}")
+        return
+    if not isinstance(previous, list) or not previous or not all(isinstance(a, str) for a in previous):
+        return
+    try:
+        subprocess.Popen(
+            [*previous, raw],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as e:
+        error(f"codex notify: could not run previous notify command {previous[0]}: {e}")
+
+
 def notify() -> None:
     """Entry point for ``arize-hook-codex-notify``.
 
-    Codex passes the notify-event JSON on ``sys.argv[1]`` (not stdin) and
-    expects no stdout response.
+    Codex appends the notify-event JSON as the LAST argument (not stdin) and
+    expects no stdout response. Read ``sys.argv[-1]`` so the hook still works
+    when ``notify`` passes it extra arguments of its own.
     """
+    raw = sys.argv[-1] if len(sys.argv) > 1 else "{}"
+    _forward_to_previous_notify(raw)
     try:
         load_env_file(get_codex_home() / "arize-env.sh")
         if not check_requirements():
             return
-        raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
         input_json = json.loads(raw)
         _handle_notify(input_json)
     except Exception as e:

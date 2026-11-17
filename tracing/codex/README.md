@@ -3,7 +3,11 @@
 Automatic [OpenInference](https://github.com/Arize-ai/openinference) tracing for the OpenAI Codex CLI. Spans are exported to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix).
 
 ## Setup
-The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and registers the hook entries plus the `notify` token-usage backstop in `~/.codex/config.toml`. After installing, approve the hooks via Codex's `/hooks` command (one time per user account).
+The installer prompts for your backend (Phoenix or Arize AX) and project name, writes credentials to `~/.arize/harness/config.json`, and sets `notify` in `~/.codex/config.toml` to the `arize-hook-codex-notify` entry point. There are no Codex hooks to approve.
+
+When a turn completes, Codex runs the notify hook. The hook reads that turn from the session transcript Codex saves under `~/.codex/sessions/` and sends one LLM span for the turn, with a TOOL span for each tool call. This covers the Codex CLI and the [Codex SDK](https://developers.openai.com/codex/sdk), which runs the same Codex runtime.
+
+Codex runs a single `notify` command: `notify[0]` is the program, the rest of the array is its arguments, and Codex appends the event JSON as the last argument. If you already had a `notify` command, the installer saves it as `harnesses.codex.previous_notify` in `~/.arize/harness/config.json`, the hook passes every event on to it, and uninstall puts it back.
 
 Pass `--with-skills` to also copy the `manage-codex-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Codex tracing configuration.
 
@@ -82,20 +86,10 @@ install.bat uninstall codex
 | Project name | `codex` |
 | Phoenix endpoint | `http://localhost:6006` |
 | Arize AX endpoint | `otlp.arize.com:443` |
-| Hook config file | `~/.codex/config.toml` |
-| Hook events handled | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop` (via real Codex hooks); `agent-turn-complete` (via `notify`) for token usage |
+| Hook config file | `~/.codex/config.toml` (`notify`) |
+| Events handled | `agent-turn-complete` (via `notify`); turn details come from the session transcript in `~/.codex/sessions/` |
 | Env override file | `~/.codex/arize-env.sh` |
-| State directory | `~/.arize/harness/state/codex/` (state files + tool span JSONLs) |
 | Log file | `~/.arize/harness/logs/codex.log` |
-
-## Trust prompt
-
-Codex requires explicit user trust for non-managed hooks before they fire. After install, run:
-
-1. `codex` (start a session)
-2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
-
-Without this one-time approval, hooks won't fire and traces will be limited to the `notify`-based fallback (single LLM span per turn, no tool spans).
 
 ## Verifying tracing
 
@@ -105,18 +99,16 @@ Run any Codex command:
 codex exec "explain what this file does" path/to/file.py
 ```
 
-Then check:
+Then check that spans appear in your configured project in Arize AX or Phoenix.
 
-- Hook activity in `~/.arize/harness/logs/codex.log`.
-- Per-thread state files in `~/.arize/harness/state/codex/` show recent activity.
-- Spans appear in your configured project in Arize AX or Phoenix.
-
-Errors are always logged. For routine hook activity, add `export ARIZE_VERBOSE=true` to `~/.codex/arize-env.sh` (or your shell) and re-run. See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_TRACE_DEBUG`, etc.).
+Only errors are logged by default, so an empty `~/.arize/harness/logs/codex.log` doesn't mean the hook didn't run. To log routine hook activity (a `Turn sent` line per turn), add `export ARIZE_VERBOSE=true` to `~/.codex/arize-env.sh` (or your shell) and re-run. See the [main README's Environment variables section](../../README.md#environment-variables) for the full list of runtime overrides (`ARIZE_TRACE_ENABLED`, `ARIZE_DRY_RUN`, `ARIZE_TRACE_DEBUG`, etc.).
 
 ## Troubleshooting
 
-**Hooks not firing.** Run `codex` → `/hooks` and confirm the `arize-hook-codex-*` entries are listed and trusted. If they aren't listed at all, re-run the installer.
+**Hook not firing.** Check that `notify` in `~/.codex/config.toml` is exactly `['<path>/arize-hook-codex-notify']` and that the path exists. Codex runs only the first element of `notify`, so if another program comes first, the hook never runs. Re-run the installer to fix it.
 
-**No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded. Check `~/.arize/harness/logs/codex.log` for backend/auth errors. Confirm the hooks are trusted via `/hooks`.
+**No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded. Check `~/.arize/harness/logs/codex.log` for backend/auth errors.
 
-**Disable temporarily.** Untrust the entries via `codex` → `/hooks`, or set `ARIZE_TRACE_ENABLED=false` in `~/.codex/arize-env.sh` and restart Codex. Full uninstall: `./install.sh uninstall codex`.
+**Spans land in the wrong project, or not at all, when Codex runs inside another tool.** The hook inherits the environment of the process that started Codex. If that process is a traced session of another harness (for example, a Codex SDK script run from Claude Code), it can pass down `ARIZE_PROJECT_NAME` or `ARIZE_TRACE_ENABLED=false` and override the Codex settings. Unset them before starting Codex.
+
+**Disable temporarily.** Set `ARIZE_TRACE_ENABLED=false` in `~/.codex/arize-env.sh` and restart Codex. A saved `previous_notify` command keeps receiving events. Full uninstall: `./install.sh uninstall codex`.

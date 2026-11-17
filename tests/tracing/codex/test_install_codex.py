@@ -551,18 +551,52 @@ class TestUninstall:
 
         assert not (fake_home / ".codex" / "arize-env.sh").is_file()
 
-    def test_uninstall_preserves_foreign_notify(self, fake_home, mock_prompts):
+    def test_install_over_foreign_notify_saves_it_and_uninstall_restores_it(self, fake_home, mock_prompts):
+        """Codex runs one notify command: install takes it over, remembers the
+        user's command for forwarding, and uninstall puts it back."""
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text('notify = ["python3", "/usr/local/bin/my-notify.py"]\n')
+
         codex_install.install()
 
-        toml_path = fake_home / ".codex" / "config.toml"
         data = codex_toml._toml_load_strict(toml_path)
-        data["notify"].append("/usr/local/bin/my-custom-hook")
-        codex_toml._toml_write(data, toml_path)
+        assert data["notify"] == [_expected_notify_cmd(fake_home)]
+        config = json.loads((fake_home / ".arize" / "harness" / "config.json").read_text())
+        assert config["harnesses"]["codex"]["previous_notify"] == ["python3", "/usr/local/bin/my-notify.py"]
 
         codex_install.uninstall()
 
         remaining = codex_toml._toml_load_strict(toml_path)
-        assert remaining["notify"] == ["/usr/local/bin/my-custom-hook"]
+        assert remaining["notify"] == ["python3", "/usr/local/bin/my-notify.py"]
+
+    def test_reinstall_keeps_saved_previous_notify(self, fake_home, mock_prompts):
+        """A second install sees our own hook in notify and must not lose the saved command."""
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text('notify = ["/usr/local/bin/my-notify"]\n')
+
+        codex_install.install()
+        codex_install.install()
+
+        config = json.loads((fake_home / ".arize" / "harness" / "config.json").read_text())
+        assert config["harnesses"]["codex"]["previous_notify"] == ["/usr/local/bin/my-notify"]
+
+    def test_install_replaces_stale_notify_from_old_install(self, fake_home, mock_prompts):
+        """An entry point left by an older install (e.g. a deleted system Python)
+        is ours, not a foreign command: replace it and save nothing."""
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text(
+            "notify = ['/Library/Frameworks/Python.framework/Versions/3.14/bin/arize-hook-codex-notify']\n"
+        )
+
+        codex_install.install()
+
+        data = codex_toml._toml_load_strict(toml_path)
+        assert data["notify"] == [_expected_notify_cmd(fake_home)]
+        config = json.loads((fake_home / ".arize" / "harness" / "config.json").read_text())
+        assert "previous_notify" not in config["harnesses"]["codex"]
 
     def test_uninstall_preserves_foreign_hook_entries(self, fake_home, mock_prompts):
         """A non-arize hook entry under [[hooks.PreToolUse]] survives uninstall."""
@@ -1019,13 +1053,37 @@ class TestTomlApplyRemove:
         data = codex_toml._toml_load_strict(p)
         assert data["notify"] == ["/venv/bin/notify"]
 
-    def test_apply_preserves_existing_notify(self, tmp_path):
+    def test_apply_replaces_foreign_notify_and_returns_it(self, tmp_path):
+        """notify is one argv, so ours replaces the foreign command, which is returned."""
         p = tmp_path / "config.toml"
-        p.write_text('notify = ["/usr/bin/other-hook"]\n')
-        self._apply(p)
+        p.write_text('notify = ["python3", "/usr/bin/other-hook.py"]\n')
+        displaced = codex_install._codex_toml_apply(p, "/venv/bin/notify")
         data = codex_toml._toml_load_strict(p)
-        assert "/usr/bin/other-hook" in data["notify"]
-        assert "/venv/bin/notify" in data["notify"]
+        assert data["notify"] == ["/venv/bin/notify"]
+        assert displaced == ["python3", "/usr/bin/other-hook.py"]
+
+    def test_apply_repairs_notify_appended_by_older_installer(self, tmp_path):
+        """Older installers appended our path to a foreign argv, where Codex
+        passed it to the foreign program as an argument and never ran it."""
+        p = tmp_path / "config.toml"
+        p.write_text('notify = ["/usr/bin/other-hook", "/old/venv/bin/arize-hook-codex-notify"]\n')
+        displaced = codex_install._codex_toml_apply(p, "/venv/bin/notify")
+        data = codex_toml._toml_load_strict(p)
+        assert data["notify"] == ["/venv/bin/notify"]
+        assert displaced == ["/usr/bin/other-hook"]
+
+    def test_apply_replaces_our_stale_entry_point_without_displacing(self, tmp_path):
+        p = tmp_path / "config.toml"
+        p.write_text('notify = ["/gone/bin/arize-hook-codex-notify", "/venv/bin/notify"]\n')
+        displaced = codex_install._codex_toml_apply(p, "/venv/bin/notify")
+        data = codex_toml._toml_load_strict(p)
+        assert data["notify"] == ["/venv/bin/notify"]
+        assert displaced is None
+
+    def test_apply_returns_none_when_nothing_displaced(self, tmp_path):
+        p = tmp_path / "config.toml"
+        assert codex_install._codex_toml_apply(p, "/venv/bin/notify") is None
+        assert codex_install._codex_toml_apply(p, "/venv/bin/notify") is None
 
     def test_apply_preserves_unrelated_sections(self, tmp_path):
         p = tmp_path / "config.toml"
@@ -1053,16 +1111,27 @@ class TestTomlApplyRemove:
         self._apply(p)
         assert not p.exists()
 
-    def test_remove_only_our_notify(self, tmp_path):
+    def test_remove_restores_previous_notify(self, tmp_path):
         p = tmp_path / "config.toml"
         self._apply(p)
-        data = codex_toml._toml_load_strict(p)
-        data["notify"].append("/usr/bin/other")
-        codex_toml._toml_write(data, p)
+        codex_install._codex_toml_remove(p, "/venv/bin/notify", ["python3", "/usr/bin/other.py"])
+        remaining = codex_toml._toml_load_strict(p)
+        assert remaining["notify"] == ["python3", "/usr/bin/other.py"]
 
+    def test_remove_leaves_foreign_notify_but_strips_our_appended_path(self, tmp_path):
+        """A foreign notify stays; copies of our path an older installer appended go."""
+        p = tmp_path / "config.toml"
+        p.write_text('notify = ["/usr/bin/other", "/venv/bin/notify"]\n')
         codex_install._codex_toml_remove(p, "/venv/bin/notify")
         remaining = codex_toml._toml_load_strict(p)
         assert remaining["notify"] == ["/usr/bin/other"]
+
+    def test_remove_leaves_unrelated_foreign_notify_untouched(self, tmp_path):
+        p = tmp_path / "config.toml"
+        p.write_text('notify = ["/usr/bin/other", "--flag"]\n')
+        before = p.read_text()
+        codex_install._codex_toml_remove(p, "/venv/bin/notify")
+        assert p.read_text() == before
 
     def test_remove_strips_legacy_hook_entries(self, tmp_path):
         """remove strips both our notify entry and any leftover arize-managed hooks."""

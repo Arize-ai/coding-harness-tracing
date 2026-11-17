@@ -49,7 +49,7 @@ That path skips the wizard, so set backend credentials in `~/.claude/settings.js
 curl -sSL https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh | bash -s -- codex
 ```
 
-The installer registers hooks in `~/.codex/config.toml`. Codex will not run them until you trust them once: start `codex`, run `/hooks`, and approve each `arize-hook-codex-*` entry. Then run a session, for example:
+The installer sets `notify` in `~/.codex/config.toml` to the tracing hook. There are no Codex hooks to approve. If you already had a `notify` command, the hook passes every event on to it. Then run a session, for example:
 
 ```bash
 codex exec "explain what this file does" path/to/file.py
