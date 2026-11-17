@@ -7,7 +7,7 @@ The installer prompts for your backend (Phoenix or Arize AX) and project name, w
 
 When a turn completes, Codex runs the notify hook. The hook reads that turn from the session transcript Codex saves under `~/.codex/sessions/` and sends one LLM span for the turn, with a TOOL span for each tool call. This covers the Codex CLI and the [Codex SDK](https://developers.openai.com/codex/sdk), which runs the same Codex runtime.
 
-Codex runs a single `notify` command: `notify[0]` is the program, the rest of the array is its arguments, and Codex appends the event JSON as the last argument. If you already had a `notify` command, the installer saves it as `harnesses.codex.previous_notify` in `~/.arize/harness/config.json`, the hook passes every event on to it, and uninstall puts it back.
+Codex runs a single `notify` command: `notify[0]` is the program, the rest of the array is its arguments, and Codex appends the event JSON as the last argument. If you already had a `notify` command, the installer saves it as `harnesses.codex.previous_notify` in `~/.arize/harness/config.json`, the hook passes every event on to it, and uninstall puts it back. A saved command that calls the hook itself, such as a wrapper you wrote to run both, is fine: the hook ignores calls that come from its own forwarding.
 
 Pass `--with-skills` to also copy the `manage-codex-tracing` skill into the current directory's `.agents/skills/` so coding agents in this workspace can help manage Codex tracing configuration.
 
@@ -109,6 +109,6 @@ Only errors are logged by default, so an empty `~/.arize/harness/logs/codex.log`
 
 **No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded. Check `~/.arize/harness/logs/codex.log` for backend/auth errors.
 
-**Spans land in the wrong project, or not at all, when Codex runs inside another tool.** The hook inherits the environment of the process that started Codex. If that process is a traced session of another harness (for example, a Codex SDK script run from Claude Code), it can pass down `ARIZE_PROJECT_NAME` or `ARIZE_TRACE_ENABLED=false` and override the Codex settings. Unset them before starting Codex.
+**Spans land in the wrong project when Codex runs inside another tool.** The hook inherits the environment of the process that started Codex. If that process is a traced session of another harness (for example, a Codex SDK script run from Claude Code), it can pass down that harness's `ARIZE_PROJECT_NAME`, which overrides the Codex project. Unset it before starting Codex. An inherited `ARIZE_TRACE_ENABLED` doesn't matter: the hook loads `~/.codex/arize-env.sh`, which sets it again.
 
 **Disable temporarily.** Set `ARIZE_TRACE_ENABLED=false` in `~/.codex/arize-env.sh` and restart Codex. A saved `previous_notify` command keeps receiving events. Full uninstall: `./install.sh uninstall codex`.

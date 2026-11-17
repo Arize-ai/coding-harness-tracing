@@ -25,7 +25,7 @@ Codex CLI / Codex SDK
         |--> send_span() --> Phoenix/Arize AX
 ```
 
-**One notify command.** Codex runs a single `notify` command: `notify[0]` is the program and the rest of the array is its arguments. It is not a list of hooks. If the user already had a `notify` command, the installer saves it as `harnesses.codex.previous_notify` in `~/.arize/harness/config.json`, the hook forwards every event to it, and uninstall restores it.
+**One notify command.** Codex runs a single `notify` command: `notify[0]` is the program and the rest of the array is its arguments. It is not a list of hooks. If the user already had a `notify` command, the installer saves it as `harnesses.codex.previous_notify` in `~/.arize/harness/config.json`, the hook forwards every event to it, and uninstall restores it. The forwarded command runs with `ARIZE_CODEX_NOTIFY_FORWARDED=1` set, and the hook does nothing when it sees that, so a saved wrapper that also calls the hook can't loop.
 
 ## How to Use This Skill
 
@@ -255,7 +255,7 @@ Common issues and fixes:
 |---------|-----|
 | Traces not appearing | Check `ARIZE_TRACE_ENABLED` is `true` in `~/.codex/arize-env.sh` |
 | `notify` hook not firing | Verify `notify` in `~/.codex/config.toml` has exactly one element and that path exists. Codex runs only the first element, so a stale path or another program first means our hook never runs. Re-run the installer. |
-| Wrong project, or no traces, when Codex runs inside another tool | The hook inherits the parent process's environment. A traced session of another harness (for example, a Codex SDK script run from Claude Code) can pass down `ARIZE_PROJECT_NAME` or `ARIZE_TRACE_ENABLED=false`. Unset them before starting Codex. |
+| Wrong project when Codex runs inside another tool | The hook inherits the parent process's environment. A traced session of another harness (for example, a Codex SDK script run from Claude Code) can pass down its `ARIZE_PROJECT_NAME`, which overrides the Codex project. Unset it before starting Codex. An inherited `ARIZE_TRACE_ENABLED` doesn't matter, because the hook reloads `~/.codex/arize-env.sh`. |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | No output in terminal | Hooks run in background; check `~/.arize/harness/logs/codex.log` |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` in env or `export ARIZE_DRY_RUN=true` |

@@ -12,6 +12,41 @@ HARNESS_BIN = "codex"  # binary name for shutil.which() fallback
 
 NOTIFY_BIN_NAME = "arize-hook-codex-notify"
 
+# Where the installer saves the notify command it displaced (see install.py).
+PREVIOUS_NOTIFY_KEY = f"harnesses.{HARNESS_NAME}.previous_notify"
+
+# Set in the environment of a forwarded notify command. If that command calls
+# our hook again (e.g. a wrapper that runs both), the nested call does nothing.
+FORWARD_GUARD_ENV = "ARIZE_CODEX_NOTIFY_FORWARDED"
+
+
+def notify_argv(value: object) -> list[str]:
+    """Normalize a TOML ``notify`` value to an argv list."""
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str)]
+    if isinstance(value, str) and value:
+        return [value]
+    return []
+
+
+def valid_previous_notify(value: object) -> list[str] | None:
+    """Return *value* if it is a usable saved notify argv, else None."""
+    if isinstance(value, list) and value and all(isinstance(a, str) and a for a in value):
+        return list(value)
+    return None
+
+
+def is_notify_entry_point(arg: object) -> bool:
+    """Return True if *arg* is a path to our notify entry point, from any install.
+
+    Matches the exact executable name (``.exe`` on Windows), never a prefix, so
+    a user's ``arize-hook-codex-notify-wrapper.sh`` is not mistaken for ours.
+    """
+    if not isinstance(arg, str) or not arg:
+        return False
+    name = arg.replace("\\", "/").rsplit("/", 1)[-1]
+    return name == NOTIFY_BIN_NAME or name.lower() == f"{NOTIFY_BIN_NAME}.exe"
+
 
 def get_codex_home() -> Path:
     """Return the active Codex home, matching Codex's ``CODEX_HOME`` rules.

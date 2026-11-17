@@ -1173,6 +1173,48 @@ class TestNotifyEntryPoint:
                 notify()
         popen.assert_called_once()
 
+    def test_forwarded_command_gets_guard_env(self, monkeypatch):
+        import tracing.codex.hooks.handlers as h
+
+        monkeypatch.setattr(h, "load_config", lambda *a, **k: {"harnesses": {"codex": {"previous_notify": ["/n"]}}})
+        with mock.patch.object(sys, "argv", ["hook", "{}"]):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:
+                with mock.patch("tracing.codex.hooks.handlers._handle_notify"):
+                    notify()
+        assert popen.call_args.kwargs["env"]["ARIZE_CODEX_NOTIFY_FORWARDED"] == "1"
+
+    def test_nested_call_from_forwarded_wrapper_does_nothing(self, monkeypatch):
+        """A saved wrapper that calls the hook again must not loop or re-send the span."""
+        import tracing.codex.hooks.handlers as h
+
+        monkeypatch.setenv("ARIZE_CODEX_NOTIFY_FORWARDED", "1")
+        monkeypatch.setattr(h, "load_config", lambda *a, **k: {"harnesses": {"codex": {"previous_notify": ["/n"]}}})
+        with mock.patch.object(sys, "argv", ["hook", '{"type":"agent-turn-complete"}']):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:
+                with mock.patch("tracing.codex.hooks.handlers._handle_notify") as handle:
+                    notify()
+        popen.assert_not_called()
+        handle.assert_not_called()
+
+    def test_no_forward_without_payload_argument(self, monkeypatch):
+        """No argv payload means no real event: don't send the user's command a made-up '{}'."""
+        import tracing.codex.hooks.handlers as h
+
+        monkeypatch.setattr(h, "load_config", lambda *a, **k: {"harnesses": {"codex": {"previous_notify": ["/n"]}}})
+        with mock.patch.object(sys, "argv", ["hook"]):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:
+                notify()
+        popen.assert_not_called()
+
+    def test_invalid_saved_command_is_not_forwarded(self, monkeypatch):
+        import tracing.codex.hooks.handlers as h
+
+        monkeypatch.setattr(h, "load_config", lambda *a, **k: {"harnesses": {"codex": {"previous_notify": ["/n", 3]}}})
+        with mock.patch.object(sys, "argv", ["hook", "{}"]):
+            with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:
+                notify()
+        popen.assert_not_called()
+
     def test_no_forward_without_previous_notify(self, monkeypatch):
         with mock.patch.object(sys, "argv", ["hook", "{}"]):
             with mock.patch("tracing.codex.hooks.handlers.subprocess.Popen") as popen:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from core.config import get_value, load_config, save_config, set_value
@@ -42,7 +43,11 @@ from tracing.codex.constants import (
     HARNESS_HOME,
     HARNESS_NAME,
     NOTIFY_BIN_NAME,
+    PREVIOUS_NOTIFY_KEY,
     get_codex_home,
+    is_notify_entry_point,
+    notify_argv,
+    valid_previous_notify,
 )
 from tracing.codex.install_legacy import cleanup_legacy_install
 
@@ -110,21 +115,14 @@ def _strip_arize_hooks(data: dict) -> bool:
 def _is_our_notify(arg: object, notify_cmd: str) -> bool:
     """Return True if *arg* is our notify entry point, from this install or an
     earlier one at another path (e.g. a since-deleted system Python)."""
-    if not isinstance(arg, str) or not arg:
-        return False
-    return arg == notify_cmd or Path(arg).name.startswith(NOTIFY_BIN_NAME)
+    return (isinstance(arg, str) and arg == notify_cmd) or is_notify_entry_point(arg)
 
 
-def _notify_argv(value: object) -> list[str]:
-    """Normalize a TOML ``notify`` value to an argv list."""
-    if isinstance(value, list):
-        return [v for v in value if isinstance(v, str)]
-    if isinstance(value, str) and value:
-        return [value]
-    return []
-
-
-def _codex_toml_apply(path: Path, notify_cmd: str) -> list[str] | None:
+def _codex_toml_apply(
+    path: Path,
+    notify_cmd: str,
+    save_displaced: Callable[[list[str]], None] | None = None,
+) -> list[str] | None:
     """Write the notify-only layout to ~/.codex/config.toml. Idempotent.
 
     Codex's ``notify`` is ONE command line, not a list of hooks: Codex runs
@@ -132,10 +130,12 @@ def _codex_toml_apply(path: Path, notify_cmd: str) -> list[str] | None:
     JSON as the final argument. So ``notify`` is always set to exactly
     ``[notify_cmd]``.
 
-    If another program already owned ``notify``, its argv is returned (minus
-    any copies of our entry point that older installers appended to it) so
-    the caller can save it; the notify hook forwards every event to it, and
-    uninstall puts it back. Returns None when there was nothing to preserve.
+    Anything else in ``notify`` -- another program's command, or one a user
+    appended after our entry point -- is the displaced command. It is passed
+    to *save_displaced* BEFORE config.toml is rewritten, so a failed save
+    aborts without losing it, and then returned. The notify hook forwards
+    every event to it, and uninstall puts it back. Returns None when there
+    was nothing to preserve.
 
     Does not touch any existing ``[[hooks.<Event>]]`` entries -- if a prior
     install left some behind, manage them out-of-band or run ``uninstall``.
@@ -146,10 +146,10 @@ def _codex_toml_apply(path: Path, notify_cmd: str) -> list[str] | None:
 
     data = _toml_load_strict(path)
 
-    existing = _notify_argv(data.get("notify"))
-    displaced: list[str] | None = None
-    if existing and not _is_our_notify(existing[0], notify_cmd):
-        displaced = [a for a in existing if not _is_our_notify(a, notify_cmd)]
+    foreign = [a for a in notify_argv(data.get("notify")) if not _is_our_notify(a, notify_cmd)]
+    displaced = foreign or None
+    if displaced and save_displaced is not None:
+        save_displaced(displaced)
     data["notify"] = [notify_cmd]
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,9 +161,9 @@ def _codex_toml_remove(path: Path, notify_cmd: str, previous_notify: list[str] |
     """Remove our notify entry and any legacy hook entries. Idempotent.
 
     When ``notify`` runs our hook, it is replaced by *previous_notify* (the
-    command our install displaced) or removed. When another program owns
-    ``notify``, only copies of our entry point that older installers appended
-    to its argv are dropped.
+    command our install displaced), else by whatever followed our entry point,
+    else removed. When another program owns ``notify``, only copies of our
+    entry point that older installers appended to its argv are dropped.
     """
     if not path.is_file():
         return
@@ -175,15 +175,17 @@ def _codex_toml_remove(path: Path, notify_cmd: str, previous_notify: list[str] |
     data = _toml_load_strict(path)
     changed = False
 
-    existing = _notify_argv(data.get("notify"))
+    existing = notify_argv(data.get("notify"))
+    foreign = [a for a in existing if not _is_our_notify(a, notify_cmd)]
     if existing and _is_our_notify(existing[0], notify_cmd):
-        if previous_notify:
-            data["notify"] = list(previous_notify)
+        restored = previous_notify or foreign
+        if restored:
+            data["notify"] = list(restored)
         else:
             del data["notify"]
         changed = True
-    elif any(_is_our_notify(a, notify_cmd) for a in existing):
-        data["notify"] = [a for a in existing if not _is_our_notify(a, notify_cmd)]
+    elif len(foreign) != len(existing):
+        data["notify"] = foreign
         changed = True
 
     if _strip_arize_hooks(data):
@@ -199,7 +201,7 @@ def _save_previous_notify(argv: list[str]) -> None:
         info(f"would save previous notify command {argv} to {CONFIG_FILE}")
         return
     config = load_config(str(CONFIG_FILE)) or {"harnesses": {}}
-    set_value(config, f"harnesses.{HARNESS_NAME}.previous_notify", argv)
+    set_value(config, PREVIOUS_NOTIFY_KEY, argv)
     save_config(config, str(CONFIG_FILE))
 
 
@@ -264,6 +266,9 @@ def install(with_skills: bool = False) -> None:
     ensure_shared_runtime()
     config = load_config(str(CONFIG_FILE))
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
+    # write_config replaces the whole harness entry, so keep any saved notify
+    # command to put back afterwards.
+    saved_previous = valid_previous_notify(get_value(config, PREVIOUS_NOTIFY_KEY))
 
     if isinstance(existing_entry, dict) and "target" in existing_entry:
         info(f"Reusing existing backend: {existing_entry.get('target')}")
@@ -285,6 +290,8 @@ def install(with_skills: bool = False) -> None:
             )
         else:
             info("would write config.json with backend credentials")
+    if saved_previous:
+        _save_previous_notify(saved_previous)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:
@@ -303,9 +310,8 @@ def install(with_skills: bool = False) -> None:
     #    so if another program owned it, keep its command so the hook can
     #    forward events to it and uninstall can restore it.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    displaced = _codex_toml_apply(codex_config_file, notify_cmd)
+    displaced = _codex_toml_apply(codex_config_file, notify_cmd, save_displaced=_save_previous_notify)
     if displaced:
-        _save_previous_notify(displaced)
         info(f"Codex runs one notify command; events will be forwarded to the previous one: {displaced}")
     info(f"Updated TOML config: {codex_config_file}")
 
@@ -332,8 +338,7 @@ def uninstall() -> None:
     # 2. Revert TOML — remove our notify entry (restoring the command it
     #    displaced, if any) and any legacy hook entries.
     notify_cmd = str(venv_bin(NOTIFY_BIN_NAME))
-    previous = get_value(load_config(str(CONFIG_FILE)), f"harnesses.{HARNESS_NAME}.previous_notify")
-    previous_notify = [a for a in previous if isinstance(a, str)] if isinstance(previous, list) else None
+    previous_notify = valid_previous_notify(get_value(load_config(str(CONFIG_FILE)), PREVIOUS_NOTIFY_KEY))
     _codex_toml_remove(codex_config_file, notify_cmd, previous_notify)
     info(f"Reverted TOML config: {codex_config_file}")
 

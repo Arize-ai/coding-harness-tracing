@@ -35,7 +35,7 @@ from core.common import (
 from core.common import send_span as send_span_to_backend
 from core.config import get_value, load_config
 from core.constants import MODEL_FAMILY_SYSTEMS
-from tracing.codex.constants import get_codex_home
+from tracing.codex.constants import FORWARD_GUARD_ENV, PREVIOUS_NOTIFY_KEY, get_codex_home, valid_previous_notify
 from tracing.codex.hooks.adapter import SCOPE_NAME, SERVICE_NAME, check_requirements, load_env_file
 
 # Root of Codex's per-session rollout transcripts.
@@ -720,14 +720,17 @@ def _forward_to_previous_notify(raw: str) -> None:
     Codex runs a single ``notify`` command, so installing tracing replaces
     whatever the user had there. The installer saves that command as
     ``harnesses.codex.previous_notify``; forwarding keeps it working.
-    Detached and best-effort: it must never delay or break tracing.
+    Detached and best-effort: it must never delay or break tracing. The
+    forwarded command runs with ``FORWARD_GUARD_ENV`` set, so if it calls this
+    hook again (e.g. a wrapper that runs both) the nested call does nothing
+    instead of forwarding in a loop.
     """
     try:
-        previous = get_value(load_config(), "harnesses.codex.previous_notify")
+        previous = valid_previous_notify(get_value(load_config(), PREVIOUS_NOTIFY_KEY))
     except Exception as e:
         error(f"codex notify: could not read previous notify command: {e}")
         return
-    if not isinstance(previous, list) or not previous or not all(isinstance(a, str) for a in previous):
+    if previous is None:
         return
     try:
         subprocess.Popen(
@@ -736,6 +739,7 @@ def _forward_to_previous_notify(raw: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env={**os.environ, FORWARD_GUARD_ENV: "1"},
         )
     except OSError as e:
         error(f"codex notify: could not run previous notify command {previous[0]}: {e}")
@@ -748,8 +752,14 @@ def notify() -> None:
     expects no stdout response. Read ``sys.argv[-1]`` so the hook still works
     when ``notify`` passes it extra arguments of its own.
     """
-    raw = sys.argv[-1] if len(sys.argv) > 1 else "{}"
-    _forward_to_previous_notify(raw)
+    if os.environ.get(FORWARD_GUARD_ENV):
+        # Started by our own forwarding: the outer call already traced and forwarded.
+        return
+    if len(sys.argv) > 1:
+        raw = sys.argv[-1]
+        _forward_to_previous_notify(raw)
+    else:
+        raw = "{}"
     try:
         load_env_file(get_codex_home() / "arize-env.sh")
         if not check_requirements():

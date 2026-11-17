@@ -1033,6 +1033,87 @@ class TestEnvFileHeuristic:
 # ---------------------------------------------------------------------------
 
 
+class TestPreviousNotifyPreservation:
+    """The user's displaced notify command must never be lost."""
+
+    def _config(self, fake_home: Path) -> dict:
+        return json.loads((fake_home / ".arize" / "harness" / "config.json").read_text())
+
+    def test_command_appended_after_ours_is_saved_and_restored(self, fake_home, mock_prompts):
+        """[ours, theirs]: Codex never ran theirs, but the user meant it to run."""
+        notify_cmd = _expected_notify_cmd(fake_home)
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text(f"notify = ['{notify_cmd}', '/usr/local/bin/my-notify']\n")
+
+        codex_install.install()
+
+        assert codex_toml._toml_load_strict(toml_path)["notify"] == [notify_cmd]
+        assert self._config(fake_home)["harnesses"]["codex"]["previous_notify"] == ["/usr/local/bin/my-notify"]
+
+        codex_install.uninstall()
+        assert codex_toml._toml_load_strict(toml_path)["notify"] == ["/usr/local/bin/my-notify"]
+
+    def test_failed_save_leaves_config_toml_untouched(self, tmp_path):
+        """The displaced command is saved before config.toml is rewritten."""
+        p = tmp_path / "config.toml"
+        p.write_text('notify = ["/usr/bin/theirs"]\n')
+        before = p.read_text()
+
+        def _boom(argv):
+            raise ValueError("Malformed JSON in config.json")
+
+        with pytest.raises(ValueError):
+            codex_install._codex_toml_apply(p, "/venv/bin/notify", save_displaced=_boom)
+        assert p.read_text() == before
+
+    def test_previous_notify_survives_entry_rewrite(self, fake_home, mock_prompts):
+        """write_config replaces the whole harness entry; the saved command is put back."""
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text('notify = ["/usr/local/bin/my-notify"]\n')
+        codex_install.install()
+
+        # Drop "target" so the next install takes the write_config branch.
+        config_file = fake_home / ".arize" / "harness" / "config.json"
+        config = self._config(fake_home)
+        del config["harnesses"]["codex"]["target"]
+        config_file.write_text(json.dumps(config))
+
+        codex_install.install()
+
+        assert self._config(fake_home)["harnesses"]["codex"]["previous_notify"] == ["/usr/local/bin/my-notify"]
+
+    def test_script_named_like_our_entry_point_is_not_ours(self, fake_home, mock_prompts):
+        """Only the exact entry-point name counts as ours, not a prefix."""
+        toml_path = fake_home / ".codex" / "config.toml"
+        toml_path.parent.mkdir(parents=True, exist_ok=True)
+        toml_path.write_text("notify = ['/home/me/bin/arize-hook-codex-notify-wrapper.sh']\n")
+
+        codex_install.install()
+
+        assert self._config(fake_home)["harnesses"]["codex"]["previous_notify"] == [
+            "/home/me/bin/arize-hook-codex-notify-wrapper.sh"
+        ]
+
+    @pytest.mark.parametrize(
+        "arg, expected",
+        [
+            ("/old/venv/bin/arize-hook-codex-notify", True),
+            (r"C:\Users\me\.arize\harness\venv\Scripts\arize-hook-codex-notify.exe", True),
+            (r"C:\x\ARIZE-HOOK-CODEX-NOTIFY.EXE", True),  # Windows names are case-insensitive
+            ("/home/me/bin/arize-hook-codex-notify-wrapper.sh", False),
+            ("arize-hook-codex-notify-old", False),
+            ("", False),
+            (None, False),
+        ],
+    )
+    def test_is_notify_entry_point(self, arg, expected):
+        from tracing.codex.constants import is_notify_entry_point
+
+        assert is_notify_entry_point(arg) is expected
+
+
 class TestTomlApplyRemove:
     """Unit tests for the notify-only TOML mutators."""
 
