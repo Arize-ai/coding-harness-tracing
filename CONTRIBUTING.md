@@ -132,7 +132,7 @@ Renaming the workflow file or its environment breaks publishing until the PyPI p
 
 To release:
 
-1. Tag the commit with a `v` + PEP 440 version, e.g. `v0.2.0rc1` or `v0.2.0`. Don't use hyphenated tags like `v0.2.0-rc1`; `v*-rcN` tags belong to the Go CLI.
+1. Tag the commit `v` + a normalized [PEP 440](https://peps.python.org/pep-0440/) version, e.g. `v0.2.0`, `v0.2.0rc1`, `v0.2.0.post1` or `v0.2.0.dev1`. The workflow rejects non-normalized spellings such as `v0.2.0RC1`, `v0.2.0-rc1` or `v0.2.0.rc1`, plus local (`+abc`) and epoch (`1!`) versions. Hyphenated `v*-rcN` tags belong to the Go CLI.
 
    ```bash
    git tag v0.2.0rc1 && git push origin v0.2.0rc1
@@ -140,7 +140,7 @@ To release:
 
 2. In GitHub, go to **Actions → Publish to PyPI → Run workflow**, leave "Use workflow from" on `main`, and enter the tag. The workflow builds the tag, runs `twine check`, checks the built version matches the tag, and uploads.
 
-Pushing a tag alone publishes nothing. Pre-releases (`rcN`) install only with `pip install --pre`.
+Pushing a tag alone publishes nothing. Pre-releases (`aN`, `bN`, `rcN`) and dev releases (`.devN`) install only with `pip install --pre`.
 
 ## Find the code you need
 

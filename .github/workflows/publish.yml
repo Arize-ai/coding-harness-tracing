@@ -26,23 +26,31 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+
       - name: Validate tag
         env:
           TAG: ${{ inputs.tag }}
+        shell: uv run --no-project --with packaging python {0}
         run: |
-          # v<PEP 440 release or pre-release>; rejects the Go CLI's cmd/ax-trace/* and hyphenated -rcN tags.
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
-            echo "::error::'$TAG' is not a v<major>.<minor>.<patch>[a|b|rcN] tag"
-            exit 1
-          fi
+          # Non-normalized forms (RC1, -rc1, .rc1) would build a differently named dist and fail the version check.
+          import os, sys
+          from packaging.version import InvalidVersion, Version
+
+          tag = os.environ["TAG"]
+          raw = tag[1:] if tag.startswith("v") else None
+          try:
+              v = Version(raw) if raw else None
+          except InvalidVersion:
+              v = None
+          if v is None or str(v) != raw or v.local or v.epoch:
+              sys.exit(f"::error::'{tag}' is not v + a normalized PEP 440 version without local or epoch parts")
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0 # setuptools-scm needs tag history
           persist-credentials: false
-
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
 
       - name: Build
         run: uv build
