@@ -215,7 +215,9 @@ jobs:
           call install.bat claude --non-interactive
           if errorlevel 1 ( echo repo-mode install failed & exit /b 1 )
           if not exist "%USERPROFILE%\.arize\harness\pyproject.toml" ( echo no source tree - repo mode did not fetch & exit /b 1 )
-          call "%USERPROFILE%\.arize\harness\install.bat" status --json
+          REM Run from the clone so status imports its code, not this checkout's.
+          cd /d "%USERPROFILE%\.arize\harness"
+          call install.bat status --json
           if errorlevel 1 ( echo status reported unhealthy after repo-mode install & exit /b 1 )
           echo Repo-mode install and status both fine.
           exit /b 0
