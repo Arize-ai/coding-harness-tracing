@@ -133,7 +133,11 @@ def _parse_config(path: Path, text: str) -> object:
     try:
         if path.suffix == ".toml":
             return tomllib.loads(text)
-        return json5.loads(text)
+        try:
+            return json.loads(text)
+        except ValueError:
+            # json5 is far slower; only JSONC (comments, trailing commas) needs it.
+            return json5.loads(text)
     except (tomllib.TOMLDecodeError, ValueError, RecursionError) as e:
         raise _Unparsable(str(e)) from e
 

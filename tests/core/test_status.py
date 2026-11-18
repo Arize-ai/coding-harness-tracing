@@ -249,6 +249,32 @@ class TestRegistrationDetection:
         settings = self._settings(tmp_path, monkeypatch, text)
         assert status_mod._registration_state("devin") == (True, str(settings), None)
 
+    def test_plain_json_never_reaches_json5(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
+
+        def no_json5(text):
+            raise AssertionError("plain JSON reached json5")
+
+        monkeypatch.setattr(status_mod.json5, "loads", no_json5)
+        cmd = "'" + exe.as_posix() + "' hook devin"
+        settings = self._settings(tmp_path, monkeypatch, {"hooks": {"Stop": [{"hooks": [{"command": cmd}]}]}})
+        assert status_mod._registration_state("devin") == (True, str(settings), None)
+
+    def test_jsonc_falls_back_to_json5(self, monkeypatch):
+        from core.setup import status as status_mod
+
+        calls = []
+        real = status_mod.json5.loads
+        monkeypatch.setattr(status_mod.json5, "loads", lambda text: calls.append(text) or real(text))
+        assert status_mod._parse_config(Path("c.json"), '// c\n{"a": [1,],}') == {"a": [1]}
+        assert len(calls) == 1
+
+    def test_unparsable_json_raises_after_both_parsers(self):
+        from core.setup import status as status_mod
+
+        with pytest.raises(status_mod._Unparsable):
+            status_mod._parse_config(Path("c.json"), '{"a": ')
+
     def test_malformed_config_is_not_registered_and_named(self, status_paths, tmp_path, monkeypatch, exe):
         from core.setup import status as status_mod
 
