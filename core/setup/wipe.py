@@ -20,14 +20,30 @@ def _norm(path: Path) -> Path:
         return path.absolute()
 
 
-def _running_package() -> List[Path]:
-    """Paths of the running ``arize-harness``: the binary, or its environment and package."""
+def _package_dir() -> Path:
     import core
 
+    return Path(core.__file__).parent
+
+
+def _source_tree_code(root: Path) -> List[Path]:
+    """The package code in a source checkout at ``root``: its packages, pyproject.toml and build metadata."""
+    if not (root / "pyproject.toml").is_file():
+        return []
+    code = [root / "pyproject.toml"]
+    for child in root.iterdir():
+        if child.is_dir() and ((child / "__init__.py").is_file() or child.suffix in (".egg-info", ".dist-info")):
+            code.append(child)
+    return code
+
+
+def _running_package() -> List[Path]:
+    """Paths of the running ``arize-harness``: the binary, or its environment and code."""
     if is_binary():
         # sys.argv[0] may be a bare name found on PATH; sys.executable is the real path.
         return [_norm(Path(sys.executable))]
-    return [_norm(Path(sys.prefix)), _norm(Path(core.__file__).parent)]
+    package = _package_dir()
+    return [_norm(p) for p in (Path(sys.prefix), package, *_source_tree_code(package.parent))]
 
 
 def _contains(root: Path, path: Path) -> bool:

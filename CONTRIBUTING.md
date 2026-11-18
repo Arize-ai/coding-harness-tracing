@@ -133,7 +133,7 @@ Watch for these:
 - `tracing/<harness>/install.py` owns that harness's install and uninstall flow. Shared installer helpers live in `core/setup/`.
 - Most adapters read metadata from `core.constants.HARNESSES`. Kiro and Devin keep `SERVICE_NAME` and related fields in `tracing/<harness>/constants.py` instead. Copy the pattern the nearest harness already uses.
 - Claude Code's CLI name is `claude`. Its config key and `HARNESS_NAME` are `claude-code`. `install.sh` accepts both spellings in `harness_dir()`, and only `claude` as an install command.
-- Hook processes must stay on the stdlib. `python-dotenv` is the only PyPI dependency, and only `core/setup` imports it.
+- Hook processes must stay on the stdlib. PyPI dependencies (`python-dotenv`, `json5`) are imported only by `core/setup`. A new one must be small, pure Python, with no dependencies of its own; add it to `pyproject.toml` and `uv.lock`, the Windows wheelhouse in `.github/workflows/ci.yml`, and `benchmark/requirements-build.txt`.
 - Python 3.11 is the floor. CI rejects 3.12-only syntax.
 
 ## Add a harness

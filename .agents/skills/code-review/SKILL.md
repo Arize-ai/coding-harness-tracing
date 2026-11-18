@@ -67,7 +67,7 @@ The repo targets `>=3.11`. CI runs on 3.11 through 3.14. Reject any 3.12+ syntax
 
 ### No new runtime dependencies
 
-The only allowed runtime PyPI dependency is `python-dotenv`, imported by the installer in `core/setup` only. Anything imported from hook code under `core/` or `tracing/` must be stdlib. Flag any new entry under `[project] dependencies` in `pyproject.toml` other than `python-dotenv`. New `[project.optional-dependencies] dev = [...]` entries are allowed but should be justified.
+Runtime PyPI dependencies (`python-dotenv`, `json5`) are for `core/setup` only. Anything imported from hook code under `core/` or `tracing/` must be stdlib; flag any third-party import there. Flag a new entry under `[project] dependencies` in `pyproject.toml` unless it is small, pure Python, has no dependencies of its own, and is imported only by `core/setup`. New `[project.optional-dependencies] dev = [...]` entries are allowed but should be justified.
 
 ## Run the Gates
 

@@ -29,6 +29,7 @@ from core.setup import (
     install_skills,
     is_arize_hook_command,
     is_old_venv_hook,
+    is_our_hook_command,
     merge_harness_entry,
     prompt_backend,
     prompt_content_logging,
@@ -60,10 +61,27 @@ _HOOK_EVENTS = (
 # ---------------------------------------------------------------------------
 
 
-def _strip_arize_hooks(data: dict) -> bool:
-    """Remove our hooks from each ``[[hooks.<Event>]]`` group; returns True if anything changed.
+def _expand_home(command: object) -> object:
+    if isinstance(command, str):
+        return os.path.expanduser(command)
+    if isinstance(command, list):
+        return [os.path.expanduser(word) if isinstance(word, str) else word for word in command]
+    return command
 
-    A group is dropped only when removing ours empties it.
+
+def _is_our_flat_entry(entry: object) -> bool:
+    """Whether a ``[[hooks.<Event>]]`` entry with its own ``command`` (the old skill's layout) runs ours."""
+    if not isinstance(entry, dict) or "hooks" in entry or "command" not in entry:
+        return False
+    command = entry["command"]
+    return is_our_hook_command(command, HARNESS_NAME) or is_our_hook_command(_expand_home(command), HARNESS_NAME)
+
+
+def _strip_arize_hooks(data: dict) -> bool:
+    """Remove our hooks from each ``[[hooks.<Event>]]`` entry; returns True if anything changed.
+
+    Handles grouped ``hooks = [...]`` and flat ``command = ...`` entries. A group is dropped only when removing
+    ours empties it.
     """
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
@@ -73,7 +91,7 @@ def _strip_arize_hooks(data: dict) -> bool:
         existing = hooks.get(event)
         if not isinstance(existing, list):
             continue
-        kept = filter_our_nested_hooks(existing, HARNESS_NAME)
+        kept = [entry for entry in filter_our_nested_hooks(existing, HARNESS_NAME) if not _is_our_flat_entry(entry)]
         if kept != existing:
             changed = True
             if kept:

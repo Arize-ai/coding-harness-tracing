@@ -15,9 +15,10 @@ import sys
 import tomllib
 from pathlib import Path
 
+import json5
+
 from core.setup import is_arize_hook_command, is_old_venv_hook
 
-_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 _OLD_NAME = re.compile(r"arize-hook-[a-z]")
 
 
@@ -49,15 +50,12 @@ def main(argv) -> int:
     ours, bad = [], []
     for path in _files(home, cwd):
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if path.suffix == ".toml":
-            found = list(_values(tomllib.loads(text)))
-        else:
-            found = []
-            for literal in _STRING.findall(text):
-                try:
-                    found.append(json.loads(literal))
-                except json.JSONDecodeError:
-                    pass
+        found = []
+        if path.suffix != ".ts":
+            try:
+                found = list(_values(tomllib.loads(text) if path.suffix == ".toml" else json5.loads(text)))
+            except (tomllib.TOMLDecodeError, ValueError) as e:
+                bad.append((path, f"could not parse: {e}"))
         if path.suffix == ".ts":
             binary = re.search(r"function binaryPath\(\): string \{\s*return (\"(?:[^\"\\\\]|\\\\.)*\")", text)
             args = re.search(r"spawn\(binaryPath\(\), (\[[^\]]*\])", text)

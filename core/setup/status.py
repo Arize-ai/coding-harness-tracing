@@ -21,6 +21,8 @@ from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
+import json5
+
 import core.setup as _setup
 from core.config import load_config
 from core.setup import CONFIG_FILE, INSTALL_DIR, is_our_hook_command, registered_command_path
@@ -122,52 +124,46 @@ def _ts_commands(text: str) -> List[object]:
     return []
 
 
-def _json_string_literals(text: str) -> Iterator[str]:
-    """Yield each string literal in JSON / JSONC text, quotes included, skipping comments."""
-    i, n = 0, len(text)
-    while i < n:
-        char = text[i]
-        if char == '"':
-            start = i
-            i += 1
-            while i < n and text[i] != '"':
-                i += 2 if text[i] == "\\" else 1
-            i += 1
-            if i <= n:
-                yield text[start:i]
-        elif text.startswith("//", i):
-            end = text.find("\n", i)
-            i = n if end < 0 else end + 1
-        elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = n if end < 0 else end + 2
-        else:
-            i += 1
+class _Unparsable(Exception):
+    pass
+
+
+def _parse_config(path: Path, text: str) -> object:
+    """Parse a TOML or JSON / JSONC config; raises ``_Unparsable``."""
+    try:
+        if path.suffix == ".toml":
+            return tomllib.loads(text)
+        return json5.loads(text)
+    except (tomllib.TOMLDecodeError, ValueError, RecursionError) as e:
+        raise _Unparsable(str(e)) from e
 
 
 def _file_commands(path: Path) -> List[object]:
-    """Every string (and TOML string list) in ``path`` that could be a hook command.
-
-    JSON is scanned for string literals rather than parsed, so JSONC still works.
-    """
+    """Every string (and string list) in ``path`` that could be a hook command; [] if unreadable."""
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return []
     if path.suffix == ".ts":
         return _ts_commands(text)
-    if path.suffix == ".toml":
-        try:
-            return list(_strings(tomllib.loads(text)))
-        except tomllib.TOMLDecodeError:
-            return []
-    values: List[object] = []
-    for literal in _json_string_literals(text):
-        try:
-            values.append(json.loads(literal))
-        except json.JSONDecodeError:
+    try:
+        return list(_strings(_parse_config(path, text)))
+    except _Unparsable:
+        return []
+
+
+def _unparsable_file(path: Path) -> Optional[str]:
+    """The first config file under ``path`` that cannot be parsed, if any."""
+    for file in _candidate_files(path):
+        if file.suffix == ".ts":
             continue
-    return values
+        try:
+            _parse_config(file, file.read_text(encoding="utf-8", errors="ignore"))
+        except _Unparsable:
+            return str(file)
+        except OSError:
+            continue
+    return None
 
 
 def _candidate_files(path: Path) -> List[Path]:
@@ -226,6 +222,12 @@ def collect_status() -> dict:
             continue
 
         registered, path, missing = _registration_state(name)
+        unparsable = None
+        if registered is False and not missing:
+            unparsable = next(
+                (f for p in _registration_paths(name) if p.exists() and (f := _unparsable_file(p))),
+                None,
+            )
         item = {
             "name": name,
             "project_name": entry.get("project_name") or name,
@@ -235,6 +237,7 @@ def collect_status() -> dict:
             "registered": registered,
             "registration_path": path,
             "missing_command": missing,
+            "unparsable_file": unparsable,
         }
         if entry.get("target") == "arize":
             item["space_id"] = entry.get("space_id")
@@ -304,6 +307,8 @@ def _format_human(status: dict) -> str:
         lines.append(f"    hooks:    {reg}" + (f" ({item['registration_path']})" if item["registration_path"] else ""))
         if item.get("missing_command"):
             lines.append(f"    missing:  {item['missing_command']} does not exist")
+        if item.get("unparsable_file"):
+            lines.append(f"    could not parse {item['unparsable_file']}")
 
     return "\n".join(lines)
 

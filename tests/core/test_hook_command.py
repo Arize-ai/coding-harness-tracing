@@ -740,6 +740,26 @@ class TestCodexForeignNotify:
         assert "Setup complete!" in result.stdout
         assert _snapshot(home) == before
 
+    def test_flat_legacy_hook_entries_are_removed(self, link_home):
+        """The old skill's ``[[hooks.<Event>]]`` entries with their own ``command``."""
+        home, link = link_home
+        _write_creds(home)
+        config = home / ".codex" / "config.toml"
+        config.write_text(
+            f'[[hooks.Stop]]\ncommand = ["{_old(home, "arize-hook-codex-stop")}"]\n'
+            '[[hooks.SessionStart]]\ncommand = ["~/.arize/harness/venv/bin/arize-hook-codex-session"]\n'
+            '[[hooks.Stop]]\ncommand = ["/usr/local/bin/my-stop"]\n'
+        )
+        result = _harness_cli(home, link, "setup", "codex", "--non-interactive")
+        assert result.returncode == 0, result.stdout + result.stderr
+        data = tomllib.loads(config.read_text())
+        assert data["hooks"] == {"Stop": [{"command": ["/usr/local/bin/my-stop"]}]}
+        status = _harness_cli(home, link, "status", "--json")
+        assert status.returncode == 0, status.stdout + status.stderr
+        gone = _harness_cli(home, link, "uninstall", "codex")
+        assert gone.returncode == 0, gone.stdout + gone.stderr
+        assert tomllib.loads(config.read_text()) == {"hooks": {"Stop": [{"command": ["/usr/local/bin/my-stop"]}]}}
+
     def test_old_command_appended_to_the_users_list_is_removed(self, link_home):
         home, link = link_home
         _write_creds(home)
@@ -809,6 +829,25 @@ class TestWipeKeepsRunningPackage:
         wipe.wipe_shared_runtime(keep_running_package=True)
         assert binary.is_file()
         assert sorted(p.name for p in install_dir.iterdir()) == ["bin"]
+
+    def test_source_checkout_at_the_install_root_keeps_its_code(self, install_dir, monkeypatch, tmp_path):
+        from core.setup import wipe
+
+        for package in ("core", "tracing"):
+            (install_dir / package / "__init__.py").parent.mkdir(exist_ok=True)
+            (install_dir / package / "__init__.py").write_text("")
+        (install_dir / "pyproject.toml").write_text('[project]\nname = "coding-harness-tracing"\n')
+        (install_dir / "coding_harness_tracing.egg-info").mkdir()
+        monkeypatch.setattr(wipe, "_package_dir", lambda: install_dir / "core")
+        monkeypatch.setattr(sys, "prefix", str(tmp_path / "elsewhere" / "python"))
+        wipe.wipe_shared_runtime(keep_running_package=True)
+        assert sorted(p.name for p in install_dir.iterdir()) == [
+            "coding_harness_tracing.egg-info",
+            "core",
+            "pyproject.toml",
+            "tracing",
+        ]
+        assert (install_dir / "tracing" / "claude_code").is_dir()
 
     def test_install_scripts_still_remove_the_venv(self, install_dir, monkeypatch):
         from core.setup import wipe

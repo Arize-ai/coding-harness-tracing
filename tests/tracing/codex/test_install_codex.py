@@ -1054,6 +1054,30 @@ class TestTomlApplyRemove:
         self._apply(p)
         assert p.read_text() == first
 
+    @pytest.mark.parametrize("apply", [True, False], ids=["setup", "uninstall"])
+    def test_flat_command_entries(self, fake_home, old_hook, monkeypatch, apply):
+        """Entries with their own ``command``, absolute or ``~/``, are ours; the user's are kept."""
+        monkeypatch.setenv("HOME", str(fake_home))
+        p = fake_home / ".codex" / "config.toml"
+        p.parent.mkdir(parents=True)
+        p.write_text(
+            f'[[hooks.Stop]]\ncommand = ["{old_hook("stop")}"]\n'
+            '[[hooks.SessionStart]]\ncommand = ["~/.arize/harness/venv/bin/arize-hook-codex-session"]\n'
+            '[[hooks.PreToolUse]]\ncommand = ["/x/arize-harness", "hook", "codex", "notify"]\n'
+            '[[hooks.Stop]]\ncommand = ["/usr/local/bin/my-stop"]\n'
+            '[[hooks.Stop]]\ncommand = "/home/me/bin/my-arize-hook-codex-wrapper.sh"\n'
+        )
+        if apply:
+            self._apply(p)
+        else:
+            codex_install._codex_toml_remove(p)
+        assert codex_toml._toml_load_strict(p)["hooks"] == {
+            "Stop": [
+                {"command": ["/usr/local/bin/my-stop"]},
+                {"command": "/home/me/bin/my-arize-hook-codex-wrapper.sh"},
+            ]
+        }
+
     def test_remove_keeps_the_users_hooks_in_a_group_with_ours(self, fake_home, old_hook):
         p = fake_home / ".codex" / "config.toml"
         self._write_mixed_group(p, old_hook)

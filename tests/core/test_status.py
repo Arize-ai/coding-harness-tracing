@@ -238,6 +238,29 @@ class TestRegistrationDetection:
         settings = self._settings(tmp_path, monkeypatch, text)
         assert status_mod._registration_state("devin") == (True, str(settings), None)
 
+    def test_quotes_in_comments_and_trailing_commas(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
+
+        text = (
+            '// my 27" monitor config\n/* " */\n{"hooks": {"Stop": [{"hooks": [{"command": "\''
+            + exe.as_posix()
+            + "' hook devin\",},],},],},}\n"
+        )
+        settings = self._settings(tmp_path, monkeypatch, text)
+        assert status_mod._registration_state("devin") == (True, str(settings), None)
+
+    def test_malformed_config_is_not_registered_and_named(self, status_paths, tmp_path, monkeypatch, exe):
+        from core.setup import status as status_mod
+
+        settings = self._settings(
+            tmp_path, monkeypatch, '{"hooks": {"Stop": [{"command": "\'' + exe.as_posix() + "' hook devin"
+        )
+        status_paths["config_file"].write_text(json.dumps({"harnesses": {"devin": {"project_name": "p"}}}))
+        assert status_mod._registration_state("devin") == (False, str(settings), None)
+        item = status_mod.collect_status()["harnesses"][0]
+        assert item["registered"] is False and item["unparsable_file"] == str(settings)
+        assert f"could not parse {settings}" in status_mod._format_human(status_mod.collect_status())
+
     def test_codex_notify_argv(self, status_paths, tmp_path, monkeypatch, exe):
         from core.setup import status as status_mod
 
