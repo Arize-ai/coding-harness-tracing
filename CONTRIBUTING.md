@@ -126,7 +126,7 @@ Maintainers publish `coding-harness-tracing` to [PyPI](https://pypi.org/project/
 | Workflow | `.github/workflows/publish.yml` |
 | Environment | `pypi` |
 
-A maintainer must approve each run in the `pypi` GitHub environment before it uploads.
+A maintainer must approve each run in the `pypi` GitHub environment before it uploads. The `pypi` environment must also limit deployment branches to `main`, because the workflow file can be edited on any branch.
 
 Renaming the workflow file or its environment breaks publishing until the PyPI publisher is changed to match.
 
@@ -138,7 +138,7 @@ To release:
    git tag v0.2.0rc1 && git push origin v0.2.0rc1
    ```
 
-2. In GitHub, go to **Actions → Publish to PyPI → Run workflow**, leave "Use workflow from" on `main`, and enter the tag. The workflow builds the tag, runs `twine check`, checks the built version matches the tag, and uploads.
+2. In GitHub, go to **Actions → Publish to PyPI → Run workflow**, leave "Use workflow from" on `main`, and enter the tag. The workflow checks the tag is on main, builds the tag, runs `twine check`, checks the built version matches the tag, and uploads.
 
 Pushing a tag alone publishes nothing. Pre-releases (`aN`, `bN`, `rcN`) and dev releases (`.devN`) install only with `pip install --pre`.
 

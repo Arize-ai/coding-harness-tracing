@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build:
     name: Build
-    # PyPI doesn't check the ref, so only main may publish.
+    # Only catches dispatches from the wrong branch; the pypi environment's branch rule enforces main.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -51,6 +51,11 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0 # setuptools-scm needs tag history
           persist-credentials: false
+
+      - name: Check tag is on main
+        env:
+          TAG: ${{ inputs.tag }}
+        run: git merge-base --is-ancestor HEAD origin/main || { echo "::error::$TAG is not on main"; exit 1; }
 
       - name: Build
         run: uv build
