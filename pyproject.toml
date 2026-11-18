@@ -21,12 +21,8 @@ classifiers = [
     "Topic :: System :: Monitoring",
 ]
 requires-python = ">=3.11"
-# python-dotenv parses the credential file for non-interactive installs. It is
-# the only runtime dependency. Imported by core/setup alone,
-# never by the hooks, so a traced session still runs on the stdlib.
-# TestDotenvResolution verifies the supported python-dotenv behavior independently
-# of which compatible release satisfies this lower bound.
-dependencies = ["python-dotenv>=1.0"]
+# Imported only by core/setup; hooks stay stdlib-only.
+dependencies = ["python-dotenv>=1.0", "json5>=0.17"]
 
 [project.urls]
 Homepage = "https://github.com/Arize-ai/coding-harness-tracing"

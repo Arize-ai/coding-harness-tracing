@@ -3,3 +3,4 @@
 nuitka==4.3
 ordered-set==4.1.0
 python-dotenv==1.2.4
+json5==0.17.3

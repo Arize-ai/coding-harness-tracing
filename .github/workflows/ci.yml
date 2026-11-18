@@ -112,7 +112,7 @@ jobs:
           python -m pip install --isolated --quiet --disable-pip-version-check --no-deps --upgrade "pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
           python -m pip install --quiet wheel
           python -m pip wheel --no-deps -w wheelhouse . || exit /b 1
-          python -m pip download --only-binary :all: --no-deps -d wheelhouse pip==26.2.2 python-dotenv certifi==2026.10.23 || exit /b 1
+          python -m pip download --only-binary :all: --no-deps -d wheelhouse pip==26.2.2 python-dotenv json5 certifi==2026.10.23 || exit /b 1
           dir /b wheelhouse
 
       # USERPROFILE is what install.bat derives INSTALL_DIR from, so pointing it
@@ -215,7 +215,9 @@ jobs:
           call install.bat claude --non-interactive
           if errorlevel 1 ( echo repo-mode install failed & exit /b 1 )
           if not exist "%USERPROFILE%\.arize\harness\pyproject.toml" ( echo no source tree - repo mode did not fetch & exit /b 1 )
-          call "%USERPROFILE%\.arize\harness\install.bat" status --json
+          REM Run from the clone so status imports its code, not this checkout's.
+          cd /d "%USERPROFILE%\.arize\harness"
+          call install.bat status --json
           if errorlevel 1 ( echo status reported unhealthy after repo-mode install & exit /b 1 )
           echo Repo-mode install and status both fine.
           exit /b 0

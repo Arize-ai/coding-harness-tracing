@@ -152,7 +152,7 @@ To uninstall:
 ./install.sh uninstall antigravity
 ```
 
-The installer registers a top-level `"arize-tracing"` block in `~/.gemini/config/hooks.json` with handlers for the `PreInvocation` and `Stop` events, each pointing at the absolute venv binary path (e.g., `~/.arize/harness/venv/bin/arize-hook-antigravity-stop`).
+The installer registers a top-level `"arize-tracing"` block in `~/.gemini/config/hooks.json` with handlers for the `PreInvocation` and `Stop` events, each running `'<path>' hook antigravity <event>`, where `<path>` is the `arize-harness` that ran setup (e.g., `'/home/you/.local/bin/arize-harness' hook antigravity stop`).
 
 ### Validate
 
@@ -162,7 +162,7 @@ The installer registers a top-level `"arize-tracing"` block in `~/.gemini/config
 4. **Quick dry-run test** (optional):
    ```bash
    echo '{"conversationId":"test","workspacePaths":["/tmp"],"transcriptPath":"/tmp/transcript.jsonl"}' \
-     | ARIZE_DRY_RUN=true arize-hook-antigravity-stop
+     | ARIZE_DRY_RUN=true arize-harness hook antigravity stop
    ```
 
 ### Confirm
@@ -207,7 +207,7 @@ Common issues and fixes for Antigravity:
 | Problem | Fix |
 |---------|-----|
 | Traces not appearing | Verify config exists: `cat ~/.arize/harness/config.json`. Check hook log: `tail -20 ~/.arize/harness/logs/antigravity.log` |
-| Hooks not firing | Verify `~/.gemini/config/hooks.json` contains a top-level `"arize-tracing"` block with `PreInvocation` and `Stop` entries pointing at absolute venv binary paths |
+| Hooks not firing | Verify `~/.gemini/config/hooks.json` contains a top-level `"arize-tracing"` block with `PreInvocation` and `Stop` entries running `arize-harness hook antigravity <event>` from an `arize-harness` that still exists |
 | Agent loops or won't exit | Check that the Stop handler is printing exactly `{}` on stdout -- a stray `{"decision": "continue"}` will force re-entry. Inspect `~/.arize/harness/logs/antigravity.log`. |
 | Config missing | Run `./install.sh antigravity` or create `~/.arize/harness/config.json` manually (include `harnesses.antigravity` section) |
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
