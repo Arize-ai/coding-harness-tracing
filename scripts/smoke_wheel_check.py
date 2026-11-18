@@ -38,8 +38,11 @@ def harnesses() -> int:
     return 0
 
 
-def _values(name: str) -> list[tuple[Path, list[object]]]:
-    """``(file, values)`` for each file holding ``name``'s hook entries, plus Claude's plugin hooks."""
+def _values(name: str) -> list[tuple[Path, list[object] | None]]:
+    """``(file, values)`` for each file holding ``name``'s hook entries, plus Claude's plugin hooks.
+
+    ``values`` is None for a file that can't be read or parsed.
+    """
     from core.setup.assets import claude_plugin_dir
     from core.setup.status import registration_values
 
@@ -50,7 +53,13 @@ def _values(name: str) -> list[tuple[Path, list[object]]]:
 def _ours(name: str) -> list[tuple[Path, object]]:
     from core.setup import is_our_hook_command
 
-    return [(file, value) for file, values in _values(name) for value in values if is_our_hook_command(value, name)]
+    return [
+        (file, value) for file, values in _values(name) for value in values or [] if is_our_hook_command(value, name)
+    ]
+
+
+def _unparsable(name: str) -> list[str]:
+    return [f"{name}: {file}: cannot parse" for file, values in _values(name) if values is None]
 
 
 def _venv_forms() -> list[str]:
@@ -72,7 +81,10 @@ def entries(command: str, names: list[str]) -> int:
     forms = _venv_forms()
     problems = []
     for name in names:
+        problems += _unparsable(name)
         for file, values in _values(name):
+            if values is None:
+                continue
             # Every value, not only our entries. TOML yields an argv list and its strings; report each once.
             strings = {w for v in values for w in (v if isinstance(v, list) else [v])}
             bad = [f"{name}: {file}: names a venv path: {w!r}" for w in sorted(strings) if _names_venv(w, forms)]
@@ -94,7 +106,9 @@ def entries(command: str, names: list[str]) -> int:
 
 
 def no_entries(names: list[str]) -> int:
-    return _fail([f"{name}: {file}: entry left: {value!r}" for name in names for file, value in _ours(name)])
+    problems = [p for name in names for p in _unparsable(name)]
+    problems += [f"{name}: {file}: entry left: {value!r}" for name in names for file, value in _ours(name)]
+    return _fail(problems)
 
 
 def hook_list(output: Path, names: list[str]) -> int:

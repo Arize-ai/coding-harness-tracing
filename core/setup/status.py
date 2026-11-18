@@ -142,18 +142,23 @@ def _parse_config(path: Path, text: str) -> object:
         raise _Unparsable(str(e)) from e
 
 
-def _file_commands(path: Path) -> List[object]:
-    """Every string (and string list) in ``path`` that could be a hook command; [] if unreadable."""
+def _config_values(path: Path) -> Optional[List[object]]:
+    """Every string (and string list) in ``path`` that could be a hook command; None if unreadable or unparsable."""
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return []
+        return None
     if path.suffix == ".ts":
         return _ts_commands(text)
     try:
         return list(_strings(_parse_config(path, text)))
     except _Unparsable:
-        return []
+        return None
+
+
+def _file_commands(path: Path) -> List[object]:
+    """``_config_values``, with [] for a file that can't be read or parsed."""
+    return _config_values(path) or []
 
 
 def _unparsable_file(path: Path) -> Optional[str]:
@@ -176,10 +181,13 @@ def _candidate_files(path: Path) -> List[Path]:
     return [path] if path.is_file() else []
 
 
-def registration_values(harness: str, extra: Sequence[Path] = ()) -> List[Tuple[Path, List[object]]]:
-    """``(file, values)`` for each registration file of ``harness`` and each file under ``extra``, as status reads."""
+def registration_values(harness: str, extra: Sequence[Path] = ()) -> List[Tuple[Path, Optional[List[object]]]]:
+    """``(file, values)`` for each registration file of ``harness`` and each file under ``extra``, as status reads.
+
+    ``values`` is None for a file that can't be read or parsed.
+    """
     paths = [*_registration_paths(harness), *extra]
-    return [(file, _file_commands(file)) for path in paths for file in _candidate_files(path)]
+    return [(file, _config_values(file)) for path in paths for file in _candidate_files(path)]
 
 
 def _our_commands(harness: str, path: Path) -> List[Tuple[Path, str]]:

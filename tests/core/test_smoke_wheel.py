@@ -205,6 +205,14 @@ def _claude_settings(home: Path, *commands: str) -> None:
     settings.write_text(json.dumps({"hooks": {"Stop": hooks}}))
 
 
+def _truncated_claude_settings(home: Path) -> Path:
+    """Claude's settings.json holding our entry, missing its final ``}``."""
+    _claude_settings(home, f"'{COMMAND}' hook claude stop")
+    settings = home / ".claude" / "settings.json"
+    settings.write_text(settings.read_text()[:-1])
+    return settings
+
+
 def _claude_plugin_hooks(home: Path, *commands: str) -> Path:
     hooks_json = home / ".arize" / "harness" / "claude_plugin" / "hooks" / "hooks.json"
     hooks_json.parent.mkdir(parents=True, exist_ok=True)
@@ -308,6 +316,29 @@ class TestChecker:
     def test_no_entries_ignores_the_users_hooks(self, tmp_path):
         _claude_settings(tmp_path, "echo mine")
         assert _check(tmp_path, tmp_path, "no-entries", "claude-code").returncode == 0
+
+    def test_no_entries_fails_on_an_unparsable_file_holding_our_entry(self, tmp_path):
+        settings = _truncated_claude_settings(tmp_path)
+        result = _check(tmp_path, tmp_path, "no-entries", "claude-code")
+        assert result.returncode == 1
+        assert f"claude-code: {settings}: cannot parse" in result.stderr
+
+    def test_entries_fail_on_an_unparsable_file(self, tmp_path):
+        settings = _truncated_claude_settings(tmp_path)
+        _claude_plugin_hooks(tmp_path, f"'{COMMAND}' hook claude stop")
+        result = _check(tmp_path, tmp_path, "entries", COMMAND, "claude-code")
+        assert result.returncode == 1
+        assert f"claude-code: {settings}: cannot parse" in result.stderr
+
+    def test_registration_values_marks_an_unparsable_file(self, tmp_path, monkeypatch):
+        from core.setup import status
+
+        monkeypatch.setattr(status, "_registration_paths", lambda harness: [])
+        (tmp_path / "bad.json").write_text('{"hooks": {')
+        (tmp_path / "good.json").write_text('{"command": "x"}')
+        values = dict(status.registration_values("claude-code", [tmp_path]))
+        assert values == {tmp_path / "bad.json": None, tmp_path / "good.json": ["x"]}
+        assert status._file_commands(tmp_path / "bad.json") == []
 
     def test_same_fails_on_a_changed_file(self, tmp_path):
         tree = tmp_path / "tree"
