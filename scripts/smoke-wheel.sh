@@ -4,7 +4,7 @@
 #
 #   scripts/smoke-wheel.sh <wheel> [<dependency wheel dir>]
 #
-# A dependency wheel dir (holding python-dotenv) means no network. Exits 0 when
+# A dependency wheel dir (holding python-dotenv and json5) means no network. Exits 0 when
 # every check passes, 1 naming each failed harness and check, 2 on bad arguments.
 #
 #   UV_PYTHON=3.11  install with this Python
@@ -42,8 +42,10 @@ version="${version%%-*}"
 
 command -v uv >/dev/null || die "uv not found on PATH. Install it: https://docs.astral.sh/uv/"
 if [[ -n "$deps" ]]; then
-    compgen -G "$deps/python_dotenv-*.whl" >/dev/null ||
-        die "dependency wheel dir $deps has no python-dotenv wheel"
+    for dep in python_dotenv json5; do
+        compgen -G "$deps/$dep-*.whl" >/dev/null ||
+            die "dependency wheel dir $deps has no ${dep//_/-} wheel"
+    done
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/smoke-wheel.XXXXXX")"
@@ -78,10 +80,10 @@ offline=()
 
 printf '%s\n' ARIZE_API_KEY=ci-not-a-real-key ARIZE_SPACE_ID=ci-space > "$work/creds.env"
 
-# The checks import this checkout's core, which needs python-dotenv.
+# The checks import this checkout's core, so they need its dependencies.
 uv venv --quiet --python "$py" "$work/checker" || die "could not create the checker venv"
-uv pip install --quiet --python "$work/checker/bin/python" ${offline[@]+"${offline[@]}"} python-dotenv ||
-    die "could not install python-dotenv for the checks"
+uv pip install --quiet --python "$work/checker/bin/python" ${offline[@]+"${offline[@]}"} -r "$ROOT/pyproject.toml" ||
+    die "could not install the checkout's dependencies for the checks"
 check() { "$work/checker/bin/python" -I -B "$ROOT/scripts/smoke_wheel_check.py" "$@"; }
 
 read -r -a HARNESSES <<< "$(check harnesses)"

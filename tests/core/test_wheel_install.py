@@ -1,6 +1,6 @@
 """Slow: build the wheel, install it with ``uv tool install``, and set up every harness.
 
-Runs offline: python-dotenv's wheel is rebuilt from this environment's copy.
+Runs offline: each runtime dependency's wheel is rebuilt from this environment's copy.
 """
 
 from __future__ import annotations
@@ -37,10 +37,10 @@ def _run(cmd, cwd: Path, env: dict | None = None, check: bool = True) -> subproc
     return result
 
 
-def _dotenv_wheel(out: Path) -> None:
-    """A wheel of the python-dotenv installed here (its files plus a fresh RECORD)."""
-    dist = importlib.metadata.distribution("python-dotenv")
-    name = f"python_dotenv-{dist.version}"
+def _dist_wheel(project: str, out: Path) -> None:
+    """A wheel of ``project`` as installed here (its files plus a fresh RECORD)."""
+    dist = importlib.metadata.distribution(project)
+    name = f"{project.replace('-', '_')}-{dist.version}"
     records = []
     with zipfile.ZipFile(out / f"{name}-py3-none-any.whl", "w") as whl:
         for f in dist.files or []:
@@ -57,7 +57,7 @@ def _dotenv_wheel(out: Path) -> None:
 
 @pytest.fixture(scope="module")
 def wheel_dir(tmp_path_factory) -> Path:
-    """This checkout's tracked files, built into a wheel, next to a python-dotenv wheel."""
+    """This checkout's tracked files, built into a wheel, next to its runtime dependencies' wheels."""
     src = tmp_path_factory.mktemp("src") / "repo"
     files = _run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], REPO_ROOT).stdout
     for name in filter(None, files.split("\0")):
@@ -72,7 +72,8 @@ def wheel_dir(tmp_path_factory) -> Path:
     out = tmp_path_factory.mktemp("wheels")
     env = dict(os.environ, SETUPTOOLS_SCM_PRETEND_VERSION="9.9.9")
     _run(["uv", "build", "--quiet", "--wheel", "--out-dir", str(out), str(src)], src, env)
-    _dotenv_wheel(out)
+    for project in ("python-dotenv", "json5"):
+        _dist_wheel(project, out)
     return out
 
 

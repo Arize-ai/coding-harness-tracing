@@ -104,6 +104,17 @@ class TestBadInput:
         assert result.returncode == 1
         assert "no python-dotenv wheel" in result.stderr
 
+    @needs_uv
+    def test_dependency_dir_without_json5(self, tmp_path):
+        wheel = tmp_path / "x-1-py3-none-any.whl"
+        wheel.write_bytes(b"")
+        deps = tmp_path / "deps"
+        deps.mkdir()
+        (deps / "python_dotenv-1.0.0-py3-none-any.whl").write_bytes(b"")
+        result = _smoke(wheel, deps)
+        assert result.returncode == 1
+        assert "no json5 wheel" in result.stderr
+
     def test_no_uv_on_path(self, tmp_path):
         wheel = tmp_path / "x-1-py3-none-any.whl"
         wheel.write_bytes(b"")
@@ -404,11 +415,12 @@ def _patched(wheel: Path, out_dir: Path, drop: str | None = None, replace: dict 
 class TestAgainstWheels:
     @pytest.fixture(scope="class")
     def built(self, wheel_dir, tmp_path_factory):  # noqa: F811
-        """(this checkout's wheel, a dir holding only python-dotenv's wheel)."""
+        """(this checkout's wheel, a dir holding only its dependencies' wheels)."""
         (wheel,) = wheel_dir.glob("coding_harness_tracing-*.whl")
         deps = tmp_path_factory.mktemp("deps")
-        for dotenv in wheel_dir.glob("python_dotenv-*.whl"):
-            shutil.copy2(dotenv, deps)
+        for dep in wheel_dir.glob("*.whl"):
+            if dep != wheel:
+                shutil.copy2(dep, deps)
         return wheel, deps
 
     def test_passes_on_this_checkout(self, built):
