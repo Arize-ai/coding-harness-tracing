@@ -12,12 +12,10 @@ from __future__ import annotations
 import json
 import re
 import sys
-import tomllib
 from pathlib import Path
 
-import json5
-
 from core.setup import is_arize_hook_command, is_old_venv_hook
+from core.setup.status import _parse_config, _Unparsable
 
 _OLD_NAME = re.compile(r"arize-hook-[a-z]")
 
@@ -53,8 +51,8 @@ def main(argv) -> int:
         found = []
         if path.suffix != ".ts":
             try:
-                found = list(_values(tomllib.loads(text) if path.suffix == ".toml" else json5.loads(text)))
-            except (tomllib.TOMLDecodeError, ValueError) as e:
+                found = list(_values(_parse_config(path, text)))
+            except _Unparsable as e:
                 bad.append((path, f"could not parse: {e}"))
         if path.suffix == ".ts":
             binary = re.search(r"function binaryPath\(\): string \{\s*return (\"(?:[^\"\\\\]|\\\\.)*\")", text)
