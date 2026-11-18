@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 from core.config import get_value, load_config
 from core.setup import (
@@ -24,6 +25,8 @@ from core.setup import (
     ensure_harness_installed,
     ensure_shared_runtime,
     err,
+    filter_our_nested_hooks,
+    hook_command_for,
     info,
     install_skills,
     merge_harness_entry,
@@ -33,7 +36,6 @@ from core.setup import (
     prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    venv_bin,
     write_config,
     write_logging_config,
 )
@@ -217,18 +219,26 @@ def _register_hooks() -> None:
     """
     config = _load_config()
     original = json.dumps(config, sort_keys=True)
-    hook_cmd = str(venv_bin(HOOK_BIN_NAME))
+    hook_cmd = hook_command_for(HARNESS_NAME, HOOK_BIN_NAME)
 
     hooks = config.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         hooks = {}
         config["hooks"] = hooks
 
+    # Clear our old entries from events we no longer register.
+    for event in list(hooks):
+        if event not in HOOK_EVENT_NAMES and isinstance(hooks[event], list):
+            hooks[event] = _without_our_hooks(hooks[event], keep=None)
+            if not hooks[event]:
+                del hooks[event]
+
     for event in HOOK_EVENT_NAMES:
         event_list = hooks.setdefault(event, [])
         if not isinstance(event_list, list):
             event_list = []
             hooks[event] = event_list
+        event_list[:] = _without_our_hooks(event_list, keep=hook_cmd)
         if not any(_matcher_has_command(matcher, hook_cmd) for matcher in event_list):
             event_list.append(_hook_entry(hook_cmd))
 
@@ -261,13 +271,12 @@ def _unregister_hooks() -> None:
     if not isinstance(hooks, dict):
         return
 
-    hook_cmd = str(venv_bin(HOOK_BIN_NAME))
     changed = False
-    for event in HOOK_EVENT_NAMES:
+    for event in list(hooks):
         event_list = hooks.get(event)
         if not isinstance(event_list, list):
             continue
-        filtered = [matcher for matcher in event_list if not _matcher_has_command(matcher, hook_cmd)]
+        filtered = _without_our_hooks(event_list, keep=None)
         if filtered == event_list:
             continue  # our command wasn't present in this event
         changed = True
@@ -285,6 +294,10 @@ def _unregister_hooks() -> None:
         return
     _save_config(config)
     info(f"Cleaned tracing hooks from {CONFIG_FILE}")
+
+
+def _without_our_hooks(event_list: list, keep: Optional[str]) -> list:
+    return filter_our_nested_hooks(event_list, HARNESS_NAME, keep=keep)
 
 
 def _matcher_has_command(matcher: object, hook_cmd: str) -> bool:

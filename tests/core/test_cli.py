@@ -522,6 +522,7 @@ class TestStartupImports:
         modules = _modules_loaded_by(["hook", "--list"], "", tmp_path)
         assert not {m for m in modules if m.startswith("tracing")}
         assert "dotenv" not in modules
+        assert "json5" not in modules
         assert "core.setup" not in modules
 
     def test_dispatch_error_imports_no_harness_and_no_common(self, tmp_path) -> None:
@@ -529,6 +530,7 @@ class TestStartupImports:
         assert not {m for m in modules if m.startswith("tracing")}
         assert "core.common" not in modules
         assert "dotenv" not in modules
+        assert "json5" not in modules
 
     def test_claude_hook_imports_only_claude(self, tmp_path) -> None:
         payload = {"session_id": "s1", "cwd": str(tmp_path), "hook_event_name": "Stop"}
@@ -536,6 +538,7 @@ class TestStartupImports:
         assert "tracing.claude_code.hooks.handlers" in modules
         assert _other_harness_modules(modules, "claude_code") == set()
         assert "dotenv" not in modules
+        assert "json5" not in modules
         assert "core.setup" not in modules
 
     def test_gemini_hook_imports_only_gemini(self, tmp_path) -> None:
@@ -543,3 +546,4 @@ class TestStartupImports:
         assert "tracing.gemini.hooks.handlers" in modules
         assert _other_harness_modules(modules, "gemini") == set()
         assert "dotenv" not in modules
+        assert "json5" not in modules
