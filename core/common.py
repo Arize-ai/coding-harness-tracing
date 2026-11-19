@@ -794,27 +794,49 @@ class FileLock:
             self._release_mkdir()
 
     def _acquire_fcntl(self) -> None:
-        self._fd = open(self.lock_path, "w")
+        fd = open(self.lock_path, "w")
         deadline = time.monotonic() + self.timeout
+        broken = False
         while True:
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except (OSError, BlockingIOError):
                 if time.monotonic() >= deadline:
-                    self._fd.close()
-                    self._fd = None
-                    if not self.break_on_timeout:
+                    if broken or not self.break_on_timeout:
+                        fd.close()
                         raise TimeoutError(f"timed out acquiring lock: {self.lock_path}")
-                    # Force-acquire: remove and reopen the lock inode.
-                    try:
-                        self.lock_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                    self._fd = open(self.lock_path, "w")
-                    fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    return
-                time.sleep(0.1)
+                    # Force-acquire: replace the lock inode, unless another
+                    # waiter already did, then wait on the new inode for one
+                    # more timeout. Several waiters time out together under
+                    # parallel hooks, so losing this race must not raise.
+                    if self._holds_current_inode(fd):
+                        try:
+                            self.lock_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    fd.close()
+                    fd = open(self.lock_path, "w")
+                    broken = True
+                    deadline = time.monotonic() + self.timeout
+                    continue
+                # Waiters that broke the lock together poll in step; a short
+                # interval lets each of them through within the second window.
+                time.sleep(0.01 if broken else 0.1)
+                continue
+            if self._holds_current_inode(fd):
+                self._fd = fd
+                return
+            # The lock file was replaced while we waited on the old inode, so
+            # this lock excludes nobody. Drop it and wait on the current file.
+            fd.close()
+            fd = open(self.lock_path, "w")
+
+    def _holds_current_inode(self, fd: IO[str]) -> bool:
+        """True if ``fd`` is the file that ``lock_path`` names right now."""
+        try:
+            return os.path.samestat(os.fstat(fd.fileno()), os.stat(self.lock_path))
+        except OSError:
+            return False
 
     def _release_fcntl(self) -> None:
         if self._fd is not None:
