@@ -1,0 +1,95 @@
+# PyPI trusted publisher binding: Arize-ai/coding-harness-tracing, this file (publish.yml), environment pypi.
+# Renaming this file or the environment breaks publishing until the PyPI publisher is updated to match.
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, e.g. v0.2.0rc1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    # Only catches dispatches from the wrong branch; the pypi environment's branch rule enforces main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+
+      - name: Validate tag
+        env:
+          TAG: ${{ inputs.tag }}
+        shell: uv run --no-project --with packaging python {0}
+        run: |
+          # Non-normalized forms (RC1, -rc1, .rc1) would build a differently named dist and fail the version check.
+          import os, sys
+          from packaging.version import InvalidVersion, Version
+
+          tag = os.environ["TAG"]
+          raw = tag[1:] if tag.startswith("v") else None
+          try:
+              v = Version(raw) if raw else None
+          except InvalidVersion:
+              v = None
+          if v is None or str(v) != raw or v.local or v.epoch:
+              sys.exit(f"::error::'{tag}' is not v + a normalized PEP 440 version without local or epoch parts")
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0 # setuptools-scm needs tag history
+          persist-credentials: false
+
+      - name: Check tag is on main
+        env:
+          TAG: ${{ inputs.tag }}
+        run: git merge-base --is-ancestor HEAD origin/main || { echo "::error::$TAG is not on main"; exit 1; }
+
+      - name: Build
+        run: uv build
+
+      - name: Check distributions
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          uvx twine check --strict dist/*
+          expected="${TAG#v}"
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              coding_harness_tracing-"$expected"-*.whl|coding_harness_tracing-"$expected".tar.gz) ;;
+              *) echo "::error::$f does not match version $expected"; exit 1 ;;
+            esac
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
