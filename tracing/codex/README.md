@@ -93,7 +93,7 @@ install.bat uninstall codex
 Codex requires explicit user trust for non-managed hooks before they fire. After install, run:
 
 1. `codex` (start a session)
-2. Type `/hooks` and approve each `arize-hook-codex-*` entry.
+2. Type `/hooks` and approve the `arize-harness hook codex` entries.
 
 Without this one-time approval, hooks won't fire and traces will be limited to the `notify`-based fallback (single LLM span per turn, no tool spans).
 
@@ -115,7 +115,7 @@ Errors are always logged. For routine hook activity, add `export ARIZE_VERBOSE=t
 
 ## Troubleshooting
 
-**Hooks not firing.** Run `codex` → `/hooks` and confirm the `arize-hook-codex-*` entries are listed and trusted. If they aren't listed at all, re-run the installer.
+**Hooks not firing.** Run `codex` → `/hooks` and confirm the `arize-harness hook codex` entries are listed and trusted. If they aren't listed at all, re-run the installer.
 
 **No spans appear.** Re-source your shell profile (or open a new terminal) so `~/.codex/arize-env.sh` is loaded. Check `~/.arize/harness/logs/codex.log` for backend/auth errors. Confirm the hooks are trusted via `/hooks`.
 

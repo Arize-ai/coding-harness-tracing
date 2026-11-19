@@ -32,7 +32,7 @@ benchmark/build/universal.sh          # builds/nuitka-universal    ~10 s on top 
 Every build comes from one interpreter, named exactly in `build/common.sh`: uv's
 `cpython-3.12.10-macos-aarch64-none` and `cpython-3.12.10-macos-x86_64-none`, installed with
 `uv python install --managed-python`. The build tools (`requirements-build.txt`: nuitka 4.3,
-ordered-set 4.1.0, python-dotenv 1.2.4, plus this checkout) go into `.workbench/bt-arm64` and
+ordered-set 4.1.0, python-dotenv 1.2.4, json5 0.17.3, plus this checkout) go into `.workbench/bt-arm64` and
 `.workbench/bt-x86_64`, also created with `--managed-python`. `BUILDTOOLS=<venv>` uses another
 venv for `nuitka.sh`, which still has to pass the interpreter check below. `universal.sh` needs
 both architectures' venvs, so it stops if `BUILDTOOLS` is set.

@@ -91,6 +91,13 @@ To inspect the install afterwards, set `SMOKE_KEEP=1`. The script then skips the
 SMOKE_KEEP=1 scripts/smoke-install.sh
 ```
 
+To check a built wheel the way PyPI users install it, run the wheel smoke test. It installs the wheel with `uv tool install` and, for every harness in its own throwaway `HOME`, runs setup, status, a second setup and uninstall. Pass a folder holding the `python-dotenv` and `json5` wheels to stay offline. CI's `wheel-smoke` job runs it on Linux and macOS:
+
+```bash
+uv build --wheel --out-dir dist
+scripts/smoke-wheel.sh dist/coding_harness_tracing-*.whl
+```
+
 To run the same smoke test in a clean Linux container, use the container helper. CI's `linux-distro-offline` job runs this same helper, so a failure there reproduces with the same command:
 
 ```bash
@@ -133,7 +140,7 @@ Watch for these:
 - `tracing/<harness>/install.py` owns that harness's install and uninstall flow. Shared installer helpers live in `core/setup/`.
 - Most adapters read metadata from `core.constants.HARNESSES`. Kiro and Devin keep `SERVICE_NAME` and related fields in `tracing/<harness>/constants.py` instead. Copy the pattern the nearest harness already uses.
 - Claude Code's CLI name is `claude`. Its config key and `HARNESS_NAME` are `claude-code`. `install.sh` accepts both spellings in `harness_dir()`, and only `claude` as an install command.
-- Hook processes must stay on the stdlib. `python-dotenv` is the only PyPI dependency, and only `core/setup` imports it.
+- Hook processes must stay on the stdlib. PyPI dependencies (`python-dotenv`, `json5`) are imported only by `core/setup`. A new one must be small, pure Python, with no dependencies of its own; add it to `pyproject.toml` and `uv.lock`, the Windows wheelhouse in `.github/workflows/ci.yml`, the dependency check in `scripts/smoke-wheel.sh`, the wheels built in `tests/core/test_wheel_install.py`, and `benchmark/requirements-build.txt`.
 - Python 3.11 is the floor. CI rejects 3.12-only syntax.
 
 ## Add a harness

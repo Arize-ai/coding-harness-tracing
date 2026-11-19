@@ -13,13 +13,20 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
+import re
 import sys
+import tomllib
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, List, Optional, Sequence, Tuple
 
+import json5
+
+import core.setup as _setup
 from core.config import load_config
-from core.setup import CONFIG_FILE, INSTALL_DIR, VENV_DIR
+from core.setup import CONFIG_FILE, INSTALL_DIR, is_our_hook_command, registered_command_path
+from core.setup.runner import arize_harness_path
 
 # Where each harness registers itself, as (module, constant names). Every
 # candidate is checked — a harness may register through any one of them. Kept
@@ -77,77 +84,146 @@ def _registration_paths(harness: str) -> list:
     return paths
 
 
-def _references_install(path: Path) -> bool:
-    """True when `path` points at, or mentions, our install directory.
+# Config files that can hold a registration; directories are scanned one level deep.
+_CONFIG_SUFFIXES = (".json", ".toml", ".ts")
 
-    Every harness wires itself up by writing an absolute path into its own
-    settings/config file, or by linking a plugin out of the install dir — so a
-    mention of INSTALL_DIR is the common signal across all of them.
+# The arize-harness path and hook args in the generated opencode / omp plugin.
+_TS_BINARY = re.compile(r'function binaryPath\(\): string \{\s*return ("(?:[^"\\]|\\.)*");?\s*\}')
+_TS_ARGS = re.compile(r"spawn\(binaryPath\(\), (\[[^\]]*\])")
+# Entry-point names in the plugin older installs copied.
+_TS_OLD_ENTRY = re.compile(r'"(arize-hook-[a-z0-9-]+)(?:\.exe)?"')
 
-    The marker carries a trailing separator so a sibling directory cannot match
-    on prefix: ``~/.arize/harness-old`` is not ``~/.arize/harness``, and
-    reporting a stale install as wired up would be a false positive in the one
-    command whose job is to tell you the truth about that.
 
-    Several spellings of the same marker are accepted, because the file decides
-    how to serialise a path and we only get to read it. On Windows the hook path
-    goes into JSON, which escapes every separator — the file says
-    ``D:\\\\...\\\\harness\\\\`` where the marker says ``D:\\...\\harness\\`` — so
-    matching only the raw form reported every JSON-registered harness as not
-    registered on Windows, while the install had in fact worked. Some tools also
-    write Windows paths with forward slashes.
-    """
-    base = str(INSTALL_DIR).rstrip("/\\")
-    markers = {
-        base + "/",  # POSIX
-        base + "\\",  # Windows, written raw
-        base.replace("\\", "\\\\") + "\\\\",  # Windows inside JSON
-        base.replace("\\", "/") + "/",  # Windows with forward slashes
-    }
+def _strings(value: object) -> Iterator[object]:
+    """Yield every string and every list of strings in a parsed config."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        if value and all(isinstance(item, str) for item in value):
+            yield value
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
 
-    if path.is_symlink():
+
+def _ts_commands(text: str) -> List[object]:
+    """The command the opencode / omp plugin runs: an argv list, or old venv paths."""
+    binary, args = _TS_BINARY.search(text), _TS_ARGS.search(text)
+    if binary and args:
         try:
-            resolved = str(path.resolve())
-            if any(resolved.startswith(m) for m in markers):
-                return True
-        except OSError:
-            return False
+            argv = [json.loads(binary.group(1)), *json.loads(args.group(1))]
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return [argv] if all(isinstance(word, str) for word in argv) else []
+    if '".arize", "harness", "venv"' in text:
+        if os.name == "nt":
+            return [str(_setup.VENV_DIR / "Scripts" / f"{m.group(1)}.exe") for m in _TS_OLD_ENTRY.finditer(text)]
+        return [str(_setup.VENV_DIR / "bin" / m.group(1)) for m in _TS_OLD_ENTRY.finditer(text)]
+    return []
 
-    if path.is_dir():
-        for child in sorted(path.iterdir()):
-            if child.is_file() and _references_install(child):
-                return True
-        return False
 
+class _Unparsable(Exception):
+    pass
+
+
+def _parse_config(path: Path, text: str) -> object:
+    """Parse a TOML or JSON / JSONC config; raises ``_Unparsable``."""
     try:
-        text = path.read_text(errors="ignore")
+        if path.suffix == ".toml":
+            return tomllib.loads(text)
+        try:
+            return json.loads(text)
+        except ValueError:
+            # json5 is far slower; only JSONC (comments, trailing commas) needs it.
+            return json5.loads(text)
+    except (tomllib.TOMLDecodeError, ValueError, RecursionError) as e:
+        raise _Unparsable(str(e)) from e
+
+
+def _config_values(path: Path) -> Optional[List[object]]:
+    """Every string (and string list) in ``path`` that could be a hook command; None if unreadable or unparsable."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return False
-    return any(m in text for m in markers)
+        return None
+    if path.suffix == ".ts":
+        return _ts_commands(text)
+    try:
+        return list(_strings(_parse_config(path, text)))
+    except _Unparsable:
+        return None
+
+
+def _file_commands(path: Path) -> List[object]:
+    """``_config_values``, with [] for a file that can't be read or parsed."""
+    return _config_values(path) or []
+
+
+def _unparsable_file(path: Path) -> Optional[str]:
+    """The first config file under ``path`` that cannot be parsed, if any."""
+    for file in _candidate_files(path):
+        if file.suffix == ".ts":
+            continue
+        try:
+            _parse_config(file, file.read_text(encoding="utf-8", errors="ignore"))
+        except _Unparsable:
+            return str(file)
+        except OSError:
+            continue
+    return None
+
+
+def _candidate_files(path: Path) -> List[Path]:
+    if path.is_dir():
+        return [child for child in sorted(path.iterdir()) if child.is_file() and child.suffix in _CONFIG_SUFFIXES]
+    return [path] if path.is_file() else []
+
+
+def registration_values(harness: str, extra: Sequence[Path] = ()) -> List[Tuple[Path, Optional[List[object]]]]:
+    """``(file, values)`` for each registration file of ``harness`` and each file under ``extra``, as status reads.
+
+    ``values`` is None for a file that can't be read or parsed.
+    """
+    paths = [*_registration_paths(harness), *extra]
+    return [(file, _config_values(file)) for path in paths for file in _candidate_files(path)]
+
+
+def _our_commands(harness: str, path: Path) -> List[Tuple[Path, str]]:
+    """``(file, executable)`` for each of our hook entries under ``path``."""
+    found = []
+    for file in _candidate_files(path):
+        for value in _file_commands(file):
+            if is_our_hook_command(value, harness):
+                executable = registered_command_path(value)
+                if executable:
+                    found.append((file, executable))
+    return found
 
 
 def _registration_state(harness: str) -> tuple:
-    """Return (registered, path) for a harness.
+    """Return (registered, path, missing_command) for a harness.
 
-    Every existing candidate is checked, not just the first: a harness can
-    register through any one of them, so stopping at the first existing path
-    would report a false negative when a later path is the one that matched.
+    Registered means we have at least one hook entry and every one's command exists.
+    ``path`` is the file that decided it. All candidate paths are checked.
 
     ``registered`` is None when we have no way to tell — an unknown harness, or
     one whose constants failed to import. Never guess True.
     """
     paths = _registration_paths(harness)
     if not paths:
-        return (None, None)
+        return (None, None, None)
 
     existing = [path for path in paths if path.exists()]
-    for path in existing:
-        if _references_install(path):
-            return (True, str(path))
-
-    # Nothing references us. Point at what we actually inspected when something
-    # was there, otherwise at where we looked first.
-    return (False, str(existing[0]) if existing else str(paths[0]))
+    found = [entry for path in existing for entry in _our_commands(harness, path)]
+    if not found:
+        # Report the first file we read, or the first place we looked.
+        return (False, str(existing[0]) if existing else str(paths[0]), None)
+    for file, executable in found:
+        if not Path(executable).exists():
+            return (False, str(file), executable)
+    return (True, str(found[0][0]), None)
 
 
 def collect_status() -> dict:
@@ -163,7 +239,13 @@ def collect_status() -> dict:
         if not isinstance(entry, dict):
             continue
 
-        registered, path = _registration_state(name)
+        registered, path, missing = _registration_state(name)
+        unparsable = None
+        if registered is False and not missing:
+            unparsable = next(
+                (f for p in _registration_paths(name) if p.exists() and (f := _unparsable_file(p))),
+                None,
+            )
         item = {
             "name": name,
             "project_name": entry.get("project_name") or name,
@@ -172,6 +254,8 @@ def collect_status() -> dict:
             "api_key_present": bool(entry.get("api_key")),
             "registered": registered,
             "registration_path": path,
+            "missing_command": missing,
+            "unparsable_file": unparsable,
         }
         if entry.get("target") == "arize":
             item["space_id"] = entry.get("space_id")
@@ -183,7 +267,8 @@ def collect_status() -> dict:
 
     return {
         "install_dir": str(INSTALL_DIR),
-        "installed": VENV_DIR.exists(),
+        "installed": INSTALL_DIR.exists(),
+        "arize_harness": str(arize_harness_path()),
         "config_file": str(CONFIG_FILE),
         "config_exists": CONFIG_FILE.exists(),
         "user_id": config.get("user_id") or "",
@@ -238,6 +323,10 @@ def _format_human(status: dict) -> str:
             lines.append(f"    space:    {item['space_id']}")
         lines.append(f"    API key:  {'present' if item['api_key_present'] else 'MISSING'}")
         lines.append(f"    hooks:    {reg}" + (f" ({item['registration_path']})" if item["registration_path"] else ""))
+        if item.get("missing_command"):
+            lines.append(f"    missing:  {item['missing_command']} does not exist")
+        if item.get("unparsable_file"):
+            lines.append(f"    could not parse {item['unparsable_file']}")
 
     return "\n".join(lines)
 

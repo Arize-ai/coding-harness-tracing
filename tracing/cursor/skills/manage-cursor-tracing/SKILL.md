@@ -14,7 +14,7 @@ Configure OpenInference tracing for Cursor IDE sessions to Arize AX (cloud) or P
 1. **First, determine the install type.** Was Arize tracing installed as a **Cursor plugin** (via `/add-plugin` in Cursor 2.5+, which registers hooks automatically), or **manually** by running `install.sh`?
    - If unsure, ask the user directly: "Did you install Arize tracing as a Cursor plugin (via /add-plugin), or by running install.sh?"
    - Heuristic 1: Check Cursor's installed-plugins location for a `cursor-tracing` plugin directory.
-   - Heuristic 2: Check whether `.cursor/hooks.json` already contains `arize-hook-cursor` entries -- if so, this is a manual `install.sh` install; if absent, it's a plugin install (or a fresh setup).
+   - Heuristic 2: Check whether `.cursor/hooks.json` already contains `arize-harness hook cursor` entries -- if so, this is a manual `install.sh` install; if absent, it's a plugin install (or a fresh setup).
    - This branch only matters for the [Activate Cursor hooks](#activate-cursor-hooks) step below. The credentials/config step is identical for both install types.
 
 2. **Do they already have credentials?**
@@ -147,11 +147,11 @@ If the user has a custom OTLP endpoint, set it in `harnesses.cursor.endpoint`.
 
 After saving credentials in the previous step, tell the user to start a new Cursor session -- traces will begin flowing on the next interaction.
 
-> **Warning:** Do NOT manually add `.cursor/hooks.json` entries on top of a plugin install. Cursor will then route each event to the handler twice (once via the plugin and once via your project file), producing duplicate spans for every hook. If the user already has manual `.cursor/hooks.json` entries pointing at `arize-hook-cursor` from a previous `install.sh` setup, remove those entries before relying on the plugin.
+> **Warning:** Do NOT manually add `.cursor/hooks.json` entries on top of a plugin install. Cursor will then route each event to the handler twice (once via the plugin and once via your project file), producing duplicate spans for every hook. If the user already has manual `.cursor/hooks.json` entries pointing at `arize-harness hook cursor` from a previous `install.sh` setup, remove those entries before relying on the plugin.
 
 #### Manual install (`install.sh`)
 
-Cursor uses a `.cursor/hooks.json` file in the project root to route hook events to the handler. All events route to a single `arize-hook-cursor` CLI entry point, which dispatches based on `hook_event_name` in the JSON payload.
+Cursor uses a `.cursor/hooks.json` file in the project root to route hook events to the handler. All events route to a single `arize-harness hook cursor` CLI entry point, which dispatches based on `hook_event_name` in the JSON payload.
 
 Create `.cursor/hooks.json` in the user's project (or merge into it if it already exists):
 
@@ -159,21 +159,21 @@ Create `.cursor/hooks.json` in the user's project (or merge into it if it alread
 {
   "version": 1,
   "hooks": {
-    "sessionStart": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "sessionEnd": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeSubmitPrompt": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterAgentResponse": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterAgentThought": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeShellExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterShellExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeMCPExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterMCPExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeReadFile": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterFileEdit": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "stop": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeTabFileRead": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterTabFileEdit": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "postToolUse": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }]
+    "sessionStart": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "sessionEnd": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeSubmitPrompt": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterAgentResponse": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterAgentThought": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeShellExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterShellExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeMCPExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterMCPExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeReadFile": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterFileEdit": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "stop": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeTabFileRead": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterTabFileEdit": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "postToolUse": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }]
   }
 }
 ```
@@ -264,21 +264,21 @@ When configuring `.cursor/hooks.json` on a manual `install.sh` install, include 
 {
   "version": 1,
   "hooks": {
-    "sessionStart": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "sessionEnd": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeSubmitPrompt": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterAgentResponse": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterAgentThought": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeShellExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterShellExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeMCPExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterMCPExecution": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeReadFile": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterFileEdit": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "stop": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "beforeTabFileRead": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "afterTabFileEdit": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }],
-    "postToolUse": [{ "command": "~/.arize/harness/venv/bin/arize-hook-cursor" }]
+    "sessionStart": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "sessionEnd": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeSubmitPrompt": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterAgentResponse": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterAgentThought": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeShellExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterShellExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeMCPExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterMCPExecution": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeReadFile": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterFileEdit": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "stop": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "beforeTabFileRead": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "afterTabFileEdit": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }],
+    "postToolUse": [{ "command": "'/home/you/.local/bin/arize-harness' hook cursor" }]
   }
 }
 ```
@@ -294,7 +294,7 @@ Common issues and fixes:
 | Phoenix unreachable | Verify Phoenix is running: `curl -sf <endpoint>/v1/traces` |
 | Hooks not firing (manual install) | Verify `.cursor/hooks.json` exists in the project root and paths are correct (use absolute paths) |
 | Hooks not firing (plugin install) | Verify the `cursor-tracing` plugin is enabled in Cursor; start a fresh Cursor session after installation; check `~/.arize/harness/logs/cursor.log` for errors |
-| Duplicate spans / events traced twice | A plugin install plus manual `.cursor/hooks.json` entries pointing at `arize-hook-cursor` will fire each hook twice. Remove the manual entries and keep only one install path. |
+| Duplicate spans / events traced twice | A plugin install plus manual `.cursor/hooks.json` entries pointing at `arize-harness hook cursor` will fire each hook twice. Remove the manual entries and keep only one install path. |
 | Shell/MCP spans missing input | State push failed -- check that `~/.arize/harness/state/cursor/` is writable |
 | Want to test without sending | Set `ARIZE_DRY_RUN=true` env var before launching Cursor |
 | Want verbose logging | Set `ARIZE_VERBOSE=true` env var before launching Cursor |
