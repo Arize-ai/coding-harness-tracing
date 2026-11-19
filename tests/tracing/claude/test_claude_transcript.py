@@ -370,3 +370,90 @@ def test_duplicate_tool_call_id_keeps_first_use_for_result_correlation(tmp_path:
     assert tools[1].status is EventStatus.PENDING
     assert tools[0].event_id != tools[1].event_id
     assert any(item.code == "duplicate_tool_call_id" for item in graph.diagnostics)
+
+
+def test_replayed_request_blobs_are_not_events(tmp_path: Path):
+    # Claude Code 2.1.3xx records the request it replays to the model, with
+    # copies of the earlier tool_use and tool_result blocks.
+    transcript = tmp_path / "replayed-request.jsonl"
+    tool_use = {"type": "tool_use", "id": "call-1", "name": "Read", "input": {"file_path": "hello.py"}}
+    tool_result = {"type": "tool_result", "tool_use_id": "call-1", "content": "SYNTHETIC_TOOL_OK"}
+    rows = [
+        {
+            "type": "assistant",
+            "uuid": "assistant-1",
+            "timestamp": "2026-01-01T12:00:01.000Z",
+            "message": {"id": "message-1", "role": "assistant", "content": [tool_use]},
+        },
+        {
+            "type": "user",
+            "uuid": "result-1",
+            "timestamp": "2026-01-01T12:00:02.000Z",
+            "message": {"role": "user", "content": [tool_result]},
+        },
+        {"type": "api-request-blob", "message": {"role": "assistant", "content": [tool_use]}},
+        {"type": "api-request-blob", "message": {"role": "user", "content": [tool_result]}},
+        {
+            "type": "assistant",
+            "uuid": "assistant-2",
+            "timestamp": "2026-01-01T12:00:03.000Z",
+            "message": {"id": "message-2", "role": "assistant", "content": [{"type": "text", "text": "done"}]},
+        },
+    ]
+    transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    graph = parse_claude_transcript(transcript, _turn())
+
+    tools = _typed(graph.events, ToolEvent)
+    assert [tool.tool_call_id for tool in tools] == ["call-1"]
+    assert tools[0].status == EventStatus.COMPLETED
+    assert [model.source_id for model in _typed(graph.events, ModelCallEvent)] == ["message-1", "message-2"]
+    assert not [d for d in graph.diagnostics if d.code in {"duplicate_tool_call_id", "missing_source_id"}]
+
+
+def test_model_call_starts_at_the_record_that_sent_its_request(tmp_path: Path):
+    # A response is stamped when it arrives; its request left at the previous
+    # conversation record (the prompt, then each tool result).
+    transcript = tmp_path / "model-call-timing.jsonl"
+    rows = [
+        {
+            "type": "user",
+            "uuid": "prompt-1",
+            "timestamp": "2026-01-01T12:00:00.000Z",
+            "message": {"role": "user", "content": "read hello.py"},
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-1",
+            "timestamp": "2026-01-01T12:00:02.000Z",
+            "message": {
+                "id": "message-1",
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "call-1", "name": "Read", "input": {}}],
+            },
+        },
+        {
+            "type": "user",
+            "uuid": "result-1",
+            "timestamp": "2026-01-01T12:00:03.000Z",
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "ok"}]},
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-2",
+            "timestamp": "2026-01-01T12:00:05.000Z",
+            "message": {"id": "message-2", "role": "assistant", "content": [{"type": "text", "text": "done"}]},
+        },
+    ]
+    transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    graph = parse_claude_transcript(transcript, _turn())
+
+    t0 = 1_767_268_800_000
+    calls = _typed(graph.events, ModelCallEvent)
+    assert [(call.started_at_ms, call.ended_at_ms) for call in calls] == [
+        (t0, t0 + 2_000),
+        (t0 + 3_000, t0 + 5_000),
+    ]
+    tool = _typed(graph.events, ToolEvent)[0]
+    assert (tool.started_at_ms, tool.ended_at_ms) == (t0 + 2_000, t0 + 3_000)
