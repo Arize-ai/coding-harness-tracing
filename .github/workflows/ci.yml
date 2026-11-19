@@ -68,6 +68,11 @@ jobs:
           SMOKE_INSTALLER: ${{ matrix.installer }}
         run: scripts/smoke-install.sh ${{ matrix.harness }}
 
+      # scripts/mdm/macos needs stock macOS: /bin/bash 3.2, shasum, unzip.
+      - name: MDM macOS script tests
+        if: runner.os == 'macOS' && matrix.installer == 'install.sh'
+        run: uv run --all-extras pytest tests/mdm_macos
+
   # The PyPI install path: uv tool install of the wheel built here, offline.
   wheel-smoke:
     name: Wheel smoke test (uv tool install, ${{ matrix.os }})
