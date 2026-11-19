@@ -557,13 +557,16 @@ class TestNonInteractive:
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "inherited-project")
         with patch("subprocess.run") as run:
             with patch("builtins.input", return_value="") as read:
-                assert prompt_project_name("claude-code", "arize", {}, "dev@example.com") == "claude-code/dev@example.com"
+                assert (
+                    prompt_project_name("claude-code", "arize", {}, "dev@example.com") == "claude-code/dev@example.com"
+                )
 
         read.assert_called_once_with("Project name [claude-code/dev@example.com]: ")
         run.assert_not_called()
 
     @pytest.mark.parametrize(
-        "harness", ["codex", "claude-code", "devin", "antigravity", "omp", "opencode", "copilot", "cursor", "gemini", "kiro"]
+        "harness",
+        ["codex", "claude-code", "devin", "antigravity", "omp", "opencode", "copilot", "cursor", "gemini", "kiro"],
     )
     @pytest.mark.parametrize("answer", ["", "custom-project"])
     def test_harness_default_can_be_overridden(self, monkeypatch, harness, answer):
