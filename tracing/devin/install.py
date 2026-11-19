@@ -18,9 +18,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from core.config import get_value, load_config
+from core.config import load_config, write_text_if_changed
 from core.setup import (
     INSTALL_DIR,
+    configure_harness_backend,
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
@@ -29,14 +30,9 @@ from core.setup import (
     hook_command_for,
     info,
     install_skills,
-    merge_harness_entry,
-    prompt_backend,
     prompt_content_logging,
-    prompt_project_name,
-    prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    write_config,
     write_logging_config,
 )
 from tracing.devin.constants import (
@@ -73,19 +69,7 @@ def install(with_skills: bool = False) -> None:
         state_dir.mkdir(parents=True, exist_ok=True)
 
     config = load_config()
-    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-    if not isinstance(existing_entry, dict) or "target" not in existing_entry:
-        existing_harnesses = config.get("harnesses") if config else None
-        target, credentials = prompt_backend(existing_harnesses)
-        user_id = prompt_user_id()
-        project_name = prompt_project_name(HARNESS_NAME, target, config, user_id)
-        if not dry_run():
-            write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
-        else:
-            info("would write config.json with backend credentials")
-    else:
-        project_name = prompt_project_name(HARNESS_NAME, existing_entry["target"], config)
-        merge_harness_entry(HARNESS_NAME, project_name)
+    configure_harness_backend(HARNESS_NAME, config)
 
     if (config.get("logging") if config else None) is None:
         logging_block = prompt_content_logging()
@@ -95,7 +79,7 @@ def install(with_skills: bool = False) -> None:
 
     _register_hooks()
 
-    info(f"Devin tracing installed.\n" f"  Hooks registered in: {CONFIG_FILE}\n")
+    info(f"Devin tracing installed.\n  Hooks registered in: {CONFIG_FILE}\n")
 
     # This harness ships no skills yet; only copy if a skills dir exists.
     if with_skills and _skills_dir_exists():
@@ -203,7 +187,7 @@ def _load_config() -> dict:
 
 def _save_config(data: dict) -> None:
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
+    write_text_if_changed(CONFIG_FILE, json.dumps(data, indent=2) + "\n")
 
 
 def _hook_entry(hook_cmd: str) -> dict:

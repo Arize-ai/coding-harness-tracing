@@ -82,12 +82,11 @@ def _mock_prompts(monkeypatch, backend=None):
         backend = PHOENIX_BACKEND
 
     monkeypatch.setattr(
-        claude_install,
-        "prompt_backend",
+        "core.setup.prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(claude_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-    monkeypatch.setattr(claude_install, "prompt_user_id", lambda: "")
+    monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+    monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
     monkeypatch.setattr(
         claude_install, "prompt_content_logging", lambda: {"prompts": True, "tool_details": True, "tool_content": True}
     )
@@ -266,7 +265,7 @@ class TestExistingEntry:
 
         # Mock prompt_project_name to return a new name
         monkeypatch.setattr(
-            claude_install, "prompt_project_name", lambda name, target, config, user_id="": "new-project-name"
+            "core.setup.prompt_project_name", lambda name, target, config, user_id="": "new-project-name"
         )
 
         claude_install.install(with_skills=False)
@@ -309,12 +308,11 @@ class TestCopyFrom:
             "space_id": "codex-space",
         }
         monkeypatch.setattr(
-            claude_install,
-            "prompt_backend",
+            "core.setup.prompt_backend",
             lambda existing_harnesses=None: ("arize", copied_creds),
         )
-        monkeypatch.setattr(claude_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-        monkeypatch.setattr(claude_install, "prompt_user_id", lambda: "")
+        monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+        monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
         monkeypatch.setattr(
             claude_install,
             "prompt_content_logging",

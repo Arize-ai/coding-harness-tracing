@@ -25,7 +25,7 @@ from core.setup import (
     registered_command_path,
     runner,
 )
-from tests.core.test_cli_commands import _home, _write_creds
+from tests.core.test_cli_commands import ARIZE_CREDS, _home, _write_creds
 
 POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="runs the installers against POSIX config paths")
 
@@ -260,6 +260,7 @@ def real_gate(monkeypatch, tmp_path):
     monkeypatch.setattr(install_table, "load", lambda key: Fake)
     monkeypatch.setattr(commands, "_refresh_files", lambda: calls.append("refresh"))
     monkeypatch.setattr(commands, "migrate_yaml_config", lambda: calls.append("migrate"))
+    monkeypatch.setattr(commands, "preflight_backend_replacement", lambda key: None)
     return calls
 
 
@@ -526,7 +527,7 @@ class TestInstallers:
     def test_migrates_old_entries_keeps_others_and_is_idempotent(self, name, link_home):
         home, link = link_home
         harness = HARNESSES[name]
-        _write_creds(home)
+        _write_creds(home, ARIZE_CREDS + "ARIZE_BACKEND=arize\n")
         harness.seed(home, home)
         files = harness.files(home, home)
 
@@ -604,7 +605,7 @@ class TestApostropheInPath:
         link = home / "o'brien" / "bin" / "arize-harness"
         link.parent.mkdir(parents=True)
         link.symlink_to(old_link.resolve())
-        _write_creds(home)
+        _write_creds(home, ARIZE_CREDS + "ARIZE_BACKEND=arize\n")
 
         first = _harness_cli(home, link, "setup", "copilot", "--non-interactive")
         assert first.returncode == 0, first.stdout + first.stderr

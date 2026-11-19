@@ -68,22 +68,20 @@ def _stub_logging_prompts(monkeypatch):
 @pytest.fixture()
 def mock_prompts(monkeypatch):
     """Mock interactive prompts to return phoenix defaults."""
-    monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-    monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
+    monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+    monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
     monkeypatch.setattr(
-        codex_install,
-        "prompt_backend",
+        "core.setup.prompt_backend",
         lambda existing_harnesses=None: PHOENIX_BACKEND,
     )
 
 
 def _mock_prompts_arize(monkeypatch):
     """Mock interactive prompts to return arize defaults."""
-    monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-    monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
+    monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+    monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
     monkeypatch.setattr(
-        codex_install,
-        "prompt_backend",
+        "core.setup.prompt_backend",
         lambda existing_harnesses=None: ARIZE_BACKEND,
     )
 
@@ -321,8 +319,8 @@ class TestInstall:
             )
         )
 
-        monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": "new-name")
-        monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
+        monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": "new-name")
+        monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
 
         codex_install.install()
 
@@ -354,8 +352,11 @@ class TestInstall:
                 }
             )
         )
-        monkeypatch.setattr(codex_install, "prompt_project_name", prompt_project_name)
+        monkeypatch.setattr("core.setup.prompt_project_name", prompt_project_name)
         monkeypatch.setenv("ARIZE_NONINTERACTIVE", "1")
+        monkeypatch.setenv("ARIZE_BACKEND", "arize")
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-existing")
+        monkeypatch.setenv("ARIZE_SPACE_ID", "S123")
         monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
 
         codex_install.install()
@@ -396,9 +397,9 @@ class TestInstall:
                 },
             )
 
-        monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-        monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "")
-        monkeypatch.setattr(codex_install, "prompt_backend", fake_prompt_backend)
+        monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+        monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
+        monkeypatch.setattr("core.setup.prompt_backend", fake_prompt_backend)
 
         codex_install.install()
 
@@ -426,11 +427,10 @@ class TestInstall:
         assert "hooks" not in data
 
     def test_install_with_user_id(self, fake_home, monkeypatch):
-        monkeypatch.setattr(codex_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-        monkeypatch.setattr(codex_install, "prompt_user_id", lambda: "test-user")
+        monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+        monkeypatch.setattr("core.setup.prompt_user_id", lambda: "test-user")
         monkeypatch.setattr(
-            codex_install,
-            "prompt_backend",
+            "core.setup.prompt_backend",
             lambda existing_harnesses=None: PHOENIX_BACKEND,
         )
 

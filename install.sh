@@ -468,6 +468,8 @@ main() {
             # EOFError, so fall back to stored values there — and only there, so an
             # interactive update keeps every prompt it has today.
             [[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1
+            # Re-registering keeps each saved backend; only setup replaces it.
+            export ARIZE_KEEP_SAVED_BACKEND=1
             # A wheel install has no repo to pull and no newer wheel to hand us.
             # Silently converting it to a network install would change how it was
             # installed behind the user's back, so refuse and say who can update.

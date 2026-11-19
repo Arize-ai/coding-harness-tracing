@@ -101,6 +101,8 @@ REM name. With no console to answer on that dies with an EOFError, so fall back
 REM to stored values there — and only there, so an interactive update keeps
 REM every prompt it has today. cmd has no -t test; ask Python instead.
 %FOUND_PYTHON% -c "import sys; sys.exit(0 if sys.stdin.isatty() else 1)" >nul 2>&1 || set "ARIZE_NONINTERACTIVE=1"
+REM Re-registering keeps each saved backend; only setup replaces it.
+set "ARIZE_KEEP_SAVED_BACKEND=1"
 if not defined WHEEL_DIR if not exist "%INSTALL_DIR%\.git" if not exist "%INSTALL_DIR%\pyproject.toml" (
     echo [arize] This looks like an offline install with no source tree to update. >&2
     echo [arize] Re-run the installer that created it, or pass --wheel-dir with a newer wheel. >&2

@@ -170,12 +170,18 @@ def save_manifest(data: dict) -> None:
     """Write the manifest atomically (temp file, then rename)."""
     path = manifest_path()
     data["schema"] = MANIFEST_SCHEMA
+    text = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except (OSError, UnicodeDecodeError):
+        pass
     tmp: Optional[str] = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+            f.write(text)
         os.replace(tmp, path)
         tmp = None
     except OSError as e:
@@ -305,6 +311,8 @@ FileSpec = Tuple[str, Path, str, Optional[Path]]
 
 def _write_bytes(target: Path, data: bytes) -> None:
     try:
+        if not target.is_symlink() and target.is_file() and target.read_bytes() == data:
+            return
         if target.is_symlink() or (target.exists() and not target.is_file()):
             target.unlink()
         target.parent.mkdir(parents=True, exist_ok=True)

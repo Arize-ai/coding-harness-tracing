@@ -27,6 +27,8 @@ from core.setup import (
     info,
     is_harness_installed,
     list_installed_harnesses,
+    non_interactive,
+    preflight_backend_replacement,
     print_color,
 )
 from core.setup.runner import (
@@ -34,8 +36,10 @@ from core.setup.runner import (
     INSTALL_HINT,
     SetupRefused,
     arize_harness_path,
+    is_system_uv_install,
     require_setup_writes,
     setup_write_refusal,
+    system_upgrade_command,
 )
 
 
@@ -77,6 +81,11 @@ def update_hint() -> str:
     reason = setup_write_refusal()
     if reason is None:
         prefix = Path(sys.prefix)
+        if is_system_uv_install():
+            return (
+                f"This is a system-wide uv tool install; update it with `{system_upgrade_command()}`, "
+                "run as root with the same uv environment variables it was installed with."
+            )
         if (prefix / "uv-receipt.toml").is_file():
             return f"This is a uv tool install; update it with `uv tool upgrade {DIST_NAME}`."
         if (prefix / "pipx_metadata.json").is_file():
@@ -130,11 +139,12 @@ def _prompt_harnesses(parser: argparse.ArgumentParser) -> List[str]:
 def _setup_one(key: str, with_skills: bool, backend: Optional[str]) -> bool:
     """Set up one harness; returns False if its hooks could not be registered."""
     header(f"Installing {key} tracing")
+    preflight_backend_replacement(key)
     info("Migrating legacy config.yaml to config.json (if present)...")
     if migrate_yaml_config():
         print("Migrated config.yaml -> config.json")
 
-    if backend:
+    if backend and not non_interactive():
         entry = (load_config().get("harnesses") or {}).get(key)
         if isinstance(entry, dict) and "target" in entry:
             warn(f"{key} is already configured for {entry['target']}; keeping it and ignoring --backend {backend}")
