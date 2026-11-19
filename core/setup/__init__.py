@@ -408,7 +408,7 @@ def prompt_project_name(harness_name: str, target: str, config: dict, user_id: s
             except (OSError, subprocess.SubprocessError):
                 pass
         if email:
-            default = f"harness/{email}"
+            default = f"{harness_name}/{email}"
         else:
             default = harness_name
             info(

@@ -275,7 +275,7 @@ At runtime, project variables override `harnesses.codex.project_name` in `config
 | `ARIZE_OTLP_ENDPOINT` | No | `otlp.arize.com:443` | OTLP gRPC endpoint (on-prem Arize) |
 | `PHOENIX_ENDPOINT` | For Phoenix | `http://localhost:6006` | Phoenix collector URL |
 | `PHOENIX_API_KEY` | No | - | Phoenix API key for auth |
-| `ARIZE_PROJECT_NAME` | No | Saved project | Arize AX runtime override. New installs default to `harness/<email>`, or `codex` if no email is available. |
+| `ARIZE_PROJECT_NAME` | No | Saved project | Arize AX runtime override. New installs default to `<harness>/<email>`, or `codex` if no email is available. |
 | `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | No | Saved project | Phoenix runtime override. New installs default to `codex`. `PHOENIX_PROJECT` wins when both are set. |
 | `ARIZE_USER_ID` | No | - | User ID to attach to all spans as `user.id` attribute |
 | `ARIZE_TRACE_ENABLED` | No | `true` | Enable/disable tracing |
