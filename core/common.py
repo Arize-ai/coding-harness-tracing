@@ -718,18 +718,25 @@ def send_span(span_dict: dict) -> bool:
             payload = _inject_arize_project_name(span_dict, project_name=project)
             payload = _inject_arize_project_type(payload)
 
-            # Normalize endpoint to HTTPS URL for HTTP/JSON transport
+            # Normalize endpoint to HTTPS URL for OTLP/HTTP transport
             if endpoint.startswith("http://") or endpoint.startswith("https://"):
                 url = f"{endpoint.rstrip('/')}/v1/traces"
             else:
                 url = f"https://{endpoint}/v1/traces"
 
+            # Send OTLP/protobuf, not OTLP/JSON. Arize's JSON intake decodes
+            # traceId/spanId as base64 (protobuf-JSON bytes mapping) instead of
+            # the hex the OTLP/JSON spec requires, so every id arrived corrupted
+            # (32-hex trace ids became 48-hex) and spans could never join a trace
+            # started by another OpenTelemetry producer (W3C traceparent hand-off).
+            # The protobuf encoder hex-decodes ids into raw bytes, which is exact.
+            body = otlp_json_to_protobuf(payload)
             headers = {
-                "Content-Type": "application/json",
+                "Content-Type": "application/x-protobuf",
                 "authorization": f"Bearer {api_key}",
                 "space_id": space_id,
             }
-            return _post_otlp(url, json.dumps(payload).encode("utf-8"), headers, "Arize")
+            return _post_otlp(url, body, headers, "Arize")
         else:
             error("No backend configured (set PHOENIX_ENDPOINT or ARIZE_API_KEY+ARIZE_SPACE_ID)")
             return False
