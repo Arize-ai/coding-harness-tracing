@@ -124,7 +124,7 @@ A free-form identifier attached to every span as `user.id`. Useful when multiple
 
 #### 4. Project name
 
-The project that groups spans for this harness. Arize AX defaults to `harness/<email>`, using the first email address found in this order:
+The project that groups spans for this harness. Arize AX defaults to `<harness>/<email>`, using the first email address found in this order:
 
 1. The user ID entered during installation.
 2. `ARIZE_USER_ID`. The file named by `ARIZE_ENV_FILE` takes precedence over the process environment.
@@ -171,7 +171,7 @@ ARIZE_ENV_FILE=~/.arize/onboarding.env ./install.sh claude --non-interactive
 | `ARIZE_API_KEY` + `ARIZE_SPACE_ID` | — | Arize AX credentials. Both required for the Arize backend. |
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | `http://localhost:6006` | Phoenix endpoint and optional API key. |
 | `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. When both are present, or an Arize key appears with only a Phoenix endpoint, the install stops and asks you to set this rather than guess — guessing would discard one backend's credentials. |
-| `ARIZE_PROJECT_NAME` | `harness/<email>` | Arize AX project. Read only from the file named by `ARIZE_ENV_FILE`, before a saved project or generated default. The installer ignores the process environment value. |
+| `ARIZE_PROJECT_NAME` | `<harness>/<email>` | Arize AX project. Read only from the file named by `ARIZE_ENV_FILE`, before a saved project or generated default. The installer ignores the process environment value. |
 | `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | harness name | Phoenix project. Read only from the file named by `ARIZE_ENV_FILE`. `PHOENIX_PROJECT` wins when both are set in that file. The installer ignores process environment values. |
 | `ARIZE_USER_ID` | — | Optional `user.id` on every span. Also an email source for the Arize AX project default when the entered install user ID is blank or is not an email address. |
 | `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
@@ -193,7 +193,7 @@ The API key is never echoed. The installer reports only that it found one and wh
 [arize] Backend: Arize AX at otlp.arize.com:443 (from default)
 [arize]   space ID: my-space (from /path/to/.env)
 [arize]   API key: found (from /path/to/.env)
-[arize] Project name: harness/dev@example.com (from default)
+[arize] Project name: codex/dev@example.com (from default)
 ```
 
 An API key on its own is rejected as ambiguous, since both backends use one.

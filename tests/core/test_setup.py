@@ -557,15 +557,31 @@ class TestNonInteractive:
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "inherited-project")
         with patch("subprocess.run") as run:
             with patch("builtins.input", return_value="") as read:
-                assert prompt_project_name("claude-code", "arize", {}, "dev@example.com") == "harness/dev@example.com"
+                assert (
+                    prompt_project_name("claude-code", "arize", {}, "dev@example.com") == "claude-code/dev@example.com"
+                )
 
-        read.assert_called_once_with("Project name [harness/dev@example.com]: ")
+        read.assert_called_once_with("Project name [claude-code/dev@example.com]: ")
         run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "harness",
+        ["codex", "claude-code", "devin", "antigravity", "omp", "opencode", "copilot", "cursor", "gemini", "kiro"],
+    )
+    @pytest.mark.parametrize("answer", ["", "custom-project"])
+    def test_harness_default_can_be_overridden(self, monkeypatch, harness, answer):
+        from core.setup import prompt_project_name
+
+        monkeypatch.delenv("ARIZE_NONINTERACTIVE")
+        with patch("builtins.input", return_value=answer) as read:
+            result = prompt_project_name(harness, "arize", {}, "dev@example.com")
+        read.assert_called_once_with(f"Project name [{harness}/dev@example.com]: ")
+        assert result == (answer or f"{harness}/dev@example.com")
 
     @pytest.mark.parametrize(
         ("target", "project_key", "fresh_project"),
         [
-            ("arize", "ARIZE_PROJECT_NAME", "harness/dev@example.com"),
+            ("arize", "ARIZE_PROJECT_NAME", "codex/dev@example.com"),
             ("phoenix", "PHOENIX_PROJECT", "codex"),
             ("phoenix", "PHOENIX_PROJECT_NAME", "codex"),
         ],
@@ -609,9 +625,9 @@ class TestNonInteractive:
         [
             (
                 {"harnesses": {"codex": {"user_id": "harness@example.com"}}, "user_id": "global@example.com"},
-                "harness/harness@example.com",
+                "codex/harness@example.com",
             ),
-            ({"user_id": "global@example.com"}, "harness/global@example.com"),
+            ({"user_id": "global@example.com"}, "codex/global@example.com"),
         ],
     )
     def test_project_name_uses_configured_email(self, config, expected):
@@ -626,7 +642,7 @@ class TestNonInteractive:
         completed = MagicMock(returncode=0, stdout="git@example.com\n")
         with patch("subprocess.run", return_value=completed):
             with self._no_prompts():
-                assert prompt_project_name("codex", "arize", {"user_id": "user-123"}) == "harness/git@example.com"
+                assert prompt_project_name("codex", "arize", {"user_id": "user-123"}) == "codex/git@example.com"
 
     @pytest.mark.parametrize(
         ("user_id", "env_user_id", "harness_user_id", "global_user_id", "expected"),
@@ -636,11 +652,11 @@ class TestNonInteractive:
                 "env@example.com",
                 "harness@example.com",
                 "global@example.com",
-                "harness/typed@example.com",
+                "codex/typed@example.com",
             ),
-            ("employee-123", "env@example.com", "harness@example.com", "global@example.com", "harness/env@example.com"),
-            ("", "employee-123", "harness@example.com", "global@example.com", "harness/harness@example.com"),
-            ("", "employee-123", "harness-123", "global@example.com", "harness/global@example.com"),
+            ("employee-123", "env@example.com", "harness@example.com", "global@example.com", "codex/env@example.com"),
+            ("", "employee-123", "harness@example.com", "global@example.com", "codex/harness@example.com"),
+            ("", "employee-123", "harness-123", "global@example.com", "codex/global@example.com"),
         ],
     )
     def test_first_email_identity_skips_non_email_candidates(
@@ -663,8 +679,8 @@ class TestNonInteractive:
         completed = MagicMock(returncode=0, stdout="git@example.com\n")
         with patch("subprocess.run", return_value=completed):
             with self._no_prompts():
-                assert prompt_project_name("codex", "arize", config, "typed-user") == "harness/git@example.com"
-        assert "Project name: harness/git@example.com (from default)" in capsys.readouterr().out
+                assert prompt_project_name("codex", "arize", config, "typed-user") == "codex/git@example.com"
+        assert "Project name: codex/git@example.com (from default)" in capsys.readouterr().out
 
     def test_typed_project_replaces_dotenv_default(self, tmp_path, monkeypatch):
         from core.setup import prompt_project_name
@@ -679,7 +695,7 @@ class TestNonInteractive:
 
         monkeypatch.setenv("PHOENIX_PROJECT", "phoenix-project")
         with self._no_prompts():
-            assert prompt_project_name("codex", "arize", {}, "ax@example.com") == "harness/ax@example.com"
+            assert prompt_project_name("codex", "arize", {}, "ax@example.com") == "codex/ax@example.com"
 
         monkeypatch.delenv("PHOENIX_PROJECT")
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "ax-project")
@@ -1061,8 +1077,8 @@ class TestDotenvResolution:
         ("target", "project_key", "expected"),
         [
             ("phoenix", "ARIZE_PROJECT_NAME", "codex"),
-            ("arize", "PHOENIX_PROJECT", "harness/dev@example.com"),
-            ("arize", "PHOENIX_PROJECT_NAME", "harness/dev@example.com"),
+            ("arize", "PHOENIX_PROJECT", "codex/dev@example.com"),
+            ("arize", "PHOENIX_PROJECT_NAME", "codex/dev@example.com"),
         ],
     )
     def test_other_backend_project_file_is_ignored(self, tmp_path, monkeypatch, capsys, target, project_key, expected):
