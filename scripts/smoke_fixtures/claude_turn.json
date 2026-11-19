@@ -1,0 +1,5 @@
+[
+  {"hook_event_name": "SessionStart", "source": "startup"},
+  {"hook_event_name": "UserPromptSubmit", "prompt": "Say hello."},
+  {"hook_event_name": "Stop", "stop_hook_active": false, "last_assistant_message": "Hello."}
+]
