@@ -79,6 +79,9 @@ call :bootstrap_repo
 if %ERRORLEVEL% neq 0 exit /b 1
 call :setup_venv
 if %ERRORLEVEL% neq 0 exit /b 1
+REM A backend replacement that would fail must fail before the migration writes.
+"%VENV_PYTHON%" -m core.setup preflight "%COMMAND%"
+if errorlevel 1 exit /b 1
 REM Migrate legacy config.yaml -> config.json (no-op if nothing to migrate)
 if exist "%VENV_PYTHON%" "%VENV_PYTHON%" -m core.config migrate
 echo [arize] Running %COMMAND% install...

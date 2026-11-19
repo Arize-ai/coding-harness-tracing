@@ -28,6 +28,7 @@ from core.setup import err as _err
 from core.setup import (
     info,
     install_skills,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -202,10 +203,11 @@ def _unregister_extension() -> None:
 
 def install(with_skills: bool = False) -> None:
     """Install the omp tracing shim and register in config.json."""
+    backend = preflight_backend_replacement(omp_constants.HARNESS_NAME)
     ensure_shared_runtime()
 
     config = load_config()
-    configure_harness_backend(omp_constants.HARNESS_NAME, config)
+    configure_harness_backend(omp_constants.HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:

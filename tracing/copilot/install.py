@@ -25,6 +25,7 @@ from core.setup import (
     hook_command_fields,
     info,
     is_our_hook_command,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -137,11 +138,12 @@ def _uninstall_hooks(hooks_dir: Path) -> None:
 
 def install() -> None:
     """Install Copilot tracing hooks (VS Code + CLI) and register in config.json."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     ensure_shared_runtime()
 
     # If this harness has no backend config yet, prompt; otherwise reuse.
     config = load_config()
-    configure_harness_backend(HARNESS_NAME, config)
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet —
     # subsequent harness installs reuse what the first wizard wrote.

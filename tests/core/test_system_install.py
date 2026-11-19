@@ -221,11 +221,14 @@ TURNS: Dict[str, List[Tuple[Optional[str], dict]]] = {
             },
         )
     ],
-    "opencode": [(None, {"type": "close", "sessionID": "{session}", "directory": "{cwd}", "messages": _OPENCODE_MESSAGES})],
+    "opencode": [
+        (None, {"type": "close", "sessionID": "{session}", "directory": "{cwd}", "messages": _OPENCODE_MESSAGES})
+    ],
     "antigravity": [
         ("stop", {"conversationId": "{session}", "transcriptPath": "{cwd}/transcript.jsonl", "cwd": "{cwd}"}),
     ],
 }
+
 
 def _fill(value, **subs: str):
     if isinstance(value, str):

@@ -139,7 +139,8 @@ def _prompt_harnesses(parser: argparse.ArgumentParser) -> List[str]:
 def _setup_one(key: str, with_skills: bool, backend: Optional[str]) -> bool:
     """Set up one harness; returns False if its hooks could not be registered."""
     header(f"Installing {key} tracing")
-    preflight_backend_replacement(key)
+    # Before the YAML migration below, which writes; the installer resolves it again, with output.
+    preflight_backend_replacement(key, quiet=True)
     info("Migrating legacy config.yaml to config.json (if present)...")
     if migrate_yaml_config():
         print("Migrated config.yaml -> config.json")

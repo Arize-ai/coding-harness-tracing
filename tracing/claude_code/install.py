@@ -18,6 +18,7 @@ from core.setup import (
     info,
     install_skills,
     is_our_hook_command,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -37,6 +38,7 @@ from tracing.claude_code.constants import (
 
 def install(with_skills: bool = False) -> None:
     """Install Claude Code tracing: configure backend, register hooks, optionally copy skills."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -44,7 +46,7 @@ def install(with_skills: bool = False) -> None:
     ensure_shared_runtime()
 
     config = load_config()
-    configure_harness_backend(HARNESS_NAME, config)
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet —
     # subsequent harness installs reuse what the first wizard wrote.

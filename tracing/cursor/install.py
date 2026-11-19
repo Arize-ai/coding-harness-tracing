@@ -16,6 +16,7 @@ from core.setup import (
     hook_command_for,
     info,
     install_skills,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -34,6 +35,7 @@ from tracing.cursor.constants import (
 
 def install(with_skills: bool = False) -> None:
     """Install Cursor tracing: configure backend, register hooks, optionally copy skills."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -49,7 +51,7 @@ def install(with_skills: bool = False) -> None:
 
     # If this harness has no entry yet, prompt for backend; otherwise just update project_name.
     config = load_config()
-    configure_harness_backend(HARNESS_NAME, config)
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet —
     # subsequent harness installs reuse what the first wizard wrote.

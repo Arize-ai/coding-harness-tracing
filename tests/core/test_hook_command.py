@@ -260,7 +260,7 @@ def real_gate(monkeypatch, tmp_path):
     monkeypatch.setattr(install_table, "load", lambda key: Fake)
     monkeypatch.setattr(commands, "_refresh_files", lambda: calls.append("refresh"))
     monkeypatch.setattr(commands, "migrate_yaml_config", lambda: calls.append("migrate"))
-    monkeypatch.setattr(commands, "preflight_backend_replacement", lambda key: None)
+    monkeypatch.setattr(commands, "preflight_backend_replacement", lambda key, quiet=False: None)
     return calls
 
 

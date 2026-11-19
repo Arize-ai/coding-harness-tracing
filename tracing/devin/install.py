@@ -30,6 +30,7 @@ from core.setup import (
     hook_command_for,
     info,
     install_skills,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -55,6 +56,7 @@ HOOK_TIMEOUT = 30
 
 def install(with_skills: bool = False) -> None:
     """Install Devin tracing: configure backend, register the SessionEnd hook."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -69,7 +71,7 @@ def install(with_skills: bool = False) -> None:
         state_dir.mkdir(parents=True, exist_ok=True)
 
     config = load_config()
-    configure_harness_backend(HARNESS_NAME, config)
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     if (config.get("logging") if config else None) is None:
         logging_block = prompt_content_logging()

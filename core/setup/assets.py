@@ -21,6 +21,7 @@ from typing import Callable, ContextManager, Dict, Iterator, List, Optional, Seq
 
 import core
 import core.setup as _setup
+from core.config import holds_text
 from core.setup.runner import arize_harness_path, may_write_setup, ts_argv
 
 MANIFEST_NAME = "manifest.json"
@@ -171,11 +172,8 @@ def save_manifest(data: dict) -> None:
     path = manifest_path()
     data["schema"] = MANIFEST_SCHEMA
     text = json.dumps(data, indent=2, sort_keys=True) + "\n"
-    try:
-        if path.read_text(encoding="utf-8") == text:
-            return
-    except (OSError, UnicodeDecodeError):
-        pass
+    if holds_text(path, text, "utf-8"):
+        return
     tmp: Optional[str] = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

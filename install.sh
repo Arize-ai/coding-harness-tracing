@@ -317,6 +317,8 @@ install_harness() {
     install_repo
     setup_venv "$python_cmd"
     local vp; vp=$(venv_python) || { err "Venv python not found after setup"; exit 1; }
+    # A backend replacement that would fail must fail before the migration writes.
+    "$vp" -m core.setup preflight "$cmd" || exit 1
     info "Migrating legacy config.yaml to config.json (if present)..."
     "$vp" -m core.config migrate || true
     if [[ "$skills" == true ]]; then

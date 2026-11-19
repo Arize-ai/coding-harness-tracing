@@ -99,7 +99,7 @@ def save_config(config, config_path=None):
     """Write config dict to the JSON file with chmod 600, unless it already holds exactly that."""
     path = config_path or CONFIG_FILE
     text = json.dumps(config, indent=2)
-    if _holds_text(path, text):
+    if holds_text(path, text):
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -107,7 +107,8 @@ def save_config(config, config_path=None):
         f.write(text)
 
 
-def _holds_text(path, text, encoding=None):
+def holds_text(path, text, encoding=None):
+    """True if ``path`` already holds exactly ``text``."""
     try:
         with open(path, encoding=encoding) as f:
             return f.read() == text
@@ -117,7 +118,7 @@ def _holds_text(path, text, encoding=None):
 
 def write_text_if_changed(path, text, encoding=None):
     """``path.write_text(text)`` unless the file already holds ``text``; returns whether it wrote."""
-    if _holds_text(path, text, encoding):
+    if holds_text(path, text, encoding):
         return False
     path.write_text(text, encoding=encoding)
     return True

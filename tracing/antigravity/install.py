@@ -24,6 +24,7 @@ from core.setup import err as _err
 from core.setup import (
     hook_command_for,
     info,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -139,10 +140,11 @@ def _uninstall_hooks() -> None:
 
 def install() -> None:
     """Install Antigravity tracing hooks and register in config.json."""
+    backend = preflight_backend_replacement(_c.HARNESS_NAME)
     ensure_shared_runtime()
 
     config = load_config()
-    configure_harness_backend(_c.HARNESS_NAME, config)
+    configure_harness_backend(_c.HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:

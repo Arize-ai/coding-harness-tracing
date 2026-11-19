@@ -32,6 +32,7 @@ from core.setup import (
     is_old_venv_hook,
     is_our_hook_command,
     non_interactive,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -226,6 +227,7 @@ def _is_our_env_file(path: Path) -> bool:
 
 def install(with_skills: bool = False) -> None:
     """Install codex tracing harness (hooks-based v2 layout)."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     codex_home = get_codex_home()
     codex_config_file = codex_home / "config.toml"
     codex_env_file = codex_home / "arize-env.sh"
@@ -245,7 +247,7 @@ def install(with_skills: bool = False) -> None:
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
     if isinstance(existing_entry, dict) and "target" in existing_entry and not non_interactive():
         info(f"Reusing existing backend: {existing_entry.get('target')}")
-    user_id = configure_harness_backend(HARNESS_NAME, config)
+    user_id = configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:

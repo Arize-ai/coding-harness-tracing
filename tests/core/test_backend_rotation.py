@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from core.setup import runner
-from tests.core.test_cli_commands import _cli, _config, _home
+from tests._pyproject import REPO_ROOT
+from tests.core.test_cli_commands import _cli, _config, _home, _run
 
 ARIZE = "ARIZE_BACKEND=arize\nARIZE_API_KEY=key-1\nARIZE_SPACE_ID=space-1\nARIZE_OTLP_ENDPOINT=otlp.test:443\n"
 PHOENIX_KEY_WARNING = (
@@ -120,17 +122,7 @@ def _whole_tree(root: Path) -> dict:
     return out
 
 
-def _fails_and_leaves_home_alone(tmp_path: Path, home: Path, harness: str) -> None:
-    creds = tmp_path / "rotate.env"
-    creds.write_text("ARIZE_API_KEY=key-2\nARIZE_SPACE_ID=space-2\n")
-    before = _whole_tree(home)
-    result = _cli(home, "setup", harness, "-y", ARIZE_ENV_FILE=str(creds))
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "needs ARIZE_BACKEND (or --backend)" in result.stderr
-    assert _whole_tree(home) == before
-
-
-def test_missing_backend_leaves_a_legacy_yaml_home_unchanged(tmp_path):
+def _legacy_yaml_home(tmp_path: Path) -> Path:
     home = _home(tmp_path)
     harness_dir = home / ".arize" / "harness"
     harness_dir.mkdir(parents=True)
@@ -143,25 +135,54 @@ def test_missing_backend_leaves_a_legacy_yaml_home_unchanged(tmp_path):
         "    api_key: key-1\n"
         "    space_id: space-1\n"
     )
-    _fails_and_leaves_home_alone(tmp_path, home, "claude")
+    return home
 
 
-def test_missing_backend_leaves_a_codex_v1_home_unchanged(tmp_path):
+def _codex_v1_home(tmp_path: Path) -> Path:
     home = _home(tmp_path)
     harness_dir = home / ".arize" / "harness"
     (harness_dir / "bin").mkdir(parents=True)
-    (harness_dir / "bin" / "codex").write_text("#!/bin/sh\n# Arize Codex proxy shim\nexec arize-codex-proxy \"$@\"\n")
+    (harness_dir / "bin" / "codex").write_text('#!/bin/sh\n# Arize Codex proxy shim\nexec arize-codex-proxy "$@"\n')
     (harness_dir / "config.json").write_text(
         json.dumps({"harnesses": {"codex": {"project_name": "p", "target": "phoenix", "endpoint": "http://x:6006"}}})
     )
     (home / ".zshrc").write_text(
-        "# >>> arize codex tracing PATH >>>\nexport PATH=\"$HOME/.arize/harness/bin:$PATH\"\n"
+        '# >>> arize codex tracing PATH >>>\nexport PATH="$HOME/.arize/harness/bin:$PATH"\n'
         "# <<< arize codex tracing PATH <<<\n"
     )
     (home / ".codex" / "config.toml").write_text(
         '[otel.exporter.otlp-http]\nendpoint = "http://127.0.0.1:4318/v1/logs"\nprotocol = "json"\n'
     )
-    _fails_and_leaves_home_alone(tmp_path, home, "codex")
+    return home
+
+
+# How each entry point is run: `arize-harness setup -y`, and install.sh/install.bat's two steps.
+ENTRY_POINTS = {
+    "setup": lambda harness, folder: [sys.executable, "-m", "core.cli", "setup", harness, "-y"],
+    "script-preflight": lambda harness, folder: [sys.executable, "-m", "core.setup", "preflight", harness],
+    "install.py": lambda harness, folder: [
+        sys.executable,
+        str(REPO_ROOT / "tracing" / folder / "install.py"),
+        "install",
+    ],
+}
+
+
+@pytest.mark.parametrize("entry", sorted(ENTRY_POINTS))
+@pytest.mark.parametrize(
+    "make_home, harness, folder",
+    [(_legacy_yaml_home, "claude", "claude_code"), (_codex_v1_home, "codex", "codex")],
+    ids=["legacy-yaml", "codex-v1"],
+)
+def test_missing_backend_fails_and_leaves_home_unchanged(tmp_path, make_home, harness, folder, entry):
+    home = make_home(tmp_path)
+    creds = tmp_path / "rotate.env"
+    creds.write_text("ARIZE_API_KEY=key-2\nARIZE_SPACE_ID=space-2\n")
+    before = _whole_tree(home)
+    result = _run(home, ENTRY_POINTS[entry](harness, folder), ARIZE_ENV_FILE=str(creds), ARIZE_NONINTERACTIVE="1")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "needs ARIZE_BACKEND (or --backend)" in result.stderr
+    assert _whole_tree(home) == before
 
 
 def test_phoenix_without_api_key_warns(home):

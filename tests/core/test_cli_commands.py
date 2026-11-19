@@ -372,7 +372,7 @@ def fake_installers(monkeypatch):
     monkeypatch.setattr(install_table, "INSTALLERS", installers)
     monkeypatch.setattr(commands, "migrate_yaml_config", lambda: False)
     monkeypatch.setattr(commands, "load_config", lambda: {})
-    monkeypatch.setattr(commands, "preflight_backend_replacement", lambda key: None)
+    monkeypatch.setattr(commands, "preflight_backend_replacement", lambda key, quiet=False: None)
     return calls
 
 

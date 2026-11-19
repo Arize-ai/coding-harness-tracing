@@ -21,6 +21,7 @@ from core.setup import (
     ensure_shared_runtime,
     info,
     install_skills,
+    preflight_backend_replacement,
     prompt_content_logging,
     remove_harness_entry,
     remove_harness_files,
@@ -91,10 +92,11 @@ def _uninstall_plugin() -> None:
 
 def install(with_skills: bool = False) -> None:
     """Install the opencode plugin shim and register in config.json."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     ensure_shared_runtime()
 
     config = load_config()
-    configure_harness_backend(HARNESS_NAME, config)
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:
