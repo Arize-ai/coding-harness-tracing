@@ -36,10 +36,10 @@ UV_SHA256_AARCH64="743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9c
 # https://github.com/astral-sh/uv/releases/download/0.13.5/uv-x86_64-apple-darwin.tar.gz.sha256
 UV_SHA256_X86_64="b0f52b0e3945b4107d89024ea38e625683011fbfc05a0d98f9fa2d6dcee28c66"
 
-# Harness names setup accepts. copilot is refused separately: its hooks are per repo.
+# Harness names setup accepts, except copilot, whose hooks are per repo.
 SUPPORTED_HARNESSES="claude claude-code codex cursor gemini antigravity opencode omp kiro devin"
 
-# Test seams: tests point these at temp folders. Unset in production.
+# Set only by tests.
 SYSTEM_ROOT="${ARIZE_MDM_SYSTEM_ROOT:-}"
 CREDENTIALS_DIR="${ARIZE_MDM_CREDENTIALS_DIR:-$SYSTEM_ROOT/Library/Application Support/Arize/harness}"
 PLISTBUDDY="${ARIZE_MDM_PLISTBUDDY:-/usr/libexec/PlistBuddy}"
@@ -50,7 +50,7 @@ TOOL_DIR="$ARIZE_DIR/tools"
 PYTHON_DIR="$ARIZE_DIR/python"
 BIN_DIR="$SYSTEM_ROOT/usr/local/bin"
 WHEEL_MARK="$ARIZE_DIR/mdm-wheel.sha256"
-WHEEL_DIR="$ARIZE_DIR/wheel"  # stable path in uv's receipt, so `uv tool upgrade` still finds it
+WHEEL_DIR="$ARIZE_DIR/wheel"  # the wheel uv's receipt points to, for `uv tool upgrade`
 HARNESS_BIN="$BIN_DIR/arize-harness"
 
 log() { echo "arize-mdm: $*"; }
@@ -58,14 +58,14 @@ fail() { log "error: $2" >&2; exit "$1"; }
 
 WORK=""
 COMMITTING=0
-CREATED=""  # paths this run created, removed again if it fails
+CREATED=""  # paths this run created, newest first
 
 cleanup() {
     [ -n "$WORK" ] && rm -rf "$WORK"
     return 0
 }
 
-# Records missing paths, newest first, so rollback removes children before parents.
+# Adds each path that doesn't exist yet to CREATED.
 note_missing() {
     local path
     for path in "$@"; do
@@ -93,7 +93,7 @@ $TOOL_DIR
         [ -n "$path" ] || continue
         case "$path" in
             "$ARIZE_DIR" | "$ARIZE_DIR"/*) rm -rf "$path" ;;
-            # Shared folders (/opt, /usr/local, /usr/local/bin): only if still empty.
+            # Shared folders such as /opt and /usr/local/bin: only if empty.
             *) rmdir "$path" 2>/dev/null ;;
         esac
     done <<EOF_CREATED
@@ -113,7 +113,7 @@ trap on_exit EXIT
 sha256_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 
 # ---------------------------------------------------------------------------
-# Preflight: nothing is changed before every check passes.
+# Preflight: checks every input; changes nothing.
 # ---------------------------------------------------------------------------
 preflight() {
     [ "$(id -u)" = 0 ] || fail 2 "must run as root"
@@ -140,7 +140,6 @@ preflight() {
     done
     set +f
 
-    # A PyPI version would be a third form here.
     case "$PACKAGE_SOURCE" in
         http://* | https://*) PACKAGE_KIND=url ;;
         *://*) fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL or a local wheel path)" ;;
@@ -153,7 +152,7 @@ preflight() {
         x86_64) UV_TARGET=x86_64-apple-darwin; UV_SHA256="$UV_SHA256_X86_64" ;;
         *) fail 2 "unsupported CPU: $(uname -m)" ;;
     esac
-    # Test seam: only with a fake system root and a local uv file.
+    # Checksum override for tests: needs a fake system root and a local uv file.
     if [ -n "$SYSTEM_ROOT" ] && [ "$(cd "$SYSTEM_ROOT" 2>/dev/null && pwd -P)" != / ] \
         && [ -n "$UV_SOURCE" ] && [ -n "${ARIZE_MDM_TEST_UV_SHA256:-}" ]; then
         log "test seam: uv checksum overridden"
@@ -163,7 +162,7 @@ preflight() {
 }
 
 # ---------------------------------------------------------------------------
-# Staging: download and verify into a temp folder, still changing nothing.
+# Staging: downloads and verifies into a temp folder.
 # ---------------------------------------------------------------------------
 stage_uv() {
     local archive="$WORK/uv.tar.gz"
@@ -201,7 +200,7 @@ stage_wheel() {
 }
 
 # ---------------------------------------------------------------------------
-# Install: uv under /opt/arize/bin, then #192's system install.
+# Install: uv into /opt/arize/bin, then arize-harness as a system-wide uv tool.
 # ---------------------------------------------------------------------------
 install_uv() {
     mkdir -p "$ARIZE_DIR/bin" || fail 1 "cannot create $ARIZE_DIR/bin"
@@ -219,10 +218,9 @@ system_install_current() {
     "$HARNESS_BIN" --version >/dev/null 2>&1
 }
 
-# #192's system install of wheel $1.
+# Installs wheel $1 as the system-wide uv tool and checks that it runs.
 uv_tool_install() {
-    # --reinstall so a new wheel with the same version still replaces the old one.
-    # UV_NO_CONFIG: ignore any uv.toml on the machine.
+    # --reinstall replaces an install of the same version; UV_NO_CONFIG ignores uv.toml files.
     (umask 022 && env \
         UV_NO_CONFIG=1 \
         UV_TOOL_DIR="$TOOL_DIR" \
@@ -234,7 +232,7 @@ uv_tool_install() {
         && "$HARNESS_BIN" --version >/dev/null 2>&1
 }
 
-# The wheel the current install came from, saved to $WORK/prev, or nothing.
+# Copies the wheel matching WHEEL_MARK to $WORK/prev and sets PREV_WHEEL (empty if none).
 save_previous_wheel() {
     PREV_WHEEL=""
     [ -f "$WHEEL_MARK" ] || return 0
@@ -262,7 +260,7 @@ system_install() {
     cp "$STAGED_WHEEL" "$wheel.new" && mv -f "$wheel.new" "$wheel" || fail 1 "cannot write $wheel"
     if ! uv_tool_install "$wheel"; then
         if [ -n "$PREV_WHEEL" ]; then
-            # Put the previous install back.
+            # Reinstall the previous wheel.
             rm -f "$wheel"
             old="$WHEEL_DIR/${PREV_WHEEL##*/}"
             cp -p "$PREV_WHEEL" "$old" && uv_tool_install "$old" \
