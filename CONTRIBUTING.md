@@ -121,6 +121,34 @@ After a restart, run `podman machine start` again. If Podman is not installed, t
 
 The package version comes from git tags (setuptools-scm), so don't change a version in your PR. Untagged commits build as development versions like `0.2.1.dev3+g1a2b3c4`, and builds without `.git` report `0.0.0`. In code, read the version with `core.version()`; don't add another reader.
 
+## Publish to PyPI
+
+Maintainers publish `coding-harness-tracing` to [PyPI](https://pypi.org/project/coding-harness-tracing/) with [trusted publishing](https://docs.pypi.org/trusted-publishers/). No PyPI token is stored anywhere.
+
+| PyPI setting | Value |
+| --- | --- |
+| Project | `coding-harness-tracing` |
+| Owner account | `arizeai` |
+| Repository | `Arize-ai/coding-harness-tracing` |
+| Workflow | `.github/workflows/publish.yml` |
+| Environment | `pypi` |
+
+A maintainer must approve each run in the `pypi` GitHub environment before it uploads. The `pypi` environment must also limit deployment branches to `main`, because the workflow file can be edited on any branch.
+
+Renaming the workflow file or its environment breaks publishing until the PyPI publisher is changed to match.
+
+To release:
+
+1. Tag the commit `v` + a normalized [PEP 440](https://peps.python.org/pep-0440/) version, e.g. `v0.2.0`, `v0.2.0rc1`, `v0.2.0.post1` or `v0.2.0.dev1`. The workflow rejects non-normalized spellings such as `v0.2.0RC1`, `v0.2.0-rc1` or `v0.2.0.rc1`, plus local (`+abc`) and epoch (`1!`) versions. Hyphenated `v*-rcN` tags belong to the Go CLI.
+
+   ```bash
+   git tag v0.2.0rc1 && git push origin v0.2.0rc1
+   ```
+
+2. In GitHub, go to **Actions → Publish to PyPI → Run workflow**, leave "Use workflow from" on `main`, and enter the tag. The workflow checks the tag is on main, builds the tag, runs `twine check`, checks the built version matches the tag, and uploads.
+
+Pushing a tag alone publishes nothing. Pre-releases (`aN`, `bN`, `rcN`) and dev releases (`.devN`) install only with `pip install --pre`.
+
 ## Find the code you need
 
 Shared install, config, and OTLP code lives in `core/`. Each coding assistant lives under `tracing/<harness>/`. User-facing install docs live in `tracing/<harness>/README.md`. The git clone is the source tree. A user install lives under `~/.arize/harness/` and is a different tree.

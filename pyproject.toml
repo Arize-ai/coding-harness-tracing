@@ -1,9 +1,34 @@
 [project]
 name = "coding-harness-tracing"
 dynamic = ["version"]
+description = "Tracing for AI coding harnesses, exported to Arize AX or Phoenix"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Arize AI", email = "support@arize.com" }]
+keywords = ["arize", "phoenix", "opentelemetry", "openinference", "tracing", "observability", "coding-agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Topic :: System :: Monitoring",
+]
 requires-python = ">=3.11"
 # Imported only by core/setup; hooks stay stdlib-only.
 dependencies = ["python-dotenv>=1.0", "json5>=0.17"]
+
+[project.urls]
+Homepage = "https://github.com/Arize-ai/coding-harness-tracing"
+Repository = "https://github.com/Arize-ai/coding-harness-tracing"
+Issues = "https://github.com/Arize-ai/coding-harness-tracing/issues"
+Documentation = "https://github.com/Arize-ai/coding-harness-tracing#readme"
 
 [project.optional-dependencies]
 dev = [
@@ -114,7 +139,7 @@ warn_redundant_casts = true
 files = ["core"]
 
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8,<9"]
+requires = ["setuptools>=77", "setuptools-scm>=8,<9"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
