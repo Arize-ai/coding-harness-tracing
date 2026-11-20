@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -299,6 +300,7 @@ class Machine:
     acl_db: Path
     owner_db: Path
     iru_plist: Path
+    uv_sha256: Optional[str] = None  # set by fake_uv_pin: run() then uses a copy of install.sh with this pin
 
     @property
     def credentials_dir(self) -> Path:
@@ -363,10 +365,21 @@ class Machine:
                 env[key] = value
         return env
 
+    def _script(self, script: Path) -> Path:
+        """``script``, or a copy of install.sh pinning the fake uv for this CPU when ``uv_sha256`` is set."""
+        if script != INSTALL_SH or self.uv_sha256 is None:
+            return script
+        var = "UV_SHA256_AARCH64" if _uv_target().startswith("aarch64") else "UV_SHA256_X86_64"
+        text, count = re.subn(rf'^{var}="[0-9a-f]{{64}}"$', f'{var}="{self.uv_sha256}"', script.read_text(), flags=re.M)
+        assert count == 1, f"no {var} pin in {script}"
+        pinned = self.work / "install.sh"
+        pinned.write_text(text)
+        return pinned
+
     def run(self, script: Path, timeout: int = 600, **overrides: Optional[str]) -> subprocess.CompletedProcess:
         """Run ``script`` with stock macOS bash 3.2."""
         return subprocess.run(
-            ["/bin/bash", str(script)],
+            ["/bin/bash", str(self._script(script))],
             env=self.env(**overrides),
             cwd=self.work,
             capture_output=True,
@@ -500,7 +513,14 @@ def managed_python(tmp_path_factory) -> Path:
 
 
 @pytest.fixture
-def install_env(machine, uv_release, wheel, wheelhouse, managed_python) -> Callable[..., Dict[str, str]]:
+def fake_uv_pin(machine, uv_release) -> UvRelease:
+    """Runs of install.sh pin ``uv_release``'s SHA-256 in place of the real one."""
+    machine.uv_sha256 = uv_release.sha256
+    return uv_release
+
+
+@pytest.fixture
+def install_env(machine, fake_uv_pin, wheel, wheelhouse, managed_python) -> Callable[..., Dict[str, str]]:
     """Overrides for a valid, offline install.sh run; keyword arguments replace or (None) unset them."""
     python_dir = machine.arize_dir / "python"
     python_dir.mkdir(parents=True)
@@ -512,8 +532,7 @@ def install_env(machine, uv_release, wheel, wheelhouse, managed_python) -> Calla
             "ARIZE_API_KEY": TEST_KEY,
             "ARIZE_SPACE_ID": "mdm-test-space",
             "ARIZE_MDM_PACKAGE_SOURCE": str(wheel),
-            "ARIZE_MDM_UV_SOURCE": str(uv_release.tarball),
-            "ARIZE_MDM_TEST_UV_SHA256": uv_release.sha256,
+            "ARIZE_MDM_UV_SOURCE": str(fake_uv_pin.tarball),
             "ARIZE_MDM_HARNESSES": "claude-code cursor codex",
             "UV_CACHE_DIR": str(cache),
             "UV_OFFLINE": "1",
@@ -528,12 +547,14 @@ def install_env(machine, uv_release, wheel, wheelhouse, managed_python) -> Calla
 @pytest.fixture
 def preflight_env(machine) -> Callable[..., Dict[str, str]]:
     """Overrides for a run that must stop in preflight: inputs valid, uv and wheel never reached."""
+    placeholder = machine.work / "coding_harness_tracing-0-py3-none-any.whl"
+    placeholder.write_bytes(b"placeholder")
 
     def build(**overrides: Optional[str]) -> Dict[str, str]:
         env: Dict[str, Optional[str]] = {
             "ARIZE_API_KEY": TEST_KEY,
             "ARIZE_SPACE_ID": "mdm-test-space",
-            "ARIZE_MDM_PACKAGE_SOURCE": str(machine.work / "missing.whl"),
+            "ARIZE_MDM_PACKAGE_SOURCE": str(placeholder),
             "ARIZE_MDM_UV_SOURCE": str(machine.work / "missing-uv.tar.gz"),
             "ARIZE_MDM_HARNESSES": "claude-code cursor codex",
             "UV_OFFLINE": "1",

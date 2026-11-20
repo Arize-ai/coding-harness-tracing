@@ -89,6 +89,7 @@ PREFLIGHT_CASES = [
         "unsupported PACKAGE_SOURCE",
     ),
     ("unsupported-cpu", {"FAKE_UNAME_M": "ppc"}, "unsupported CPU: ppc"),
+    ("missing-wheel", {"ARIZE_MDM_PACKAGE_SOURCE": "/nonexistent/x.whl"}, "wheel not found"),
 ]
 
 
@@ -123,16 +124,13 @@ def test_supported_harnesses_match_setup():
 
 
 @pytest.mark.parametrize(
-    "use_tarball,checksum,message",
-    [
-        (True, "0" * 64, "uv checksum mismatch"),
-        (True, None, "uv checksum mismatch"),  # no test seam: the real pins are checked
-        (False, None, "uv file not found"),
-    ],
-    ids=["checksum-mismatch", "real-pins", "missing-local-uv"],
+    "use_tarball,message",
+    [(True, "uv checksum mismatch"), (False, "uv file not found")],
+    ids=["checksum-mismatch", "missing-local-uv"],
 )
-def test_bad_uv_exits_1(machine, preflight_env, uv_release, use_tarball, checksum, message):
-    overrides = {"ARIZE_MDM_TEST_UV_SHA256": checksum}
+def test_bad_uv_exits_1(machine, preflight_env, uv_release, use_tarball, message):
+    """Runs the real install.sh: the local uv doesn't match its pins."""
+    overrides: Dict[str, str] = {}
     if use_tarball:
         overrides["ARIZE_MDM_UV_SOURCE"] = str(uv_release.tarball)
     result = machine.run(INSTALL_SH, **preflight_env(**overrides))
@@ -147,19 +145,17 @@ def _bad_wheel_sources(work: Path) -> dict:
     garbage.write_bytes(b"not a zip")
     return {
         "garbage": (str(garbage), "not a valid wheel"),
-        "missing": (str(work / "nope" / "x.whl"), "wheel not found"),
         "unreachable-url": ("http://127.0.0.1:9/coding_harness_tracing-1.0-py3-none-any.whl", "cannot download"),
     }
 
 
-@pytest.mark.parametrize("case", ["garbage", "missing", "unreachable-url"])
-def test_bad_wheel_exits_1(machine, preflight_env, uv_release, case):
+@pytest.mark.parametrize("case", ["garbage", "unreachable-url"])
+def test_bad_wheel_exits_1(machine, preflight_env, fake_uv_pin, case):
     source, message = _bad_wheel_sources(machine.work)[case]
     result = machine.run(
         INSTALL_SH,
         **preflight_env(
-            ARIZE_MDM_UV_SOURCE=str(uv_release.tarball),
-            ARIZE_MDM_TEST_UV_SHA256=uv_release.sha256,
+            ARIZE_MDM_UV_SOURCE=str(fake_uv_pin.tarball),
             ARIZE_MDM_PACKAGE_SOURCE=source,
         ),
     )

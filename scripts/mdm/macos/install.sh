@@ -147,17 +147,15 @@ preflight() {
         *) fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL or a local wheel path)" ;;
     esac
 
+    if [ "$PACKAGE_KIND" = file ] && [ ! -f "$PACKAGE_SOURCE" ]; then
+        fail 2 "wheel not found: $PACKAGE_SOURCE"
+    fi
+
     case "$(uname -m)" in
         arm64) UV_TARGET=aarch64-apple-darwin; UV_SHA256="$UV_SHA256_AARCH64" ;;
         x86_64) UV_TARGET=x86_64-apple-darwin; UV_SHA256="$UV_SHA256_X86_64" ;;
         *) fail 2 "unsupported CPU: $(uname -m)" ;;
     esac
-    # Checksum override for tests: needs a fake system root and a local uv file.
-    if [ -n "$SYSTEM_ROOT" ] && [ "$(cd "$SYSTEM_ROOT" 2>/dev/null && pwd -P)" != / ] \
-        && [ -n "$UV_SOURCE" ] && [ -n "${ARIZE_MDM_TEST_UV_SHA256:-}" ]; then
-        log "test seam: uv checksum overridden"
-        UV_SHA256="$ARIZE_MDM_TEST_UV_SHA256"
-    fi
     return 0
 }
 
