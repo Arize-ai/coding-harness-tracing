@@ -198,13 +198,64 @@ The API key is never echoed. The installer reports only that it found one and wh
 
 An API key on its own is rejected as ambiguous, since both backends use one.
 
+**Re-running setup over a saved harness replaces its backend.** A non-interactive `arize-harness setup <harness>` for a harness that is already configured rewrites its `target`, `endpoint`, `api_key` and `space_id` from the environment or `ARIZE_ENV_FILE`, so re-running it rotates keys. Nothing is inferred on this path:
+
+- `ARIZE_BACKEND` (or `--backend`) is required.
+- Phoenix needs `PHOENIX_ENDPOINT`. `PHOENIX_API_KEY` is optional, with a warning when it is unset.
+- Arize AX needs `ARIZE_API_KEY` and `ARIZE_SPACE_ID`. `ARIZE_OTLP_ENDPOINT` defaults to `otlp.arize.com:443`, with a warning.
+- `ARIZE_USER_ID`, when set, replaces the saved user ID. When it is unset, the saved one is kept.
+- Logging settings and the collector are kept. The project name is kept unless the file named by `ARIZE_ENV_FILE` sets one (`ARIZE_PROJECT_NAME`, or `PHOENIX_PROJECT` / `PHOENIX_PROJECT_NAME` for Phoenix); see [Project name](#4-project-name).
+
+If a required value is missing, setup exits non-zero and changes nothing. Interactive setup keeps the saved backend, as before.
+
 ### Updating
 
 `install.sh update` pulls the latest code and re-registers every harness already in `config.json`. Re-registering runs each harness's installer, so in a terminal it still asks for each project name, exactly as before.
 
-With no terminal to answer on — CI, a cron job, a script — it takes the stored values instead of failing. Credentials aren't re-read on that path; only the project name is confirmed, and it keeps whatever is in `config.json`.
+With no terminal to answer on — CI, a cron job, a script — it takes the stored values instead of failing. Credentials aren't re-read on that path, even though a non-interactive `setup` replaces them; only the project name is confirmed, and it keeps whatever is in `config.json`.
 
 `arize-harness update` changes nothing: it prints the command that updates the install it runs from (`uv tool upgrade coding-harness-tracing`, `pipx upgrade coding-harness-tracing`, `install.bat update`, re-running `install.sh`, or downloading a new binary) and exits non-zero. Hooks run the command link, so no re-setup is needed after an upgrade.
+
+### System-wide install (macOS, Linux)
+
+An admin can install once per machine, as root, into folders every user can read. Each user then runs `arize-harness setup <harness>`. Their hooks run the shared `arize-harness`, and their config and logs go in their own `~/.arize/harness`. Nothing is installed in their home folder.
+
+Point all three uv folders outside any home folder. If `UV_PYTHON_INSTALL_DIR` is not set, uv leaves the Python in root's home, which other users can't read.
+
+```bash
+sudo sh -c 'umask 022 && \
+  UV_TOOL_DIR=/opt/arize/tools \
+  UV_TOOL_BIN_DIR=/usr/local/bin \
+  UV_PYTHON_INSTALL_DIR=/opt/arize/python \
+  UV_PYTHON_PREFERENCE=only-managed \
+  UV_COMPILE_BYTECODE=1 \
+  uv tool install --python 3.12 coding-harness-tracing'
+```
+
+| Variable / flag | Why |
+|-----------------|-----|
+| `UV_TOOL_DIR` | The tool's environment, e.g. `/opt/arize/tools`. |
+| `UV_TOOL_BIN_DIR` | The `arize-harness` link, on every user's `PATH`, e.g. `/usr/local/bin`. |
+| `UV_PYTHON_INSTALL_DIR` | uv's Python, e.g. `/opt/arize/python`, instead of root's home. |
+| `--python 3.12` or `UV_PYTHON_PREFERENCE=only-managed` | Use a uv-managed Python 3.11+, not an older system one. |
+| `UV_COMPILE_BYTECODE=1` | Compile bytecode at install time. Users can't write `__pycache__` in root-owned folders, so without it every hook run recompiles. |
+| `umask 022` | Leave the installed files readable by every user. |
+
+Each user then runs, for example:
+
+```bash
+arize-harness setup claude
+```
+
+`status` and `uninstall` act on that user's own files only. `uninstall --all` removes that user's hooks and `~/.arize/harness`. It leaves the system install and other users' files alone.
+
+`arize-harness update` on a system install changes nothing. It prints the upgrade command with the install's own folders filled in, and exits non-zero. For the install above, the command is:
+
+```bash
+sudo sh -c 'umask 022 && UV_TOOL_DIR=/opt/arize/tools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/opt/arize/python UV_COMPILE_BYTECODE=1 uv tool upgrade coding-harness-tracing'
+```
+
+Windows has no system-wide install.
 
 ### Checking what's installed
 

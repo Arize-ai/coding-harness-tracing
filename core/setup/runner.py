@@ -197,6 +197,68 @@ def setup_write_refusal() -> Optional[str]:
     return f"{COMMAND_NAME} is not running from a uv tool or pipx install ({prefix})"
 
 
+# ---------------------------------------------------------------------------
+# System-wide uv tool install
+# ---------------------------------------------------------------------------
+
+
+def is_system_uv_install() -> bool:
+    """True for a uv tool install outside HOME that this user can't write (root: outside HOME is enough)."""
+    if _is_windows() or is_binary():
+        return False
+    prefix = Path(sys.prefix)
+    if not (prefix / "uv-receipt.toml").is_file():
+        return False
+    if _is_under(_norm(prefix), _norm(Path.home())):
+        return False
+    return os.geteuid() == 0 or not os.access(prefix, os.W_OK)
+
+
+def _link_dir(prefix: Path) -> Optional[Path]:
+    """The folder holding the ``arize-harness`` link into ``prefix``, if one is found."""
+    import shutil
+
+    candidates = [arize_harness_path()]
+    found = shutil.which(COMMAND_NAME)
+    if found:
+        candidates.append(_absolute(found))
+    root = _norm(prefix)
+    for path in candidates:
+        if not _is_under(_norm(path.parent), root) and _is_under(_norm(path), root):
+            return path.parent
+    return None
+
+
+def _uv_python_dir(prefix: Path) -> Optional[Path]:
+    """The uv Python install folder this environment's interpreter comes from, if uv manages it."""
+    try:
+        lines = (prefix / "pyvenv.cfg").read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        key, _, value = line.partition("=")
+        if key.strip() == "home":
+            python_root = Path(value.strip()).parent  # .../cpython-3.12.x-<platform>
+            if python_root.name.startswith(("cpython-", "pypy-", "graalpy-")):
+                return python_root.parent
+    return None
+
+
+def system_upgrade_command() -> str:
+    """The root ``uv tool upgrade`` command for this system install, with its uv folders and umask 022."""
+    import shlex
+
+    prefix = Path(sys.prefix)
+    link_dir = _link_dir(prefix)
+    words = ["umask 022 &&", f"UV_TOOL_DIR={shlex.quote(str(prefix.parent))}"]
+    words.append(f"UV_TOOL_BIN_DIR={shlex.quote(str(link_dir) if link_dir else '<folder of the arize-harness link>')}")
+    python_dir = _uv_python_dir(prefix)
+    if python_dir is not None:
+        words.append(f"UV_PYTHON_INSTALL_DIR={shlex.quote(str(python_dir))}")
+    words += ["UV_COMPILE_BYTECODE=1", "uv", "tool", "upgrade", DIST_NAME]
+    return f"sudo sh -c {shlex.quote(' '.join(words))}"
+
+
 def may_write_setup() -> bool:
     return setup_write_refusal() is None
 

@@ -6,8 +6,9 @@ import json
 import sys
 from typing import Optional
 
-from core.config import load_config
+from core.config import load_config, write_text_if_changed
 from core.setup import (
+    configure_harness_backend,
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
@@ -17,14 +18,10 @@ from core.setup import (
     info,
     install_skills,
     is_our_hook_command,
-    merge_harness_entry,
-    prompt_backend,
+    preflight_backend_replacement,
     prompt_content_logging,
-    prompt_project_name,
-    prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    write_config,
     write_logging_config,
 )
 from core.setup.assets import claude_plugin_dir, install_claude_plugin
@@ -41,6 +38,7 @@ from tracing.claude_code.constants import (
 
 def install(with_skills: bool = False) -> None:
     """Install Claude Code tracing: configure backend, register hooks, optionally copy skills."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -48,28 +46,7 @@ def install(with_skills: bool = False) -> None:
     ensure_shared_runtime()
 
     config = load_config()
-    existing_entry = (config.get("harnesses") or {}).get(HARNESS_NAME)
-
-    if isinstance(existing_entry, dict) and "target" in existing_entry:
-        # Already configured — just let user update project_name.
-        project_name = prompt_project_name(HARNESS_NAME, existing_entry["target"], config)
-        merge_harness_entry(HARNESS_NAME, project_name)
-    else:
-        # New install. Pass existing harnesses so prompt_backend can offer copy-from.
-        existing_harnesses = config.get("harnesses", {})
-        target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
-        user_id = prompt_user_id()
-        project_name = prompt_project_name(HARNESS_NAME, target, config, user_id)
-        if not dry_run():
-            write_config(
-                target=target,
-                credentials=credentials,
-                harness_name=HARNESS_NAME,
-                project_name=project_name,
-                user_id=user_id,
-            )
-        else:
-            info("would write config.json with harness entry")
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet —
     # subsequent harness installs reuse what the first wizard wrote.
@@ -107,7 +84,7 @@ def _load_settings() -> dict:
 def _save_settings(settings: dict) -> None:
     """Write settings dict as formatted JSON with trailing newline."""
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")
+    write_text_if_changed(SETTINGS_FILE, json.dumps(settings, indent=2) + "\n")
 
 
 def _is_our_plugin(entry: object, plugin_dirs: set) -> bool:

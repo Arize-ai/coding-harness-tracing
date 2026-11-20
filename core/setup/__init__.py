@@ -71,6 +71,14 @@ def err(msg: str) -> None:
         sys.stderr.write(f"[arize] {msg}\n")
 
 
+def warn(msg: str) -> None:
+    """Print a yellow ``[arize] warning:`` line to stderr."""
+    if sys.stderr.isatty() and os.name != "nt":
+        sys.stderr.write(f"\033[1;33m[arize] warning: {msg}\033[0m\n")
+    else:
+        sys.stderr.write(f"[arize] warning: {msg}\n")
+
+
 class NotRegistered(Exception):
     """Raised by an installer that finished but could not register its hooks."""
 
@@ -225,17 +233,38 @@ def _backend_choice() -> str:
     return target
 
 
-def _backend_from_env() -> tuple[str, dict]:
+_DEFAULT_PHOENIX_ENDPOINT = "http://localhost:6006"
+_DEFAULT_ARIZE_ENDPOINT = "otlp.arize.com:443"
+_NO_PHOENIX_KEY_WARNING = (
+    "PHOENIX_API_KEY is not set; if your Phoenix server has auth turned on, "
+    "it will reject every span (logged as HTTP 401 in ~/.arize/harness/logs)."
+)
+
+
+def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, dict]:
     """Resolve backend + credentials from the environment, for non-interactive installs.
 
     Backend selection is explicit via ``ARIZE_BACKEND``, otherwise inferred: a
     space ID means Arize AX, a Phoenix endpoint means Phoenix. Nothing is
     inferred from the API key alone — both backends use one.
 
+    ``strict`` (replacing a saved backend) requires ``ARIZE_BACKEND`` and
+    ``PHOENIX_ENDPOINT`` and warns about values left unset or defaulted.
+    ``quiet`` prints only errors.
+
     Exits with an actionable message when a required value is missing; this
     path must never fall back to a prompt, because there is nobody to answer it.
     """
+    say = (lambda _msg: None) if quiet else info
+    caution = (lambda _msg: None) if quiet else warn
     target = _backend_choice()
+
+    if not target and strict:
+        err(
+            "Replacing a saved backend needs ARIZE_BACKEND (or --backend) set to 'arize' or 'phoenix'. "
+            "Nothing was changed."
+        )
+        sys.exit(1)
 
     if not target:
         if _env("ARIZE_SPACE_ID") and _env("PHOENIX_ENDPOINT"):
@@ -274,20 +303,29 @@ def _backend_from_env() -> tuple[str, dict]:
             sys.exit(1)
 
     if target == "phoenix":
-        endpoint = _env("PHOENIX_ENDPOINT") or "http://localhost:6006"
+        if strict:
+            endpoint = _require_env("PHOENIX_ENDPOINT", "A Phoenix endpoint")
+        else:
+            endpoint = _env("PHOENIX_ENDPOINT") or _DEFAULT_PHOENIX_ENDPOINT
         api_key = _env("PHOENIX_API_KEY")
-        info(f"Backend: Phoenix at {endpoint} (from {_source_of('PHOENIX_ENDPOINT', fallback='default')})")
-        info(f"  API key: {'found' if api_key else 'none'} (from {_source_of('PHOENIX_API_KEY', fallback='unset')})")
+        say(f"Backend: Phoenix at {endpoint} (from {_source_of('PHOENIX_ENDPOINT', fallback='default')})")
+        say(f"  API key: {'found' if api_key else 'none'} (from {_source_of('PHOENIX_API_KEY', fallback='unset')})")
+        if strict and not api_key:
+            caution(_NO_PHOENIX_KEY_WARNING)
         return ("phoenix", {"endpoint": endpoint, "api_key": api_key})
 
     # Arize AX. Read the key but never echo it — only report that it was found
     # and where from, so a wrong-credentials install is diagnosable.
     api_key = _require_env("ARIZE_API_KEY", "An Arize API key")
     space_id = _require_env("ARIZE_SPACE_ID", "An Arize space ID")
-    endpoint = _env("ARIZE_OTLP_ENDPOINT") or "otlp.arize.com:443"
-    info(f"Backend: Arize AX at {endpoint} (from {_source_of('ARIZE_OTLP_ENDPOINT', fallback='default')})")
-    info(f"  space ID: {space_id} (from {_source_of('ARIZE_SPACE_ID')})")
-    info(f"  API key: found (from {_source_of('ARIZE_API_KEY')})")
+    endpoint = _env("ARIZE_OTLP_ENDPOINT")
+    if not endpoint:
+        endpoint = _DEFAULT_ARIZE_ENDPOINT
+        if strict:
+            caution(f"ARIZE_OTLP_ENDPOINT is not set; using the default Arize endpoint {endpoint}.")
+    say(f"Backend: Arize AX at {endpoint} (from {_source_of('ARIZE_OTLP_ENDPOINT', fallback='default')})")
+    say(f"  space ID: {space_id} (from {_source_of('ARIZE_SPACE_ID')})")
+    say(f"  API key: found (from {_source_of('ARIZE_API_KEY')})")
     return ("arize", {"endpoint": endpoint, "api_key": api_key, "space_id": space_id})
 
 
@@ -525,16 +563,7 @@ def write_config(
     config.pop("backend", None)
     config.pop("collector", None)
 
-    # Build the harness entry
-    entry: dict = {
-        "project_name": project_name,
-        "target": target,
-        "endpoint": credentials.get("endpoint", ""),
-        "api_key": credentials.get("api_key", ""),
-    }
-    if target == "arize" and "space_id" in credentials:
-        entry["space_id"] = credentials["space_id"]
-
+    entry: dict = {"project_name": project_name, **backend_fields(target, credentials)}
     if collector is not None:
         entry["collector"] = collector
 
@@ -544,6 +573,104 @@ def write_config(
         set_value(config, "user_id", user_id)
 
     save_config(config, config_path)
+
+
+_BACKEND_KEYS = ("target", "endpoint", "api_key", "space_id")
+
+
+def backend_fields(target: str, credentials: dict, always_space_id: bool = False) -> dict:
+    """A harness entry's backend fields; Arize's ``space_id`` only if given, unless ``always_space_id``."""
+    fields = {"target": target, "endpoint": credentials.get("endpoint", ""), "api_key": credentials.get("api_key", "")}
+    if target == "arize" and (always_space_id or "space_id" in credentials):
+        fields["space_id"] = credentials.get("space_id", "")
+    return fields
+
+
+def _saved_config() -> dict:
+    """config.json, else the legacy config.yaml, read without migrating it."""
+    from core.config import parse_yaml_config
+
+    yaml_file = CONFIG_FILE.with_name("config.yaml")
+    try:
+        if CONFIG_FILE.is_file():
+            return load_config(str(CONFIG_FILE)) or {}
+        if yaml_file.is_file():
+            return parse_yaml_config(yaml_file.read_text()) or {}
+    except Exception:
+        pass
+    return {}
+
+
+def preflight_backend_replacement(harness_name: str, quiet: bool = False) -> Optional[tuple[str, dict]]:
+    """Before any write, resolve the backend a non-interactive run will replace; exits 1 if it can't.
+
+    Returns None when nothing will be replaced.
+    """
+    if not non_interactive() or env_flag("ARIZE_KEEP_SAVED_BACKEND", default=False):
+        return None
+    harnesses = _saved_config().get("harnesses")
+    entry = harnesses.get(harness_name) if isinstance(harnesses, dict) else None
+    if isinstance(entry, dict) and "target" in entry:
+        return _backend_from_env(strict=True, quiet=quiet)
+    return None
+
+
+def configure_harness_backend(harness_name: str, config: dict, backend: Optional[tuple[str, dict]] = None) -> str:
+    """Write ``harnesses.<harness_name>``'s backend and project; return the user ID it uses.
+
+    A saved entry keeps its backend, except that a non-interactive run replaces it from the environment,
+    or with ``backend`` from ``preflight_backend_replacement``.
+    """
+    config = config if isinstance(config, dict) else {}
+    harnesses = config.get("harnesses")
+    harnesses = harnesses if isinstance(harnesses, dict) else {}
+    entry = harnesses.get(harness_name)
+    saved_user_id = str(config.get("user_id") or "")
+
+    if isinstance(entry, dict) and "target" in entry:
+        if non_interactive():
+            # install.sh/install.bat update re-register with this set and keep saved backends.
+            if not env_flag("ARIZE_KEEP_SAVED_BACKEND", default=False):
+                return _replace_saved_backend(harness_name, entry, config, saved_user_id, backend)
+            info(
+                f"Keeping the saved {harness_name} backend (ARIZE_KEEP_SAVED_BACKEND is set); "
+                "unset it to replace the backend from the environment."
+            )
+        project_name = prompt_project_name(harness_name, entry["target"], config)
+        merge_harness_entry(harness_name, project_name)
+        return saved_user_id
+
+    target, credentials = prompt_backend(harnesses or None)
+    user_id = prompt_user_id()
+    project_name = prompt_project_name(harness_name, target, config, user_id)
+    if dry_run():
+        info("would write config.json with backend credentials")
+    else:
+        write_config(target, credentials, harness_name, project_name, user_id=user_id)
+    return user_id
+
+
+def _replace_saved_backend(
+    harness_name: str, entry: dict, config: dict, saved_user_id: str, backend: Optional[tuple[str, dict]]
+) -> str:
+    """Rewrite a saved entry's backend from the environment, keeping its other fields."""
+    info(f"Replacing the saved {harness_name} backend from the environment")
+    target, credentials = backend or _backend_from_env(strict=True)
+    user_id = _env("ARIZE_USER_ID") or saved_user_id
+    project_name = prompt_project_name(harness_name, target, config, user_id)
+
+    new_entry: dict = {"project_name": project_name, **backend_fields(target, credentials, always_space_id=True)}
+    new_entry.update({k: v for k, v in entry.items() if k not in _BACKEND_KEYS and k != "project_name"})
+
+    if dry_run():
+        info(f"would replace the backend of harness entry '{harness_name}' in {CONFIG_FILE}")
+        return user_id
+    current = load_config(str(CONFIG_FILE)) or {"harnesses": {}}
+    set_value(current, f"harnesses.{harness_name}", new_entry)
+    if _env("ARIZE_USER_ID"):
+        set_value(current, "user_id", user_id)
+    save_config(current, str(CONFIG_FILE))
+    return user_id
 
 
 # ---------------------------------------------------------------------------
@@ -1028,14 +1155,7 @@ def merge_harness_entry(
         config = {"harnesses": {}}
 
     if target is not None and credentials is not None:
-        entry: dict = {
-            "project_name": project_name,
-            "target": target,
-            "endpoint": credentials.get("endpoint", ""),
-            "api_key": credentials.get("api_key", ""),
-        }
-        if target == "arize" and "space_id" in credentials:
-            entry["space_id"] = credentials["space_id"]
+        entry: dict = {"project_name": project_name, **backend_fields(target, credentials)}
         if collector is not None:
             entry["collector"] = collector
         set_value(config, f"harnesses.{name}", entry)

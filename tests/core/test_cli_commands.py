@@ -261,18 +261,36 @@ class TestBackendFlag:
         assert "invalid choice: 'datadog'" in result.stderr
         assert _snapshot(home) == before
 
-    @pytest.mark.parametrize("mode, stdin", [([], "\n"), (["-y"], "")])
-    def test_already_configured_keeps_the_saved_backend(self, mode, stdin, tmp_path) -> None:
+    def test_interactive_already_configured_keeps_the_saved_backend(self, tmp_path) -> None:
         home = _home(tmp_path)
         creds = _write_creds(home, "PHOENIX_ENDPOINT=http://phoenix.test:6006\n")
         first = _cli(home, "setup", "claude", "-y", ARIZE_ENV_FILE=creds)
         assert first.returncode == 0, first.stdout + first.stderr
 
-        result = _cli(home, "setup", "claude", "--backend", "arize", *mode, stdin=stdin)
+        result = _cli(home, "setup", "claude", "--backend", "arize", stdin="\n")
         assert result.returncode == 0, result.stdout + result.stderr
         assert "claude-code is already configured for phoenix; keeping it and ignoring --backend arize" in result.stdout
         assert BACKEND_MENU not in result.stdout
         assert _config(home)["harnesses"]["claude-code"]["target"] == "phoenix"
+
+    def test_non_interactive_replaces_the_saved_backend(self, tmp_path) -> None:
+        home = _home(tmp_path)
+        phoenix = _write_creds(home, "PHOENIX_ENDPOINT=http://phoenix.test:6006\n")
+        first = _cli(home, "setup", "claude", "-y", ARIZE_ENV_FILE=phoenix)
+        assert first.returncode == 0, first.stdout + first.stderr
+
+        arize = home / "arize.env"
+        arize.write_text("ARIZE_API_KEY=k\nARIZE_SPACE_ID=s\nARIZE_OTLP_ENDPOINT=otlp.test:443\n")
+        result = _cli(home, "setup", "claude", "--backend", "arize", "-y", ARIZE_ENV_FILE=str(arize))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ignoring --backend" not in result.stdout
+        entry = _config(home)["harnesses"]["claude-code"]
+        assert (entry["target"], entry["endpoint"], entry["api_key"], entry["space_id"]) == (
+            "arize",
+            "otlp.test:443",
+            "k",
+            "s",
+        )
 
 
 class TestPromptBackend:
@@ -354,6 +372,7 @@ def fake_installers(monkeypatch):
     monkeypatch.setattr(install_table, "INSTALLERS", installers)
     monkeypatch.setattr(commands, "migrate_yaml_config", lambda: False)
     monkeypatch.setattr(commands, "load_config", lambda: {})
+    monkeypatch.setattr(commands, "preflight_backend_replacement", lambda key, quiet=False: None)
     return calls
 
 

@@ -42,11 +42,10 @@ def test_ax_project_default_is_persisted_and_reinstall_is_preserved(
 
     monkeypatch.setattr("core.config.CONFIG_FILE", str(config_file))
     monkeypatch.setattr("core.setup.CONFIG_FILE", config_file)
-    monkeypatch.setattr(module, "prompt_project_name", prompt_project_name)
-    monkeypatch.setattr(module, "prompt_user_id", lambda: "")
+    monkeypatch.setattr("core.setup.prompt_project_name", prompt_project_name)
+    monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
     monkeypatch.setattr(
-        module,
-        "prompt_backend",
+        "core.setup.prompt_backend",
         lambda *args, **kwargs: (
             "arize",
             {"endpoint": "otlp.arize.com:443", "api_key": "key", "space_id": "space"},
@@ -78,6 +77,10 @@ def test_ax_project_default_is_persisted_and_reinstall_is_preserved(
 
     config["harnesses"][harness_name]["project_name"] = "saved-project"
     config_file.write_text(json.dumps(config))
+    # A non-interactive re-run replaces the saved backend, so it needs one named.
+    monkeypatch.setenv("ARIZE_BACKEND", "arize")
+    monkeypatch.setenv("ARIZE_API_KEY", "key")
+    monkeypatch.setenv("ARIZE_SPACE_ID", "space")
     module.install(**install_kwargs)
 
     reinstalled = json.loads(config_file.read_text())
