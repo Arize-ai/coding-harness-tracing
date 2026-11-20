@@ -65,11 +65,12 @@ cleanup() {
     return 0
 }
 
+# Records missing paths, newest first, so rollback removes children before parents.
 note_missing() {
     local path
     for path in "$@"; do
-        [ -e "$path" ] || [ -L "$path" ] || CREATED="$CREATED
-$path"
+        [ -e "$path" ] || [ -L "$path" ] || CREATED="$path
+$CREATED"
     done
 }
 
@@ -77,15 +78,24 @@ rollback() {
     # Removes only what this run created; an existing install is left as it was.
     [ "$COMMITTING" = 1 ] || return 0
     local path link
-    while IFS= read -r path; do
-        [ -n "$path" ] || continue
-        if [ "$path" = "$TOOL_DIR" ]; then
+    case "
+$CREATED" in
+        *"
+$TOOL_DIR
+"*)
             for link in "$BIN_DIR"/*; do
                 [ -L "$link" ] || continue
                 case "$(readlink "$link")" in "$TOOL_DIR"/*) rm -f "$link" ;; esac
             done
-        fi
-        rm -rf "$path"
+            ;;
+    esac
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        case "$path" in
+            "$ARIZE_DIR" | "$ARIZE_DIR"/*) rm -rf "$path" ;;
+            # Shared folders (/opt, /usr/local, /usr/local/bin): only if still empty.
+            *) rmdir "$path" 2>/dev/null ;;
+        esac
     done <<EOF_CREATED
 $CREATED
 EOF_CREATED
@@ -209,6 +219,35 @@ system_install_current() {
     "$HARNESS_BIN" --version >/dev/null 2>&1
 }
 
+# #192's system install of wheel $1.
+uv_tool_install() {
+    # --reinstall so a new wheel with the same version still replaces the old one.
+    # UV_NO_CONFIG: ignore any uv.toml on the machine.
+    (umask 022 && env \
+        UV_NO_CONFIG=1 \
+        UV_TOOL_DIR="$TOOL_DIR" \
+        UV_TOOL_BIN_DIR="$BIN_DIR" \
+        UV_PYTHON_INSTALL_DIR="$PYTHON_DIR" \
+        UV_PYTHON_PREFERENCE=only-managed \
+        UV_COMPILE_BYTECODE=1 \
+        "$UV_BIN" tool install --force --reinstall --python 3.12 "$1") \
+        && "$HARNESS_BIN" --version >/dev/null 2>&1
+}
+
+# The wheel the current install came from, saved to $WORK/prev, or nothing.
+save_previous_wheel() {
+    PREV_WHEEL=""
+    [ -f "$WHEEL_MARK" ] || return 0
+    local mark old
+    mark="$(cat "$WHEEL_MARK")"
+    for old in "$WHEEL_DIR"/*.whl; do
+        [ -f "$old" ] && [ "$(sha256_of "$old")" = "$mark" ] || continue
+        mkdir -p "$WORK/prev" && cp -p "$old" "$WORK/prev/" || fail 1 "cannot back up $old"
+        PREV_WHEEL="$WORK/prev/${old##*/}"
+        return 0
+    done
+}
+
 system_install() {
     if system_install_current; then
         log "system install is current"
@@ -218,28 +257,19 @@ system_install() {
         export UV_PYTHON_INSTALL_MIRROR="$PYTHON_MIRROR"
     fi
     mkdir -p "$BIN_DIR" "$WHEEL_DIR" || fail 1 "cannot create $BIN_DIR or $WHEEL_DIR"
-    local wheel="$WHEEL_DIR/$WHEEL_NAME" old backup=""
-    # Keep the receipt's wheel intact if this install fails.
-    if [ -f "$wheel" ] && ! cmp -s "$STAGED_WHEEL" "$wheel"; then
-        backup="$wheel.bak"
-        cp -p "$wheel" "$backup" || fail 1 "cannot back up $wheel"
-    fi
+    save_previous_wheel
+    local wheel="$WHEEL_DIR/$WHEEL_NAME" old
     cp "$STAGED_WHEEL" "$wheel.new" && mv -f "$wheel.new" "$wheel" || fail 1 "cannot write $wheel"
-    # --reinstall so a new wheel with the same version still replaces the old one.
-    # UV_NO_CONFIG: ignore any uv.toml on the machine.
-    if ! (umask 022 && env \
-        UV_NO_CONFIG=1 \
-        UV_TOOL_DIR="$TOOL_DIR" \
-        UV_TOOL_BIN_DIR="$BIN_DIR" \
-        UV_PYTHON_INSTALL_DIR="$PYTHON_DIR" \
-        UV_PYTHON_PREFERENCE=only-managed \
-        UV_COMPILE_BYTECODE=1 \
-        "$UV_BIN" tool install --force --reinstall --python 3.12 "$wheel") \
-        || ! "$HARNESS_BIN" --version >/dev/null 2>&1; then
-        [ -n "$backup" ] && mv -f "$backup" "$wheel"
+    if ! uv_tool_install "$wheel"; then
+        if [ -n "$PREV_WHEEL" ]; then
+            # Put the previous install back.
+            rm -f "$wheel"
+            old="$WHEEL_DIR/${PREV_WHEEL##*/}"
+            cp -p "$PREV_WHEEL" "$old" && uv_tool_install "$old" \
+                || log "error: could not restore the previous install" >&2
+        fi
         fail 1 "uv tool install failed, or the installed $HARNESS_BIN does not run"
     fi
-    [ -n "$backup" ] && rm -f "$backup"
     for old in "$WHEEL_DIR"/*.whl; do
         [ "$old" = "$wheel" ] || rm -f "$old"
     done
@@ -254,7 +284,7 @@ main() {
     stage_uv
     stage_wheel
 
-    note_missing "$ARIZE_DIR" "$ARIZE_DIR/bin" "$TOOL_DIR" "$PYTHON_DIR" "$BIN_DIR" "$WHEEL_DIR" "$WHEEL_MARK"
+    note_missing "$SYSTEM_ROOT/opt" "$SYSTEM_ROOT/usr" "$SYSTEM_ROOT/usr/local" "$ARIZE_DIR" "$ARIZE_DIR/bin" "$TOOL_DIR" "$PYTHON_DIR" "$BIN_DIR" "$WHEEL_DIR" "$WHEEL_MARK"
     COMMITTING=1
     install_uv
     system_install

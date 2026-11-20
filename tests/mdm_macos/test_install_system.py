@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 import subprocess
 import zipfile
 from pathlib import Path
+from typing import Dict, Optional
 
 import pytest
 from conftest import INSTALL_SH, TEST_KEY, _snapshot, _tree
@@ -35,16 +37,34 @@ def _error_lines(result) -> list:
     return [line for line in result.stderr.splitlines() if line.strip()]
 
 
-def _rezip(src: Path, dest: Path, metadata_extra: str = "", comment: bytes = b"") -> Path:
-    """A copy of wheel ``src`` with extra METADATA lines or a zip comment."""
+def _rezip(
+    src: Path, dest_dir: Path, metadata_extra: str = "", files: Optional[Dict[str, bytes]] = None, version: str = ""
+) -> Path:
+    """A copy of wheel ``src`` in ``dest_dir``: extra METADATA lines, replaced or added files, or a new version."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    old_version = src.name.split("-")[1]
+    dest = dest_dir / (src.name.replace(f"-{old_version}-", f"-{version}-") if version else src.name)
+    files = dict(files or {})
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
-            data = zin.read(item)
-            if item.filename.endswith(".dist-info/METADATA") and metadata_extra:
-                data = re.sub(rb"(?m)^(Version: .*)$", rb"\1\n" + metadata_extra.encode(), data, count=1)
-            zout.writestr(item, data)
-        zout.comment = comment
+            data = files.pop(item.filename, None) or zin.read(item)
+            name = item.filename
+            if version:
+                name = name.replace(f"-{old_version}.dist-info/", f"-{version}.dist-info/")
+            if name.endswith(".dist-info/METADATA"):
+                if version:
+                    data = data.replace(f"Version: {old_version}\n".encode(), f"Version: {version}\n".encode(), 1)
+                if metadata_extra:
+                    data = re.sub(rb"(?m)^(Version: .*)$", rb"\1\n" + metadata_extra.encode(), data, count=1)
+            zout.writestr(name, data)
+        for name, data in files.items():
+            zout.writestr(name, data)
     return dest
+
+
+def _site_packages(machine) -> Path:
+    (site,) = (machine.arize_dir / "tools" / "coding-harness-tracing" / "lib").glob("python*/site-packages")
+    return site
 
 
 # ---------------------------------------------------------------------------
@@ -190,20 +210,28 @@ class TestSystemInstall:
         assert "system install is current" in again.stdout
         assert (_tree(machine.root), _snapshot(machine.root)) == before
 
-    def test_new_wheel_upgrades(self, machine, install_env, wheel):
+    @pytest.mark.parametrize("version", ["", "9.9.10"], ids=["same-version", "new-version"])
+    def test_new_wheel_upgrades(self, machine, install_env, wheel, version):
         assert machine.run(INSTALL_SH, **install_env()).returncode == 0
-        newer = _rezip(wheel, machine.work / wheel.name, comment=b"rebuilt")
+        newer = _rezip(wheel, machine.work / "newer", files={"core/_mdm_marker.py": b""}, version=version)
         result = machine.run(INSTALL_SH, **install_env(ARIZE_MDM_PACKAGE_SOURCE=str(newer)))
         assert result.returncode == 0, result.stdout + result.stderr
         assert "system install ready" in result.stdout
+        assert (_site_packages(machine) / "core" / "_mdm_marker.py").is_file()
+        assert [p.name for p in (machine.arize_dir / "wheel").iterdir()] == [newer.name]
         mark = (machine.arize_dir / "mdm-wheel.sha256").read_text().strip()
         assert mark == hashlib.sha256(newer.read_bytes()).hexdigest()
         assert _harness_version(machine).returncode == 0
 
     def _unresolvable(self, machine, wheel) -> Path:
-        dest = machine.work / "broken" / wheel.name
-        dest.parent.mkdir()
-        return _rezip(wheel, dest, metadata_extra="Requires-Dist: arize-mdm-no-such-package")
+        return _rezip(wheel, machine.work / "broken", metadata_extra="Requires-Dist: arize-mdm-no-such-package")
+
+    def test_failed_first_install_on_an_empty_root_leaves_nothing(self, machine, install_env, wheel):
+        env = install_env()
+        shutil.rmtree(machine.root / "opt")  # no seeded Python: the offline install fails
+        result = machine.run(INSTALL_SH, **env)
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert _files(machine.root) == []
 
     def test_unusable_wheel_on_first_install_leaves_nothing(self, machine, install_env, wheel):
         machine.bin_dir.mkdir(parents=True)
@@ -216,11 +244,23 @@ class TestSystemInstall:
         machine.bin_dir.joinpath("other-tool").unlink()
         _assert_nothing_installed(machine)
 
-    def test_unusable_wheel_on_upgrade_keeps_the_install(self, machine, install_env, wheel):
+    @pytest.mark.parametrize(
+        "kind,version",
+        [("unresolvable", ""), ("crashes", ""), ("crashes", "9.9.10")],
+        ids=["unresolvable", "crashes-same-version", "crashes-new-version"],
+    )
+    def test_unusable_wheel_on_upgrade_keeps_the_install(self, machine, install_env, wheel, kind, version):
         assert machine.run(INSTALL_SH, **install_env()).returncode == 0
-        source = self._unresolvable(machine, wheel)
+        if kind == "unresolvable":
+            source = self._unresolvable(machine, wheel)
+        else:
+            source = _rezip(
+                wheel, machine.work / "broken", files={"core/cli.py": b"raise SystemExit(3)\n"}, version=version
+            )
         result = machine.run(INSTALL_SH, **install_env(ARIZE_MDM_PACKAGE_SOURCE=str(source)))
         assert result.returncode == 1
+        assert "could not restore" not in result.stderr
+        assert [p.name for p in (machine.arize_dir / "wheel").iterdir()] == [wheel.name]
         assert (machine.arize_dir / "bin" / "uv").is_file()
         assert _harness_version(machine).returncode == 0
         assert (machine.arize_dir / "wheel" / wheel.name).read_bytes() == wheel.read_bytes()

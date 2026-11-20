@@ -117,7 +117,7 @@ if len(args) >= 2 and args[0] == "-read" and args[1].startswith("/Users/"):
     if not match:
         print("<dscl_cmd> DS Error: -14136 (eDSRecordNotFound)", file=sys.stderr)
         sys.exit(56)
-    keys = args[2:] or ["RecordName", "UniqueID", "NFSHomeDirectory", "UserShell"]
+    keys = sorted(args[2:] or ["RecordName", "UniqueID", "NFSHomeDirectory", "UserShell"])
     missing = [k for k in keys if k not in match[0]]
     for key in keys:
         if key in match[0]:
@@ -256,7 +256,7 @@ except FileNotFoundError:
     print(f"File Doesn't Exist, Will Create: {path}")
     sys.exit(1)
 if key not in data:
-    print(f'Print: Entry, ":{key}", Does Not Exist')
+    print(f'Print: Entry, ":{key}", Does Not Exist', file=sys.stderr)
     sys.exit(1)
 print(data[key])
 """,
