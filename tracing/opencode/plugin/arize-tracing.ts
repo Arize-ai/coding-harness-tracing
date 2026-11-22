@@ -34,6 +34,7 @@ function forward(payload: unknown): void {
     const child = spawn(binaryPath(), [], {
       stdio: ["pipe", "ignore", "ignore"],
       detached: true,
+      windowsHide: true,
     })
     child.on("error", () => {})
     child.stdin?.write(JSON.stringify(payload))
