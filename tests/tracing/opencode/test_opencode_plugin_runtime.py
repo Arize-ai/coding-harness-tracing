@@ -31,6 +31,39 @@ def _instrumented_plugin(tmp_path: Path) -> Path:
     return target
 
 
+def test_forward_hides_windows_process_without_changing_detached_stdio(tmp_path: Path) -> None:
+    source = PLUGIN.read_text(encoding="utf-8")
+    source = source.replace(
+        'import { spawn } from "node:child_process"\n',
+        """const spawn = (_command: string, _args: string[], options: Record<string, unknown>) => {
+  globalThis.__spawnOptions = options
+  return { on() {}, stdin: { write() {}, end() {} }, unref() {} }
+}
+""",
+    )
+    target = tmp_path / "arize-tracing-spawn-instrumented.ts"
+    target.write_text(source, encoding="utf-8")
+    result = _run_node(
+        f"""
+        globalThis.__spawnOptions = undefined;
+        const {{ ArizeTracing }} = await import({json.dumps(target.as_uri())});
+        const hooks = await ArizeTracing({{
+          client: {{ session: {{
+            get: async () => ({{ data: {{ id: 'ses_root' }} }}),
+            messages: async () => ({{ data: [] }}),
+          }} }},
+        }});
+        await hooks.event({{ event: {{ type: 'session.idle', properties: {{ sessionID: 'ses_root' }} }} }});
+        console.log(JSON.stringify(globalThis.__spawnOptions));
+        """
+    )
+    assert result == {
+        "stdio": ["pipe", "ignore", "ignore"],
+        "detached": True,
+        "windowsHide": True,
+    }
+
+
 def test_foreign_root_messages_are_not_forwarded(tmp_path: Path) -> None:
     plugin = _instrumented_plugin(tmp_path)
     result = _run_node(

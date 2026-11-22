@@ -246,6 +246,15 @@ class TestPluginTs:
         assert "arize-hook-" not in text.split("function binaryPath", 1)[1].split("function forward", 1)[0]
         assert_equals_source_except_hook_command(harness, assets.recorded(harness)[str(target)], target)
 
+    def test_generated_opencode_plugin_hides_windows_process(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(runner, "arize_harness_path", lambda: tmp_path / "arize-harness")
+        target = tmp_path / "opencode.ts"
+        assets.install_plugin_ts("opencode", target)
+        text = target.read_text()
+        assert "windowsHide: true" in text
+        assert 'stdio: ["pipe", "ignore", "ignore"]' in text
+        assert "detached: true" in text
+
     @pytest.mark.parametrize("harness", ["opencode", "omp"])
     def test_overwrites_an_old_copy(self, harness, tmp_path):
         target = tmp_path / "out.ts"
