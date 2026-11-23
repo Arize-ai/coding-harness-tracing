@@ -1,4 +1,4 @@
-"""Non-interactive setup over a saved harness entry replaces its backend from the environment (#95898)."""
+"""Non-interactive setup over a saved harness entry replaces its backend from the environment."""
 
 from __future__ import annotations
 
