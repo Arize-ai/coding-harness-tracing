@@ -1,7 +1,6 @@
 # Arize Coding Harness Tracing
 
-> [!IMPORTANT]
-> **Certificate security update:** Existing installations should update to pip 26.2.2, certifi 2026.10.23, and the latest coding-harness-tracing package. First install Python 3.11 or later, then run the updater:
+> **Important: certificate security update.** Existing installations should update to pip 26.2.2, certifi 2026.10.23, and the latest coding-harness-tracing package. First install Python 3.11 or later, then run the updater:
 >
 > macOS and Linux:
 > ```bash
@@ -20,7 +19,7 @@
 
 Trace AI coding sessions to [Arize AX](https://arize.com) or [Phoenix](https://github.com/Arize-ai/phoenix) with [OpenInference](https://github.com/Arize-ai/openinference) spans. Each harness integration emits spans for prompts, tool calls, model responses, and session lifecycle events.
 
-Claude Code tracing reconstructs each turn as an `AGENT` span containing per-response `LLM` spans, correlated `TOOL` spans, and a foreground subagent `AGENT` subtree when available. See [Claude Code trace structure and current limitations](tracing/claude_code/README.md#trace-structure) for details.
+Claude Code tracing reconstructs each turn as an `AGENT` span containing per-response `LLM` spans, correlated `TOOL` spans, and a foreground subagent `AGENT` subtree when available. See [Claude Code trace structure and current limitations](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md#trace-structure) for details.
 
 ## Quick Start
 
@@ -41,7 +40,7 @@ claude plugin marketplace add Arize-ai/coding-harness-tracing
 claude plugin install claude-code-tracing@coding-harness-tracing
 ```
 
-That path skips the wizard, so set backend credentials in `~/.claude/settings.json`. See [Claude Code marketplace](tracing/claude_code/README.md#claude-code-marketplace).
+That path skips the wizard, so set backend credentials in `~/.claude/settings.json`. See [Claude Code marketplace](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md#claude-code-marketplace).
 
 ### Codex
 
@@ -69,30 +68,30 @@ Cursor 2.5+ can install from the marketplace instead. In a Cursor agent chat, ru
 /add-plugin Arize-ai/coding-harness-tracing
 ```
 
-The plugin skips the wizard. Run the bundled `manage-cursor-tracing` skill once to write credentials. See [Cursor plugin install](tracing/cursor/README.md#plugin-install).
+The plugin skips the wizard. Run the bundled `manage-cursor-tracing` skill once to write credentials. See [Cursor plugin install](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/cursor/README.md#plugin-install).
 
 ## Supported Harnesses
 
 | Harness Integration | Install command | Name |
 |---------------------|-----------------|------|
-| [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | [macOS / Linux](tracing/claude_code/README.md#macos--linux) · [Windows](tracing/claude_code/README.md#windows-powershell) | `claude` |
-| [Claude Code CLI / Agent SDK](tracing/claude_code/README.md) | [Claude Plugin](tracing/claude_code/README.md#claude-code-marketplace) | `claude-code-tracing` |
-| [OpenAI Codex CLI](tracing/codex/README.md) | [macOS / Linux](tracing/codex/README.md#macos--linux) · [Windows](tracing/codex/README.md#windows-powershell) | `codex` |
-| [Cursor IDE / CLI](tracing/cursor/README.md) | [macOS / Linux](tracing/cursor/README.md#macos--linux) · [Windows](tracing/cursor/README.md#windows-powershell) | `cursor` |
-| [Cursor IDE / CLI](tracing/cursor/README.md) | [Cursor Plugin](tracing/cursor/README.md#plugin-install) | `cursor-tracing` |
-| [Devin](tracing/devin/README.md) | [macOS / Linux](tracing/devin/README.md#macos--linux) · [Windows](tracing/devin/README.md#windows-powershell) | `devin` |
-| [GitHub Copilot (VS Code + CLI)](tracing/copilot/README.md) | [macOS / Linux](tracing/copilot/README.md#macos--linux) · [Windows](tracing/copilot/README.md#windows-powershell) | `copilot` |
-| [Gemini CLI](tracing/gemini/README.md) | [macOS / Linux](tracing/gemini/README.md#macos--linux) · [Windows](tracing/gemini/README.md#windows-powershell) | `gemini` |
-| [Kiro CLI](tracing/kiro/README.md) | [macOS / Linux](tracing/kiro/README.md#macos--linux) · [Windows](tracing/kiro/README.md#windows-powershell) | `kiro` |
-| [Google Antigravity CLI / IDE](tracing/antigravity/README.md) | [macOS / Linux](tracing/antigravity/README.md#macos--linux) · [Windows](tracing/antigravity/README.md#windows-powershell) | `antigravity` |
-| [Opencode CLI](tracing/opencode/README.md) | [macOS / Linux](tracing/opencode/README.md#macos--linux) · [Windows](tracing/opencode/README.md#windows-powershell) | `opencode` |
-| [Oh My Pi (omp)](tracing/omp/README.md) | [macOS / Linux](tracing/omp/README.md#macos--linux) · [Windows](tracing/omp/README.md#windows-powershell) | `omp` |
+| [Claude Code CLI / Agent SDK](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md#windows-powershell) | `claude` |
+| [Claude Code CLI / Agent SDK](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md) | [Claude Plugin](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md#claude-code-marketplace) | `claude-code-tracing` |
+| [OpenAI Codex CLI](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/codex/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/codex/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/codex/README.md#windows-powershell) | `codex` |
+| [Cursor IDE / CLI](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/cursor/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/cursor/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/cursor/README.md#windows-powershell) | `cursor` |
+| [Cursor IDE / CLI](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/cursor/README.md) | [Cursor Plugin](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/cursor/README.md#plugin-install) | `cursor-tracing` |
+| [Devin](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/devin/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/devin/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/devin/README.md#windows-powershell) | `devin` |
+| [GitHub Copilot (VS Code + CLI)](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/copilot/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/copilot/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/copilot/README.md#windows-powershell) | `copilot` |
+| [Gemini CLI](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/gemini/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/gemini/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/gemini/README.md#windows-powershell) | `gemini` |
+| [Kiro CLI](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/kiro/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/kiro/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/kiro/README.md#windows-powershell) | `kiro` |
+| [Google Antigravity CLI / IDE](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/antigravity/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/antigravity/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/antigravity/README.md#windows-powershell) | `antigravity` |
+| [Opencode CLI](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/opencode/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/opencode/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/opencode/README.md#windows-powershell) | `opencode` |
+| [Oh My Pi (omp)](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/omp/README.md) | [macOS / Linux](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/omp/README.md#macos--linux) · [Windows](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/omp/README.md#windows-powershell) | `omp` |
 
 > **Each install link opens the ready-to-paste command for your OS — copy it and run it in a terminal**
 
-> Installing Claude Code tracing via the Claude marketplace? See [Claude Code Tracing](tracing/claude_code/README.md#claude-code-marketplace) for the marketplace-specific flow — backend credentials must be set directly in `~/.claude/settings.json` since the install wizard is skipped.
+> Installing Claude Code tracing via the Claude marketplace? See [Claude Code Tracing](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/claude_code/README.md#claude-code-marketplace) for the marketplace-specific flow — backend credentials must be set directly in `~/.claude/settings.json` since the install wizard is skipped.
 
-> Installing Cursor tracing via the Cursor marketplace? The `cursor-tracing` plugin registers all hook events automatically; run the bundled `manage-cursor-tracing` skill once after install to write backend credentials to `~/.arize/harness/config.json`. See [Cursor IDE Tracing](tracing/cursor/README.md#plugin-install) for the full flow.
+> Installing Cursor tracing via the Cursor marketplace? The `cursor-tracing` plugin registers all hook events automatically; run the bundled `manage-cursor-tracing` skill once after install to write backend credentials to `~/.arize/harness/config.json`. See [Cursor IDE Tracing](https://github.com/Arize-ai/coding-harness-tracing/blob/main/tracing/cursor/README.md#plugin-install) for the full flow.
 
 ### Setup walkthrough
 
@@ -125,7 +124,7 @@ A free-form identifier attached to every span as `user.id`. Useful when multiple
 
 #### 4. Project name
 
-The project that groups spans for this harness. Arize AX defaults to `harness/<email>`, using the first email address found in this order:
+The project that groups spans for this harness. Arize AX defaults to `<harness>/<email>`, using the first email address found in this order:
 
 1. The user ID entered during installation.
 2. `ARIZE_USER_ID`. The file named by `ARIZE_ENV_FILE` takes precedence over the process environment.
@@ -172,7 +171,7 @@ ARIZE_ENV_FILE=~/.arize/onboarding.env ./install.sh claude --non-interactive
 | `ARIZE_API_KEY` + `ARIZE_SPACE_ID` | — | Arize AX credentials. Both required for the Arize backend. |
 | `PHOENIX_ENDPOINT`, `PHOENIX_API_KEY` | `http://localhost:6006` | Phoenix endpoint and optional API key. |
 | `ARIZE_BACKEND` | inferred | `arize` or `phoenix`. Inferred when unset: a space ID means Arize AX, a Phoenix endpoint means Phoenix. When both are present, or an Arize key appears with only a Phoenix endpoint, the install stops and asks you to set this rather than guess — guessing would discard one backend's credentials. |
-| `ARIZE_PROJECT_NAME` | `harness/<email>` | Arize AX project. Read only from the file named by `ARIZE_ENV_FILE`, before a saved project or generated default. The installer ignores the process environment value. |
+| `ARIZE_PROJECT_NAME` | `<harness>/<email>` | Arize AX project. Read only from the file named by `ARIZE_ENV_FILE`, before a saved project or generated default. The installer ignores the process environment value. |
 | `PHOENIX_PROJECT`, `PHOENIX_PROJECT_NAME` | harness name | Phoenix project. Read only from the file named by `ARIZE_ENV_FILE`. `PHOENIX_PROJECT` wins when both are set in that file. The installer ignores process environment values. |
 | `ARIZE_USER_ID` | — | Optional `user.id` on every span. Also an email source for the Arize AX project default when the entered install user ID is blank or is not an email address. |
 | `ARIZE_OTLP_ENDPOINT` | `otlp.arize.com:443` | Override for hosted/dedicated Arize instances. |
@@ -194,7 +193,7 @@ The API key is never echoed. The installer reports only that it found one and wh
 [arize] Backend: Arize AX at otlp.arize.com:443 (from default)
 [arize]   space ID: my-space (from /path/to/.env)
 [arize]   API key: found (from /path/to/.env)
-[arize] Project name: harness/dev@example.com (from default)
+[arize] Project name: codex/dev@example.com (from default)
 ```
 
 An API key on its own is rejected as ambiguous, since both backends use one.
@@ -336,8 +335,8 @@ Most settings live in `.arize/harness/config.json`, but a small set of env vars 
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the contribution process, and the CLA
+Contributions are welcome — see [CONTRIBUTING.md](https://github.com/Arize-ai/coding-harness-tracing/blob/main/CONTRIBUTING.md) for development setup, the contribution process, and the CLA
 
 ## License
 
-[Apache 2.0](LICENSE)
+[Apache 2.0](https://github.com/Arize-ai/coding-harness-tracing/blob/main/LICENSE)

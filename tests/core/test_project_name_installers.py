@@ -71,7 +71,7 @@ def test_ax_project_default_is_persisted_and_reinstall_is_preserved(
     module.install(**install_kwargs)
 
     config = json.loads(config_file.read_text())
-    assert config["harnesses"][harness_name]["project_name"] == "harness/alice@example.com"
+    assert config["harnesses"][harness_name]["project_name"] == f"{harness_name}/alice@example.com"
     assert config["harnesses"]["other"] == {"project_name": "keep", "target": "phoenix"}
     assert config["user_id"] == "alice@example.com"
 

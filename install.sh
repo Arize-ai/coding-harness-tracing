@@ -378,7 +378,7 @@ Non-interactive install:
                                     ID means Arize AX, a Phoenix endpoint
                                     means Phoenix)
   ARIZE_PROJECT_NAME                AX project from ARIZE_ENV_FILE only
-                                    (default: harness/<email>; harness ID
+                                    (default: <harness>/<email>; harness ID
                                     if no email is available)
   PHOENIX_PROJECT, PHOENIX_PROJECT_NAME
                                     Phoenix project from ARIZE_ENV_FILE only
