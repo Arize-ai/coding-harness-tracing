@@ -1,4 +1,4 @@
-"""A system-wide uv tool install: a read-only tool folder outside every user's HOME (#95898)."""
+"""A system-wide uv tool install: a read-only tool folder outside every user's HOME."""
 
 from __future__ import annotations
 
