@@ -15,7 +15,7 @@
 API_KEY=""          # ARIZE_API_KEY: Arize API key (never printed)
 SPACE_ID=""         # ARIZE_SPACE_ID: Arize space ID
 OTLP_ENDPOINT=""    # ARIZE_OTLP_ENDPOINT: optional, setup's default when empty
-PACKAGE_SOURCE=""   # ARIZE_MDM_PACKAGE_SOURCE: wheel URL (http/https) or local wheel path
+PACKAGE_SOURCE=""   # ARIZE_MDM_PACKAGE_SOURCE: wheel URL (http/https), local wheel path, or coding-harness-tracing==X.Y.Z
 UV_SOURCE=""        # ARIZE_MDM_UV_SOURCE: empty for the pinned uv release, or a local uv-<target>.tar.gz
 HARNESSES=""        # ARIZE_MDM_HARNESSES: space- or comma-separated, e.g. "claude-code cursor codex"
 EMAIL_MAP_FILE=""   # ARIZE_MDM_EMAIL_MAP_FILE: file of "username email" lines
@@ -60,7 +60,7 @@ UV_BIN="$ARIZE_DIR/bin/uv"
 TOOL_DIR="$ARIZE_DIR/tools"
 PYTHON_DIR="$ARIZE_DIR/python"
 BIN_DIR="$SYSTEM_ROOT/usr/local/bin"
-WHEEL_MARK="$ARIZE_DIR/mdm-wheel.sha256"
+WHEEL_MARK="$ARIZE_DIR/mdm-wheel.sha256"  # the installed wheel's SHA-256, or the PyPI requirement
 WHEEL_DIR="$ARIZE_DIR/wheel"  # the wheel uv's receipt points to, for `uv tool upgrade`
 HARNESS_BIN="$BIN_DIR/arize-harness"
 
@@ -165,11 +165,16 @@ preflight() {
     set +f
 
     case "$PACKAGE_SOURCE" in
+        coding-harness-tracing==[0-9]*)
+            case "${PACKAGE_SOURCE#coding-harness-tracing==}" in
+                *[!0-9A-Za-z.+!-]*) fail 2 "unsupported PACKAGE_SOURCE version: $PACKAGE_SOURCE" ;;
+            esac
+            PACKAGE_KIND=pypi ;;
         http://* | https://*) PACKAGE_KIND=url ;;
-        *://*) fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL or a local wheel path)" ;;
-        *.whl) PACKAGE_KIND=file ;;
-        *) fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL or a local wheel path)" ;;
+        *.whl) case "$PACKAGE_SOURCE" in *://*) ;; *) PACKAGE_KIND=file ;; esac ;;
     esac
+    [ -n "${PACKAGE_KIND:-}" ] \
+        || fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL, a local wheel path, or coding-harness-tracing==X.Y.Z)"
 
     if [ "$PACKAGE_KIND" = file ] && [ ! -f "$PACKAGE_SOURCE" ]; then
         fail 2 "wheel not found: $PACKAGE_SOURCE"
@@ -202,6 +207,10 @@ stage_uv() {
 }
 
 stage_wheel() {
+    if [ "$PACKAGE_KIND" = pypi ]; then
+        INSTALL_MARK="$PACKAGE_SOURCE"
+        return 0
+    fi
     local name
     if [ "$PACKAGE_KIND" = url ]; then
         name="${PACKAGE_SOURCE%%[?#]*}"
@@ -218,7 +227,7 @@ stage_wheel() {
         cp "$PACKAGE_SOURCE" "$STAGED_WHEEL" || fail 1 "cannot read wheel: $PACKAGE_SOURCE"
     fi
     unzip -tq "$STAGED_WHEEL" >/dev/null 2>&1 || fail 1 "not a valid wheel: $name"
-    WHEEL_SHA256="$(sha256_of "$STAGED_WHEEL")"
+    INSTALL_MARK="$(sha256_of "$STAGED_WHEEL")"
 }
 
 # ---------------------------------------------------------------------------
@@ -234,13 +243,13 @@ install_uv() {
 }
 
 system_install_current() {
-    [ -f "$WHEEL_MARK" ] && [ "$(cat "$WHEEL_MARK")" = "$WHEEL_SHA256" ] || return 1
-    cmp -s "$STAGED_WHEEL" "$WHEEL_DIR/$WHEEL_NAME" || return 1
+    [ -f "$WHEEL_MARK" ] && [ "$(cat "$WHEEL_MARK")" = "$INSTALL_MARK" ] || return 1
+    [ "$PACKAGE_KIND" = pypi ] || cmp -s "$STAGED_WHEEL" "$WHEEL_DIR/$WHEEL_NAME" || return 1
     case "$(readlink "$HARNESS_BIN")" in "$TOOL_DIR"/*) ;; *) return 1 ;; esac
     "$HARNESS_BIN" --version >/dev/null 2>&1
 }
 
-# Installs wheel $1 as the system-wide uv tool and checks that it runs.
+# Installs $1 (a wheel path or PyPI requirement) as the system-wide uv tool and checks that it runs.
 uv_tool_install() {
     # --reinstall replaces an install of the same version; UV_NO_CONFIG ignores uv.toml files.
     (umask 022 && env \
@@ -254,16 +263,20 @@ uv_tool_install() {
         && "$HARNESS_BIN" --version >/dev/null 2>&1
 }
 
-# Copies the wheel matching WHEEL_MARK to $WORK/prev and sets PREV_WHEEL (empty if none).
-save_previous_wheel() {
-    PREV_WHEEL=""
+# Sets PREV_TARGET to the current install's PyPI requirement, or to a copy of its wheel in
+# $WORK/prev; empty if there is none.
+save_previous_install() {
+    PREV_TARGET=""
     [ -f "$WHEEL_MARK" ] || return 0
     local mark old
     mark="$(cat "$WHEEL_MARK")"
+    case "$mark" in
+        coding-harness-tracing==*) PREV_TARGET="$mark"; return 0 ;;
+    esac
     for old in "$WHEEL_DIR"/*.whl; do
         [ -f "$old" ] && [ "$(sha256_of "$old")" = "$mark" ] || continue
         mkdir -p "$WORK/prev" && cp -p "$old" "$WORK/prev/" || fail 1 "cannot back up $old"
-        PREV_WHEEL="$WORK/prev/${old##*/}"
+        PREV_TARGET="$WORK/prev/${old##*/}"
         return 0
     done
 }
@@ -277,23 +290,28 @@ system_install() {
         export UV_PYTHON_INSTALL_MIRROR="$PYTHON_MIRROR"
     fi
     mkdir -p "$BIN_DIR" "$WHEEL_DIR" || fail 1 "cannot create $BIN_DIR or $WHEEL_DIR"
-    save_previous_wheel
-    local wheel="$WHEEL_DIR/$WHEEL_NAME" old
-    cp "$STAGED_WHEEL" "$wheel.new" && mv -f "$wheel.new" "$wheel" || fail 1 "cannot write $wheel"
-    if ! uv_tool_install "$wheel"; then
-        if [ -n "$PREV_WHEEL" ]; then
-            # Reinstall the previous wheel.
-            rm -f "$wheel"
-            old="$WHEEL_DIR/${PREV_WHEEL##*/}"
-            cp -p "$PREV_WHEEL" "$old" && uv_tool_install "$old" \
-                || log "error: could not restore the previous install" >&2
+    save_previous_install
+    local target="$PACKAGE_SOURCE" wheel="" old
+    if [ "$PACKAGE_KIND" != pypi ]; then
+        wheel="$WHEEL_DIR/$WHEEL_NAME"
+        target="$wheel"
+        cp "$STAGED_WHEEL" "$wheel.new" && mv -f "$wheel.new" "$wheel" || fail 1 "cannot write $wheel"
+    fi
+    if ! uv_tool_install "$target"; then
+        if [ -n "$PREV_TARGET" ]; then
+            # Reinstall the previous version.
+            [ -n "$wheel" ] && rm -f "$wheel"
+            old="$PREV_TARGET"
+            case "$old" in
+                "$WORK"/prev/*) old="$WHEEL_DIR/${PREV_TARGET##*/}"; cp -p "$PREV_TARGET" "$old" ;;
+            esac && uv_tool_install "$old" || log "error: could not restore the previous install" >&2
         fi
         fail 1 "uv tool install failed, or the installed $HARNESS_BIN does not run"
     fi
     for old in "$WHEEL_DIR"/*.whl; do
-        [ "$old" = "$wheel" ] || rm -f "$old"
+        [ -e "$old" ] && [ "$old" != "$wheel" ] && rm -f "$old"
     done
-    echo "$WHEEL_SHA256" >"$WHEEL_MARK.new" && mv -f "$WHEEL_MARK.new" "$WHEEL_MARK" \
+    echo "$INSTALL_MARK" >"$WHEEL_MARK.new" && mv -f "$WHEEL_MARK.new" "$WHEEL_MARK" \
         || fail 1 "cannot write $WHEEL_MARK"
     log "system install ready: $HARNESS_BIN"
 }
