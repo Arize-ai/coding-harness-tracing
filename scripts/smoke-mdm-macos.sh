@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# MDM install smoke test: runs scripts/mdm/macos/install.sh as real root on a
-# fresh Mac with two test users, then checks the system install and each user's
-# credentials and harness setup. CI's mdm-macos job runs this script.
+# MDM smoke test: runs scripts/mdm/macos/install.sh as real root on a fresh Mac
+# with two test users, checks the system install and each user's credentials and
+# harness setup, then runs uninstall.sh and checks nothing is left. CI's
+# mdm-macos job runs this script.
 #
 #   scripts/smoke-mdm-macos.sh <wheel>
 #
@@ -26,6 +27,7 @@ sudo -n true 2>/dev/null || { echo "smoke-mdm: needs passwordless sudo" >&2; exi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$ROOT/scripts/mdm/macos/install.sh"
+UNINSTALL="$ROOT/scripts/mdm/macos/uninstall.sh"
 # Every harness install.sh accepts, without the claude alias. copilot isn't one: its hooks are
 # per repository, so a per-user MDM setup can't trace it.
 HARNESSES="$(sed -n 's/^SUPPORTED_HARNESSES="\(.*\)"$/\1/p' "$SCRIPT" | tr ' ' '\n' | grep -vx claude | xargs)"
@@ -89,6 +91,14 @@ expect_exit() {
     [[ "$rc" == "$want" ]] || { tail -n 30 "$LOG" >&2; die "install.sh exited $rc, expected $want"; }
 }
 
+# expect_uninstall CODE: runs uninstall.sh as root, appending its output to $LOG.
+expect_uninstall() {
+    local rc=0
+    echo "--- uninstall.sh" >>"$LOG"
+    sudo /bin/bash "$UNINSTALL" >>"$LOG" 2>&1 || rc=$?
+    [[ "$rc" == "$1" ]] || { tail -n 30 "$LOG" >&2; die "uninstall.sh exited $rc, expected $1"; }
+}
+
 # rebuild_wheel KIND: a copy of $WHEEL that fails to resolve (unresolvable) or to run (crashes).
 rebuild_wheel() {
     local kind="$1" tmp="$work/rebuild-$1" out="$work/$1"
@@ -125,6 +135,11 @@ for user in $USERS; do
 done
 cp -R "$ROOT/core" "$ROOT/tracing" "$ROOT/scripts" "$checks/"
 chmod -R a+rX "$checks"
+
+step "uninstall.sh uses install.sh's paths"
+paths() { sed -n -E 's/ *#.*$//; /^(ARIZE_DIR|TOOL_DIR|PYTHON_DIR|BIN_DIR|HARNESS_BIN|WHEEL_DIR|WHEEL_MARK|CREDENTIALS_DIR)=/p' "$1" | sort; }
+[[ "$(paths "$SCRIPT")" == "$(paths "$UNINSTALL")" ]] || die "uninstall.sh's paths differ from install.sh's"
+[[ "$(paths "$UNINSTALL" | wc -l | tr -d ' ')" == 8 ]] || die "uninstall.sh is missing a path"
 
 step "a missing input exits 2 and installs nothing"
 expect_exit 2 "$WHEEL" ARIZE_API_KEY=
@@ -193,6 +208,19 @@ step "a failed upgrade exits 1 and keeps the working install"
 expect_exit 1 "$(rebuild_wheel crashes)"
 "$BIN" --version | grep -qF "$VERSION" || die "the failed upgrade broke $BIN"
 [[ "$(ls /opt/arize/wheel)" == "$(basename "$WHEEL")" ]] || die "the failed upgrade left the wrong wheel in /opt/arize/wheel"
+
+step "uninstall removes every user's setup, the credentials and the system install"
+expect_uninstall 0
+for user in $USERS; do
+    sudo test -e "/Users/$user/.arize/harness" && die "$user's ~/.arize/harness is left"
+    sudo grep -rlF "$BIN" "/Users/$user" --exclude-dir=Library >/dev/null 2>&1 && die "$user has a hook left that runs $BIN"
+done
+sudo test -e "$CREDS" && die "$CREDS is left"
+installed && die "the system install is left"
+
+step "a second uninstall exits 0"
+expect_uninstall 0
+grep -q "skipping per-user uninstall" "$LOG" || die "the second uninstall didn't skip the users"
 
 step "the API key is never printed"
 grep -qF -e "$KEY" -e "$NEW_KEY" "$LOG" && die "install.sh printed the API key"
