@@ -1,7 +1,12 @@
 #!/bin/bash
 # Arize coding harness tracing: MDM install for macOS (Iru Custom Script, runs as root).
-# Installs a checksum-verified uv and a system-wide arize-harness.
-# Exit codes: 0 done, 1 install failed, 2 bad input or environment.
+# Installs a checksum-verified uv and a system-wide arize-harness, then sets up
+# the listed harnesses for every user account that has an email.
+# Exit codes: 0 done, 1 install or a user's setup failed, 2 bad input or environment.
+#
+# Email map file (EMAIL_MAP_FILE): one "username email" pair per line, e.g.
+#   alice alice@example.com
+# Blank lines and lines starting with # are ignored; the first line for a user wins.
 
 # ---------------------------------------------------------------------------
 # Settings. IT sets these in the library item; an empty value falls back to
@@ -10,12 +15,15 @@
 API_KEY=""          # ARIZE_API_KEY: Arize API key (never printed)
 SPACE_ID=""         # ARIZE_SPACE_ID: Arize space ID
 OTLP_ENDPOINT=""    # ARIZE_OTLP_ENDPOINT: optional, setup's default when empty
-PACKAGE_SOURCE=""   # ARIZE_MDM_PACKAGE_SOURCE: wheel URL (http/https) or local wheel path
+PACKAGE_SOURCE=""   # ARIZE_MDM_PACKAGE_SOURCE: wheel URL (http/https), local wheel path, or coding-harness-tracing==X.Y.Z
 UV_SOURCE=""        # ARIZE_MDM_UV_SOURCE: empty for the pinned uv release, or a local uv-<target>.tar.gz
 HARNESSES=""        # ARIZE_MDM_HARNESSES: space- or comma-separated, e.g. "claude-code cursor codex"
 EMAIL_MAP_FILE=""   # ARIZE_MDM_EMAIL_MAP_FILE: file of "username email" lines
 IRU_PLIST=""        # ARIZE_MDM_IRU_PLIST: Iru global variables plist
 PYTHON_MIRROR=""    # UV_PYTHON_INSTALL_MIRROR: optional mirror for uv's managed Python
+LOG_PROMPTS=""      # ARIZE_LOG_PROMPTS: optional, "true" captures prompt text
+LOG_TOOL_DETAILS="" # ARIZE_LOG_TOOL_DETAILS: optional, "true" captures tool commands, paths and URLs
+LOG_TOOL_CONTENT="" # ARIZE_LOG_TOOL_CONTENT: optional, "true" captures tool output
 
 : "${API_KEY:=${ARIZE_API_KEY:-}}"
 : "${SPACE_ID:=${ARIZE_SPACE_ID:-}}"
@@ -26,6 +34,9 @@ PYTHON_MIRROR=""    # UV_PYTHON_INSTALL_MIRROR: optional mirror for uv's managed
 : "${EMAIL_MAP_FILE:=${ARIZE_MDM_EMAIL_MAP_FILE:-}}"
 : "${IRU_PLIST:=${ARIZE_MDM_IRU_PLIST:-/Library/Managed Preferences/io.kandji.globalvariables.plist}}"
 : "${PYTHON_MIRROR:=${UV_PYTHON_INSTALL_MIRROR:-}}"
+: "${LOG_PROMPTS:=${ARIZE_LOG_PROMPTS:-}}"
+: "${LOG_TOOL_DETAILS:=${ARIZE_LOG_TOOL_DETAILS:-}}"
+: "${LOG_TOOL_CONTENT:=${ARIZE_LOG_TOOL_CONTENT:-}}"
 
 set -u
 umask 022
@@ -49,7 +60,7 @@ UV_BIN="$ARIZE_DIR/bin/uv"
 TOOL_DIR="$ARIZE_DIR/tools"
 PYTHON_DIR="$ARIZE_DIR/python"
 BIN_DIR="$SYSTEM_ROOT/usr/local/bin"
-WHEEL_MARK="$ARIZE_DIR/mdm-wheel.sha256"
+WHEEL_MARK="$ARIZE_DIR/mdm-wheel.sha256"  # the installed wheel's SHA-256, or the PyPI requirement
 WHEEL_DIR="$ARIZE_DIR/wheel"  # the wheel uv's receipt points to, for `uv tool upgrade`
 HARNESS_BIN="$BIN_DIR/arize-harness"
 
@@ -122,6 +133,19 @@ preflight() {
     [ -n "$SPACE_ID" ] || fail 2 "missing space ID (SPACE_ID or ARIZE_SPACE_ID)"
     [ -n "$PACKAGE_SOURCE" ] || fail 2 "missing package source (PACKAGE_SOURCE)"
 
+    # Values go single-quoted into each credentials file.
+    local v
+    for v in "$API_KEY" "$SPACE_ID" "$OTLP_ENDPOINT" "$LOG_PROMPTS" "$LOG_TOOL_DETAILS" "$LOG_TOOL_CONTENT"; do
+        case "$v" in
+            *"'"* | *\\* | *"
+"*) fail 2 "API key, space ID, endpoint and ARIZE_LOG_* values can't contain quotes, backslashes or line breaks" ;;
+        esac
+    done
+
+    if [ -n "$EMAIL_MAP_FILE" ] && { [ ! -f "$EMAIL_MAP_FILE" ] || [ ! -r "$EMAIL_MAP_FILE" ]; }; then
+        fail 2 "email map file missing or unreadable: $EMAIL_MAP_FILE"
+    fi
+
     local h
     HARNESS_LIST=""
     set -f
@@ -141,11 +165,16 @@ preflight() {
     set +f
 
     case "$PACKAGE_SOURCE" in
+        coding-harness-tracing==[0-9]*)
+            case "${PACKAGE_SOURCE#coding-harness-tracing==}" in
+                *[!0-9A-Za-z.+!-]*) fail 2 "unsupported PACKAGE_SOURCE version: $PACKAGE_SOURCE" ;;
+            esac
+            PACKAGE_KIND=pypi ;;
         http://* | https://*) PACKAGE_KIND=url ;;
-        *://*) fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL or a local wheel path)" ;;
-        *.whl) PACKAGE_KIND=file ;;
-        *) fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL or a local wheel path)" ;;
+        *.whl) case "$PACKAGE_SOURCE" in *://*) ;; *) PACKAGE_KIND=file ;; esac ;;
     esac
+    [ -n "${PACKAGE_KIND:-}" ] \
+        || fail 2 "unsupported PACKAGE_SOURCE form (use a wheel URL, a local wheel path, or coding-harness-tracing==X.Y.Z)"
 
     if [ "$PACKAGE_KIND" = file ] && [ ! -f "$PACKAGE_SOURCE" ]; then
         fail 2 "wheel not found: $PACKAGE_SOURCE"
@@ -178,6 +207,10 @@ stage_uv() {
 }
 
 stage_wheel() {
+    if [ "$PACKAGE_KIND" = pypi ]; then
+        INSTALL_MARK="$PACKAGE_SOURCE"
+        return 0
+    fi
     local name
     if [ "$PACKAGE_KIND" = url ]; then
         name="${PACKAGE_SOURCE%%[?#]*}"
@@ -194,7 +227,7 @@ stage_wheel() {
         cp "$PACKAGE_SOURCE" "$STAGED_WHEEL" || fail 1 "cannot read wheel: $PACKAGE_SOURCE"
     fi
     unzip -tq "$STAGED_WHEEL" >/dev/null 2>&1 || fail 1 "not a valid wheel: $name"
-    WHEEL_SHA256="$(sha256_of "$STAGED_WHEEL")"
+    INSTALL_MARK="$(sha256_of "$STAGED_WHEEL")"
 }
 
 # ---------------------------------------------------------------------------
@@ -210,13 +243,13 @@ install_uv() {
 }
 
 system_install_current() {
-    [ -f "$WHEEL_MARK" ] && [ "$(cat "$WHEEL_MARK")" = "$WHEEL_SHA256" ] || return 1
-    cmp -s "$STAGED_WHEEL" "$WHEEL_DIR/$WHEEL_NAME" || return 1
+    [ -f "$WHEEL_MARK" ] && [ "$(cat "$WHEEL_MARK")" = "$INSTALL_MARK" ] || return 1
+    [ "$PACKAGE_KIND" = pypi ] || cmp -s "$STAGED_WHEEL" "$WHEEL_DIR/$WHEEL_NAME" || return 1
     case "$(readlink "$HARNESS_BIN")" in "$TOOL_DIR"/*) ;; *) return 1 ;; esac
     "$HARNESS_BIN" --version >/dev/null 2>&1
 }
 
-# Installs wheel $1 as the system-wide uv tool and checks that it runs.
+# Installs $1 (a wheel path or PyPI requirement) as the system-wide uv tool and checks that it runs.
 uv_tool_install() {
     # --reinstall replaces an install of the same version; UV_NO_CONFIG ignores uv.toml files.
     (umask 022 && env \
@@ -230,16 +263,20 @@ uv_tool_install() {
         && "$HARNESS_BIN" --version >/dev/null 2>&1
 }
 
-# Copies the wheel matching WHEEL_MARK to $WORK/prev and sets PREV_WHEEL (empty if none).
-save_previous_wheel() {
-    PREV_WHEEL=""
+# Sets PREV_TARGET to the current install's PyPI requirement, or to a copy of its wheel in
+# $WORK/prev; empty if there is none.
+save_previous_install() {
+    PREV_TARGET=""
     [ -f "$WHEEL_MARK" ] || return 0
     local mark old
     mark="$(cat "$WHEEL_MARK")"
+    case "$mark" in
+        coding-harness-tracing==*) PREV_TARGET="$mark"; return 0 ;;
+    esac
     for old in "$WHEEL_DIR"/*.whl; do
         [ -f "$old" ] && [ "$(sha256_of "$old")" = "$mark" ] || continue
         mkdir -p "$WORK/prev" && cp -p "$old" "$WORK/prev/" || fail 1 "cannot back up $old"
-        PREV_WHEEL="$WORK/prev/${old##*/}"
+        PREV_TARGET="$WORK/prev/${old##*/}"
         return 0
     done
 }
@@ -253,25 +290,140 @@ system_install() {
         export UV_PYTHON_INSTALL_MIRROR="$PYTHON_MIRROR"
     fi
     mkdir -p "$BIN_DIR" "$WHEEL_DIR" || fail 1 "cannot create $BIN_DIR or $WHEEL_DIR"
-    save_previous_wheel
-    local wheel="$WHEEL_DIR/$WHEEL_NAME" old
-    cp "$STAGED_WHEEL" "$wheel.new" && mv -f "$wheel.new" "$wheel" || fail 1 "cannot write $wheel"
-    if ! uv_tool_install "$wheel"; then
-        if [ -n "$PREV_WHEEL" ]; then
-            # Reinstall the previous wheel.
-            rm -f "$wheel"
-            old="$WHEEL_DIR/${PREV_WHEEL##*/}"
-            cp -p "$PREV_WHEEL" "$old" && uv_tool_install "$old" \
-                || log "error: could not restore the previous install" >&2
+    save_previous_install
+    local target="$PACKAGE_SOURCE" wheel="" old
+    if [ "$PACKAGE_KIND" != pypi ]; then
+        wheel="$WHEEL_DIR/$WHEEL_NAME"
+        target="$wheel"
+        cp "$STAGED_WHEEL" "$wheel.new" && mv -f "$wheel.new" "$wheel" || fail 1 "cannot write $wheel"
+    fi
+    if ! uv_tool_install "$target"; then
+        if [ -n "$PREV_TARGET" ]; then
+            # Reinstall the previous version.
+            [ -n "$wheel" ] && rm -f "$wheel"
+            old="$PREV_TARGET"
+            case "$old" in
+                "$WORK"/prev/*) old="$WHEEL_DIR/${PREV_TARGET##*/}"; cp -p "$PREV_TARGET" "$old" ;;
+            esac && uv_tool_install "$old" || log "error: could not restore the previous install" >&2
         fi
         fail 1 "uv tool install failed, or the installed $HARNESS_BIN does not run"
     fi
     for old in "$WHEEL_DIR"/*.whl; do
-        [ "$old" = "$wheel" ] || rm -f "$old"
+        [ -e "$old" ] && [ "$old" != "$wheel" ] && rm -f "$old"
     done
-    echo "$WHEEL_SHA256" >"$WHEEL_MARK.new" && mv -f "$WHEEL_MARK.new" "$WHEEL_MARK" \
+    echo "$INSTALL_MARK" >"$WHEEL_MARK.new" && mv -f "$WHEEL_MARK.new" "$WHEEL_MARK" \
         || fail 1 "cannot write $WHEEL_MARK"
     log "system install ready: $HARNESS_BIN"
+}
+
+# ---------------------------------------------------------------------------
+# Per-user setup: a credentials file and `arize-harness setup` for each user.
+# ---------------------------------------------------------------------------
+
+# Prints "name<TAB>home" for each real account: UID >= 501, not _-prefixed, a shell other than false/nologin, a home folder.
+list_users() {
+    local name uid home shell
+    dscl . -list /Users UniqueID | while read -r name uid; do
+        case "$name" in "" | _*) continue ;; esac
+        case "$uid" in "" | *[!0-9]*) continue ;; esac
+        [ "$uid" -ge 501 ] || continue
+        shell="$(dscl . -read "/Users/$name" UserShell 2>/dev/null | sed -n 's/^UserShell: *//p')"
+        case "$shell" in "" | */false | */nologin) continue ;; esac
+        # A value with spaces comes on the next line, indented by one space.
+        home="$(dscl . -read "/Users/$name" NFSHomeDirectory 2>/dev/null \
+            | sed -e '1s/^NFSHomeDirectory://' -e 's/^ //' | tr -d '\n')"
+        [ -n "$home" ] && [ -d "$home" ] || continue
+        printf '%s\t%s\n' "$name" "$home"
+    done
+}
+
+# Prints user $1's email, or nothing. Sources: EMAIL_MAP_FILE.
+email_for() {
+    [ -n "$EMAIL_MAP_FILE" ] || return 0
+    awk -v user="$1" '{ sub(/\r$/, "") } /^[ \t]*(#|$)/ { next } $1 == user { print $2; exit }' "$EMAIL_MAP_FILE"
+}
+
+# True if $1 has one @, not at either end, and no quote or backslash.
+usable_email() {
+    case "$1" in
+        *"'"* | *\\* | @* | *@ | *@*@*) return 1 ;;
+        *@*) return 0 ;;
+    esac
+    return 1
+}
+
+# Writes user $1's credentials file for email $2 unless it is already current.
+write_credentials() {
+    local user="$1" email="$2"
+    local file="$CREDENTIALS_DIR/$user.env" staged="$WORK/$user.env" tmp="$CREDENTIALS_DIR/.$user.env.new"
+    {
+        echo "ARIZE_BACKEND=arize"
+        echo "ARIZE_API_KEY='$API_KEY'"
+        echo "ARIZE_SPACE_ID='$SPACE_ID'"
+        [ -z "$OTLP_ENDPOINT" ] || echo "ARIZE_OTLP_ENDPOINT='$OTLP_ENDPOINT'"
+        echo "ARIZE_USER_ID='$email'"
+        [ -z "$LOG_PROMPTS" ] || echo "ARIZE_LOG_PROMPTS='$LOG_PROMPTS'"
+        [ -z "$LOG_TOOL_DETAILS" ] || echo "ARIZE_LOG_TOOL_DETAILS='$LOG_TOOL_DETAILS'"
+        [ -z "$LOG_TOOL_CONTENT" ] || echo "ARIZE_LOG_TOOL_CONTENT='$LOG_TOOL_CONTENT'"
+    } >"$staged" || return 1
+    if [ -f "$file" ] && [ ! -L "$file" ] && cmp -s "$staged" "$file" \
+        && [ "$(stat -f '%Su:%Sg %Lp' "$file")" = "root:wheel 400" ] \
+        && [ "$(ls -led "$file" | sed -n 's/^ *[0-9][0-9]*: //p')" = "user:$user allow read" ]; then
+        return 0
+    fi
+    rm -f "$tmp"
+    # Owner, mode and ACL go on after the move, which replaces the file; until then only root can read it.
+    (umask 077 && cat "$staged" >"$tmp") && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    chown root:wheel "$file" && chmod 0400 "$file" && chmod -N "$file" && chmod +a "$user allow read" "$file" \
+        || return 1
+    log "wrote credentials for $user"
+}
+
+# Runs `arize-harness setup <harness> -y` as user $1 (home $2) for each listed harness.
+setup_harnesses() {
+    local user="$1" home="$2" h rc=0
+    set -f
+    for h in $HARNESS_LIST; do
+        if ! (cd "$home" && sudo -H -u "$user" env HOME="$home" ARIZE_ENV_FILE="$CREDENTIALS_DIR/$user.env" \
+            "$HARNESS_BIN" setup "$h" -y </dev/null); then
+            log "error: setup $h failed for $user" >&2
+            rc=1
+        fi
+    done
+    set +f
+    return "$rc"
+}
+
+# Sets up every real account with an email; returns 1 if any user failed.
+setup_users() {
+    local user home email rc=0 found=0
+    if [ ! -d "$CREDENTIALS_DIR" ]; then
+        mkdir -p "$CREDENTIALS_DIR" && chmod 0755 "$CREDENTIALS_DIR" || fail 1 "cannot create $CREDENTIALS_DIR"
+    fi
+    while IFS="$(printf '\t')" read -r user home; do
+        [ -n "$user" ] || continue
+        found=1
+        email="$(email_for "$user")"
+        if [ -z "$email" ]; then
+            log "skipping $user: no email"
+            continue
+        fi
+        if ! usable_email "$email"; then
+            log "error: skipping $user: not a usable email: $email" >&2
+            rc=1
+            continue
+        fi
+        if ! write_credentials "$user" "$email"; then
+            log "error: cannot write credentials for $user" >&2
+            rc=1
+            continue
+        fi
+        setup_harnesses "$user" "$home" || rc=1
+    done <<EOF_USERS
+$(list_users)
+EOF_USERS
+    [ "$found" = 1 ] || log "no user accounts found"
+    return "$rc"
 }
 
 main() {
@@ -286,11 +438,9 @@ main() {
     system_install
     COMMITTING=0
 
-    # --- Per-user setup (part 2 of Arize-ai/arize#95899) goes here. ---
-    # Uses API_KEY, SPACE_ID, OTLP_ENDPOINT, HARNESS_LIST, EMAIL_MAP_FILE,
-    # IRU_PLIST, PLISTBUDDY and CREDENTIALS_DIR.
-
-    exit 0
+    # Past the commit window: a user's failure never rolls back the system install.
+    setup_users
+    exit "$?"
 }
 
 main "$@"

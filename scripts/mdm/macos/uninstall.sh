@@ -17,7 +17,7 @@ set -u
 SYSTEM_ROOT="${ARIZE_MDM_SYSTEM_ROOT:-}"
 CREDENTIALS_DIR="${ARIZE_MDM_CREDENTIALS_DIR:-$SYSTEM_ROOT/Library/Application Support/Arize/harness}"
 
-# Same paths as install.sh (tests/mdm_macos checks they match).
+# Same paths as install.sh (scripts/smoke-mdm-macos.sh checks they match).
 # shellcheck disable=SC2034
 {
 ARIZE_DIR="$SYSTEM_ROOT/opt/arize"
