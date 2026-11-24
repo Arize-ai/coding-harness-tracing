@@ -29,12 +29,15 @@ sudo -n true 2>/dev/null || { echo "smoke-mdm: needs passwordless sudo" >&2; exi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$ROOT/scripts/mdm/macos/install.sh"
 UNINSTALL="$ROOT/scripts/mdm/macos/uninstall.sh"
+# Every harness install.sh accepts, without the claude alias. copilot isn't one: its hooks are
+# per repository, so a per-user MDM setup can't trace it.
+HARNESSES="$(sed -n 's/^SUPPORTED_HARNESSES="\(.*\)"$/\1/p' "$SCRIPT" | tr ' ' '\n' | grep -vx claude | xargs)"
+[[ -n "$HARNESSES" ]] || die "no SUPPORTED_HARNESSES in $SCRIPT"
 BIN=/usr/local/bin/arize-harness
 KEY="smoke-mdm-key-never-printed"
 NEW_KEY="smoke-mdm-rotated-key-never-printed"
 VERSION="$(basename "$WHEEL" | cut -d- -f2)"
 CREDS="/Library/Application Support/Arize/harness"
-HARNESSES="claude-code cursor codex"
 USERS="smoke-alice smoke-bob"
 ME="$(id -un)"
 IRU_EMAIL="assigned@example.com"

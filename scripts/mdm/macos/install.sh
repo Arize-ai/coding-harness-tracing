@@ -383,25 +383,29 @@ usable_email() {
 # Writes user $1's credentials file for email $2 unless it is already current.
 write_credentials() {
     local user="$1" email="$2"
-    local file="$CREDENTIALS_DIR/$user.env" staged="$WORK/$user.env" tmp="$CREDENTIALS_DIR/.$user.env.new"
-    {
-        echo "ARIZE_BACKEND=arize"
-        echo "ARIZE_API_KEY='$API_KEY'"
-        echo "ARIZE_SPACE_ID='$SPACE_ID'"
-        [ -z "$OTLP_ENDPOINT" ] || echo "ARIZE_OTLP_ENDPOINT='$OTLP_ENDPOINT'"
-        echo "ARIZE_USER_ID='$email'"
-        [ -z "$LOG_PROMPTS" ] || echo "ARIZE_LOG_PROMPTS='$LOG_PROMPTS'"
-        [ -z "$LOG_TOOL_DETAILS" ] || echo "ARIZE_LOG_TOOL_DETAILS='$LOG_TOOL_DETAILS'"
-        [ -z "$LOG_TOOL_CONTENT" ] || echo "ARIZE_LOG_TOOL_CONTENT='$LOG_TOOL_CONTENT'"
-    } >"$staged" || return 1
-    if [ -f "$file" ] && [ ! -L "$file" ] && cmp -s "$staged" "$file" \
+    local file="$CREDENTIALS_DIR/$user.env" tmp="$CREDENTIALS_DIR/.$user.env.new"
+    rm -f "$tmp"
+    # Staged in the root-only credentials folder, where uninstall.sh finds it if this run is killed.
+    (
+        # Chained with &&: set -e has no effect in a subshell tested by ||.
+        umask 077 && exec >"$tmp" \
+            && echo "ARIZE_BACKEND=arize" \
+            && echo "ARIZE_API_KEY='$API_KEY'" \
+            && echo "ARIZE_SPACE_ID='$SPACE_ID'" \
+            && { [ -z "$OTLP_ENDPOINT" ] || echo "ARIZE_OTLP_ENDPOINT='$OTLP_ENDPOINT'"; } \
+            && echo "ARIZE_USER_ID='$email'" \
+            && { [ -z "$LOG_PROMPTS" ] || echo "ARIZE_LOG_PROMPTS='$LOG_PROMPTS'"; } \
+            && { [ -z "$LOG_TOOL_DETAILS" ] || echo "ARIZE_LOG_TOOL_DETAILS='$LOG_TOOL_DETAILS'"; } \
+            && { [ -z "$LOG_TOOL_CONTENT" ] || echo "ARIZE_LOG_TOOL_CONTENT='$LOG_TOOL_CONTENT'"; }
+    ) || { rm -f "$tmp"; return 1; }
+    if [ -f "$file" ] && [ ! -L "$file" ] && cmp -s "$tmp" "$file" \
         && [ "$(stat -f '%Su:%Sg %Lp' "$file")" = "root:wheel 400" ] \
         && [ "$(ls -led "$file" | sed -n 's/^ *[0-9][0-9]*: //p')" = "user:$user allow read" ]; then
+        rm -f "$tmp"
         return 0
     fi
-    rm -f "$tmp"
     # Owner, mode and ACL go on after the move, which replaces the file; until then only root can read it.
-    (umask 077 && cat "$staged" >"$tmp") && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
     chown root:wheel "$file" && chmod 0400 "$file" && chmod -N "$file" && chmod +a "$user allow read" "$file" \
         || return 1
     log "wrote credentials for $user"
