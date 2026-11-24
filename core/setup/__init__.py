@@ -55,8 +55,10 @@ def print_color(msg: str, color: str = "") -> None:
         print(msg)
 
 
-def info(msg: str) -> None:
-    """Print an info message with [arize] prefix."""
+def info(msg: str, quiet: bool = False) -> None:
+    """Print an info message with [arize] prefix, unless ``quiet``."""
+    if quiet:
+        return
     if sys.stdout.isatty() and os.name != "nt":
         print(f"\033[0;32m[arize]\033[0m {msg}")
     else:
@@ -71,8 +73,10 @@ def err(msg: str) -> None:
         sys.stderr.write(f"[arize] {msg}\n")
 
 
-def warn(msg: str) -> None:
-    """Print a yellow ``[arize] warning:`` line to stderr."""
+def warn(msg: str, quiet: bool = False) -> None:
+    """Print a yellow ``[arize] warning:`` line to stderr, unless ``quiet``."""
+    if quiet:
+        return
     if sys.stderr.isatty() and os.name != "nt":
         sys.stderr.write(f"\033[1;33m[arize] warning: {msg}\033[0m\n")
     else:
@@ -255,8 +259,6 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
     Exits with an actionable message when a required value is missing; this
     path must never fall back to a prompt, because there is nobody to answer it.
     """
-    say = (lambda _msg: None) if quiet else info
-    caution = (lambda _msg: None) if quiet else warn
     target = _backend_choice()
 
     if not target and strict:
@@ -308,10 +310,13 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
         else:
             endpoint = _env("PHOENIX_ENDPOINT") or _DEFAULT_PHOENIX_ENDPOINT
         api_key = _env("PHOENIX_API_KEY")
-        say(f"Backend: Phoenix at {endpoint} (from {_source_of('PHOENIX_ENDPOINT', fallback='default')})")
-        say(f"  API key: {'found' if api_key else 'none'} (from {_source_of('PHOENIX_API_KEY', fallback='unset')})")
+        info(f"Backend: Phoenix at {endpoint} (from {_source_of('PHOENIX_ENDPOINT', fallback='default')})", quiet)
+        info(
+            f"  API key: {'found' if api_key else 'none'} (from {_source_of('PHOENIX_API_KEY', fallback='unset')})",
+            quiet,
+        )
         if strict and not api_key:
-            caution(_NO_PHOENIX_KEY_WARNING)
+            warn(_NO_PHOENIX_KEY_WARNING, quiet)
         return ("phoenix", {"endpoint": endpoint, "api_key": api_key})
 
     # Arize AX. Read the key but never echo it — only report that it was found
@@ -322,10 +327,10 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
     if not endpoint:
         endpoint = _DEFAULT_ARIZE_ENDPOINT
         if strict:
-            caution(f"ARIZE_OTLP_ENDPOINT is not set; using the default Arize endpoint {endpoint}.")
-    say(f"Backend: Arize AX at {endpoint} (from {_source_of('ARIZE_OTLP_ENDPOINT', fallback='default')})")
-    say(f"  space ID: {space_id} (from {_source_of('ARIZE_SPACE_ID')})")
-    say(f"  API key: found (from {_source_of('ARIZE_API_KEY')})")
+            warn(f"ARIZE_OTLP_ENDPOINT is not set; using the default Arize endpoint {endpoint}.", quiet)
+    info(f"Backend: Arize AX at {endpoint} (from {_source_of('ARIZE_OTLP_ENDPOINT', fallback='default')})", quiet)
+    info(f"  space ID: {space_id} (from {_source_of('ARIZE_SPACE_ID')})", quiet)
+    info(f"  API key: found (from {_source_of('ARIZE_API_KEY')})", quiet)
     return ("arize", {"endpoint": endpoint, "api_key": api_key, "space_id": space_id})
 
 

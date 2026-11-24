@@ -30,6 +30,7 @@ from core.setup import (
     non_interactive,
     preflight_backend_replacement,
     print_color,
+    warn,
 )
 from core.setup.runner import (
     DIST_NAME,
@@ -41,10 +42,6 @@ from core.setup.runner import (
     setup_write_refusal,
     system_upgrade_command,
 )
-
-
-def warn(msg: str) -> None:
-    print_color(f"[arize] warning: {msg}", "yellow")
 
 
 def header(msg: str) -> None:
