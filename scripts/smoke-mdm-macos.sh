@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # MDM install smoke test: runs scripts/mdm/macos/install.sh as real root on a
-# fresh Mac, then checks the system install from a normal user. CI's mdm-macos
-# job runs this script.
+# fresh Mac with two test users, then checks the system install and each user's
+# credentials and harness setup. CI's mdm-macos job runs this script.
 #
 #   scripts/smoke-mdm-macos.sh <wheel>
 #
 #   SMOKE_MDM_FORCE=1   run outside CI
 #
-# Writes to /opt/arize and /usr/local/bin and leaves the install in place, so it
-# only runs in CI or with SMOKE_MDM_FORCE=1, on a throwaway machine.
+# Writes to /opt/arize, /usr/local/bin and /Library, creates user accounts and
+# leaves them all in place, so it only runs in CI or with SMOKE_MDM_FORCE=1, on a
+# throwaway machine.
 set -euo pipefail
 
 die() { echo "smoke-mdm: FAIL: $*" >&2; exit 1; }
@@ -31,13 +32,43 @@ HARNESSES="$(sed -n 's/^SUPPORTED_HARNESSES="\(.*\)"$/\1/p' "$SCRIPT" | tr ' ' '
 [[ -n "$HARNESSES" ]] || die "no SUPPORTED_HARNESSES in $SCRIPT"
 BIN=/usr/local/bin/arize-harness
 KEY="smoke-mdm-key-never-printed"
+NEW_KEY="smoke-mdm-rotated-key-never-printed"
 VERSION="$(basename "$WHEEL" | cut -d- -f2)"
+CREDS="/Library/Application Support/Arize/harness"
+USERS="smoke-alice smoke-bob"
+PY=/opt/arize/tools/coding-harness-tracing/bin/python
 work="$(mktemp -d)"
+# The checks run as each test user, so they need a copy of the checkout every user can read.
+checks="$(mktemp -d /tmp/smoke-mdm-checks.XXXXXX)"
 LOG="$work/mdm.log"
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work" "$checks"' EXIT
 
 installed() { [[ -e /opt/arize ]] || ls /usr/local/bin/arize-* >/dev/null 2>&1; }
 installed && die "/opt/arize or /usr/local/bin/arize-* already exists; needs a fresh machine"
+
+email() { echo "$1@example.com"; }
+
+# add_user NAME UID: a standard account with a home folder.
+add_user() {
+    dscl . -read "/Users/$1" >/dev/null 2>&1 && die "user $1 already exists"
+    dscl . -list /Users UniqueID | awk -v uid="$2" '$2 == uid { found = 1 } END { exit !found }' &&
+        die "UID $2 is taken"
+    sudo dscl . -create "/Users/$1"
+    sudo dscl . -create "/Users/$1" UserShell /bin/zsh
+    sudo dscl . -create "/Users/$1" UniqueID "$2"
+    sudo dscl . -create "/Users/$1" PrimaryGroupID 20
+    sudo dscl . -create "/Users/$1" NFSHomeDirectory "/Users/$1"
+    sudo createhomedir -c -u "$1" >/dev/null
+}
+
+# as_user USER CMD...: runs CMD as USER from their home folder, with their HOME.
+as_user() {
+    local user="$1"
+    shift
+    sudo -H -u "$user" /bin/sh -c 'cd "$HOME" && exec "$@"' sh "$@"
+}
+check_as() { local user="$1"; shift; as_user "$user" "$PY" -I -B "$checks/scripts/smoke_wheel_check.py" "$@"; }
+config_value() { as_user "$1" plutil -extract "$2" raw -o - .arize/harness/config.json; }
 
 # mdm SOURCE [VAR=value ...]: runs install.sh as root, appending its output to $LOG.
 mdm() {
@@ -45,7 +76,7 @@ mdm() {
     shift
     echo "--- install.sh PACKAGE_SOURCE=$source $*" >>"$LOG"
     sudo env ARIZE_API_KEY="$KEY" ARIZE_SPACE_ID=smoke-space \
-        ARIZE_MDM_HARNESSES="$HARNESSES" \
+        ARIZE_MDM_HARNESSES="$HARNESSES" ARIZE_MDM_EMAIL_MAP_FILE="$work/emails.txt" \
         ARIZE_MDM_PACKAGE_SOURCE="$source" "$@" /bin/bash "$SCRIPT" >>"$LOG" 2>&1 || rc=$?
     return "$rc"
 }
@@ -76,12 +107,24 @@ rebuild_wheel() {
     echo "$out/$(basename "$WHEEL")"
 }
 
+# Every file and link of the install and the test users, with owner, mode, size and mtime; logs left out.
 snapshot() {
-    {
-        find /opt/arize -print0 | xargs -0 stat -f '%N %Su %p %z %m'
-        stat -f '%N %Su %p %z %m' /usr/local/bin/arize-*
-    } | sort
+    local homes=() user
+    for user in $USERS; do homes+=("/Users/$user"); done
+    sudo find /opt/arize /usr/local/bin/arize-* "$CREDS" "${homes[@]}" \
+        -path '*/.arize/harness/logs' -prune -o \( -type f -o -type l \) -print0 |
+        sudo xargs -0 stat -f '%N%t%Su %p %z %m' | sort
 }
+
+step "create test users"
+uid=5001
+for user in $USERS; do
+    add_user "$user" "$uid"
+    uid=$((uid + 1))
+    echo "$user $(email "$user")" >>"$work/emails.txt"
+done
+cp -R "$ROOT/core" "$ROOT/tracing" "$ROOT/scripts" "$checks/"
+chmod -R a+rX "$checks"
 
 step "a missing input exits 2 and installs nothing"
 expect_exit 2 "$WHEEL" ARIZE_API_KEY=
@@ -103,6 +146,28 @@ step "install $VERSION"
 expect_exit 0 "$WHEEL"
 [[ "$(stat -f %Su /opt/arize/tools/coding-harness-tracing)" == root ]] || die "the install isn't owned by root"
 "$BIN" --version | grep -qF "$VERSION" || die "$BIN --version, run as $(id -un), doesn't report $VERSION"
+grep -q "skipping $(id -un): no email" "$LOG" || die "$(id -un) has no email but wasn't skipped"
+
+for user in $USERS; do
+    step "$user: credentials file"
+    file="$CREDS/$user.env"
+    [[ "$(sudo stat -f '%Su:%Sg %Lp' "$file")" == "root:wheel 400" ]] || die "$file isn't root:wheel 0400"
+    ls -led "$file" | grep -q "user:$user allow read" || die "$file has no read ACL for $user"
+    as_user "$user" grep -qF "ARIZE_USER_ID='$(email "$user")'" "$file" || die "$user can't read $file, or it has the wrong email"
+    cat "$file" >/dev/null 2>&1 && die "$(id -un) can read $file"
+    for other in $USERS; do
+        [[ "$other" == "$user" ]] || ! as_user "$other" cat "$file" >/dev/null 2>&1 || die "$other can read $file"
+    done
+
+    step "$user: harness setup"
+    check_as "$user" entries "$BIN" $HARNESSES || die "$user's hooks don't all run $BIN"
+    [[ "$(config_value "$user" user_id)" == "$(email "$user")" ]] || die "$user's saved user ID isn't their email"
+    for h in $HARNESSES; do
+        [[ "$(config_value "$user" "harnesses.$h.project_name")" == "$h/$(email "$user")" ]] ||
+            die "$user's $h project isn't $h/$(email "$user")"
+    done
+    check_as "$user" claude-turn "$BIN" || die "$user's Claude Code hooks logged no dry-run span"
+done
 
 step "a re-run changes nothing"
 before="$(snapshot)"
@@ -110,12 +175,26 @@ expect_exit 0 "$WHEEL"
 grep -q "system install is current" "$LOG" || die "the re-run reinstalled"
 [[ "$(snapshot)" == "$before" ]] || die "the re-run changed files"
 
+step "a new key changes only the credentials files and saved keys"
+before="$(snapshot)"
+expect_exit 0 "$WHEEL" ARIZE_API_KEY="$NEW_KEY"
+after="$(snapshot)"
+[[ "$(cut -f1 <<<"$before")" == "$(cut -f1 <<<"$after")" ]] || die "the new key added or removed files"
+changed="$(diff <(echo "$before") <(echo "$after") | sed -n 's/^> //p' | cut -f1 | sort)"
+expected="$(for user in $USERS; do echo "$CREDS/$user.env"; echo "/Users/$user/.arize/harness/config.json"; done | sort)"
+[[ "$changed" == "$expected" ]] || die "the new key changed: $changed"
+for user in $USERS; do
+    for h in $HARNESSES; do
+        [[ "$(config_value "$user" "harnesses.$h.api_key")" == "$NEW_KEY" ]] || die "$user's $h key wasn't replaced"
+    done
+done
+
 step "a failed upgrade exits 1 and keeps the working install"
 expect_exit 1 "$(rebuild_wheel crashes)"
 "$BIN" --version | grep -qF "$VERSION" || die "the failed upgrade broke $BIN"
 [[ "$(ls /opt/arize/wheel)" == "$(basename "$WHEEL")" ]] || die "the failed upgrade left the wrong wheel in /opt/arize/wheel"
 
 step "the API key is never printed"
-grep -qF "$KEY" "$LOG" && die "install.sh printed the API key"
+grep -qF -e "$KEY" -e "$NEW_KEY" "$LOG" && die "install.sh printed the API key"
 
 step "all checks passed"

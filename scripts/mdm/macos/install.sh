@@ -1,7 +1,12 @@
 #!/bin/bash
 # Arize coding harness tracing: MDM install for macOS (Iru Custom Script, runs as root).
-# Installs a checksum-verified uv and a system-wide arize-harness.
-# Exit codes: 0 done, 1 install failed, 2 bad input or environment.
+# Installs a checksum-verified uv and a system-wide arize-harness, then sets up
+# the listed harnesses for every user account that has an email.
+# Exit codes: 0 done, 1 install or a user's setup failed, 2 bad input or environment.
+#
+# Email map file (EMAIL_MAP_FILE): one "username email" pair per line, e.g.
+#   alice alice@example.com
+# Blank lines and lines starting with # are ignored; the first line for a user wins.
 
 # ---------------------------------------------------------------------------
 # Settings. IT sets these in the library item; an empty value falls back to
@@ -16,6 +21,9 @@ HARNESSES=""        # ARIZE_MDM_HARNESSES: space- or comma-separated, e.g. "clau
 EMAIL_MAP_FILE=""   # ARIZE_MDM_EMAIL_MAP_FILE: file of "username email" lines
 IRU_PLIST=""        # ARIZE_MDM_IRU_PLIST: Iru global variables plist
 PYTHON_MIRROR=""    # UV_PYTHON_INSTALL_MIRROR: optional mirror for uv's managed Python
+LOG_PROMPTS=""      # ARIZE_LOG_PROMPTS: optional, "true" captures prompt text
+LOG_TOOL_DETAILS="" # ARIZE_LOG_TOOL_DETAILS: optional, "true" captures tool commands, paths and URLs
+LOG_TOOL_CONTENT="" # ARIZE_LOG_TOOL_CONTENT: optional, "true" captures tool output
 
 : "${API_KEY:=${ARIZE_API_KEY:-}}"
 : "${SPACE_ID:=${ARIZE_SPACE_ID:-}}"
@@ -26,6 +34,9 @@ PYTHON_MIRROR=""    # UV_PYTHON_INSTALL_MIRROR: optional mirror for uv's managed
 : "${EMAIL_MAP_FILE:=${ARIZE_MDM_EMAIL_MAP_FILE:-}}"
 : "${IRU_PLIST:=${ARIZE_MDM_IRU_PLIST:-/Library/Managed Preferences/io.kandji.globalvariables.plist}}"
 : "${PYTHON_MIRROR:=${UV_PYTHON_INSTALL_MIRROR:-}}"
+: "${LOG_PROMPTS:=${ARIZE_LOG_PROMPTS:-}}"
+: "${LOG_TOOL_DETAILS:=${ARIZE_LOG_TOOL_DETAILS:-}}"
+: "${LOG_TOOL_CONTENT:=${ARIZE_LOG_TOOL_CONTENT:-}}"
 
 set -u
 umask 022
@@ -121,6 +132,19 @@ preflight() {
     [ -n "$API_KEY" ] || fail 2 "missing API key (API_KEY or ARIZE_API_KEY)"
     [ -n "$SPACE_ID" ] || fail 2 "missing space ID (SPACE_ID or ARIZE_SPACE_ID)"
     [ -n "$PACKAGE_SOURCE" ] || fail 2 "missing package source (PACKAGE_SOURCE)"
+
+    # Values go single-quoted into each credentials file.
+    local v
+    for v in "$API_KEY" "$SPACE_ID" "$OTLP_ENDPOINT" "$LOG_PROMPTS" "$LOG_TOOL_DETAILS" "$LOG_TOOL_CONTENT"; do
+        case "$v" in
+            *"'"* | *\\* | *"
+"*) fail 2 "API key, space ID, endpoint and ARIZE_LOG_* values can't contain quotes, backslashes or line breaks" ;;
+        esac
+    done
+
+    if [ -n "$EMAIL_MAP_FILE" ] && { [ ! -f "$EMAIL_MAP_FILE" ] || [ ! -r "$EMAIL_MAP_FILE" ]; }; then
+        fail 2 "email map file missing or unreadable: $EMAIL_MAP_FILE"
+    fi
 
     local h
     HARNESS_LIST=""
@@ -292,6 +316,120 @@ system_install() {
     log "system install ready: $HARNESS_BIN"
 }
 
+# ---------------------------------------------------------------------------
+# Per-user setup: a credentials file and `arize-harness setup` for each user.
+# ---------------------------------------------------------------------------
+
+# Prints "name<TAB>home" for each real account: UID >= 501, not _-prefixed, a shell other than false/nologin, a home folder.
+list_users() {
+    local name uid home shell
+    dscl . -list /Users UniqueID | while read -r name uid; do
+        case "$name" in "" | _*) continue ;; esac
+        case "$uid" in "" | *[!0-9]*) continue ;; esac
+        [ "$uid" -ge 501 ] || continue
+        shell="$(dscl . -read "/Users/$name" UserShell 2>/dev/null | sed -n 's/^UserShell: *//p')"
+        case "$shell" in "" | */false | */nologin) continue ;; esac
+        # A value with spaces comes on the next line, indented by one space.
+        home="$(dscl . -read "/Users/$name" NFSHomeDirectory 2>/dev/null \
+            | sed -e '1s/^NFSHomeDirectory://' -e 's/^ //' | tr -d '\n')"
+        [ -n "$home" ] && [ -d "$home" ] || continue
+        printf '%s\t%s\n' "$name" "$home"
+    done
+}
+
+# Prints user $1's email, or nothing. Sources: EMAIL_MAP_FILE.
+email_for() {
+    [ -n "$EMAIL_MAP_FILE" ] || return 0
+    awk -v user="$1" '{ sub(/\r$/, "") } /^[ \t]*(#|$)/ { next } $1 == user { print $2; exit }' "$EMAIL_MAP_FILE"
+}
+
+# True if $1 has one @, not at either end, and no quote or backslash.
+usable_email() {
+    case "$1" in
+        *"'"* | *\\* | @* | *@ | *@*@*) return 1 ;;
+        *@*) return 0 ;;
+    esac
+    return 1
+}
+
+# Writes user $1's credentials file for email $2 unless it is already current.
+write_credentials() {
+    local user="$1" email="$2"
+    local file="$CREDENTIALS_DIR/$user.env" tmp="$CREDENTIALS_DIR/.$user.env.new"
+    rm -f "$tmp"
+    # Staged in the root-only credentials folder, where uninstall.sh finds it if this run is killed.
+    (
+        # Chained with &&: set -e has no effect in a subshell tested by ||.
+        umask 077 && exec >"$tmp" \
+            && echo "ARIZE_BACKEND=arize" \
+            && echo "ARIZE_API_KEY='$API_KEY'" \
+            && echo "ARIZE_SPACE_ID='$SPACE_ID'" \
+            && { [ -z "$OTLP_ENDPOINT" ] || echo "ARIZE_OTLP_ENDPOINT='$OTLP_ENDPOINT'"; } \
+            && echo "ARIZE_USER_ID='$email'" \
+            && { [ -z "$LOG_PROMPTS" ] || echo "ARIZE_LOG_PROMPTS='$LOG_PROMPTS'"; } \
+            && { [ -z "$LOG_TOOL_DETAILS" ] || echo "ARIZE_LOG_TOOL_DETAILS='$LOG_TOOL_DETAILS'"; } \
+            && { [ -z "$LOG_TOOL_CONTENT" ] || echo "ARIZE_LOG_TOOL_CONTENT='$LOG_TOOL_CONTENT'"; }
+    ) || { rm -f "$tmp"; return 1; }
+    if [ -f "$file" ] && [ ! -L "$file" ] && cmp -s "$tmp" "$file" \
+        && [ "$(stat -f '%Su:%Sg %Lp' "$file")" = "root:wheel 400" ] \
+        && [ "$(ls -led "$file" | sed -n 's/^ *[0-9][0-9]*: //p')" = "user:$user allow read" ]; then
+        rm -f "$tmp"
+        return 0
+    fi
+    # Owner, mode and ACL go on after the move, which replaces the file; until then only root can read it.
+    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    chown root:wheel "$file" && chmod 0400 "$file" && chmod -N "$file" && chmod +a "$user allow read" "$file" \
+        || return 1
+    log "wrote credentials for $user"
+}
+
+# Runs `arize-harness setup <harness> -y` as user $1 (home $2) for each listed harness.
+setup_harnesses() {
+    local user="$1" home="$2" h rc=0
+    set -f
+    for h in $HARNESS_LIST; do
+        if ! (cd "$home" && sudo -H -u "$user" env HOME="$home" ARIZE_ENV_FILE="$CREDENTIALS_DIR/$user.env" \
+            "$HARNESS_BIN" setup "$h" -y </dev/null); then
+            log "error: setup $h failed for $user" >&2
+            rc=1
+        fi
+    done
+    set +f
+    return "$rc"
+}
+
+# Sets up every real account with an email; returns 1 if any user failed.
+setup_users() {
+    local user home email rc=0 found=0
+    if [ ! -d "$CREDENTIALS_DIR" ]; then
+        mkdir -p "$CREDENTIALS_DIR" && chmod 0755 "$CREDENTIALS_DIR" || fail 1 "cannot create $CREDENTIALS_DIR"
+    fi
+    while IFS="$(printf '\t')" read -r user home; do
+        [ -n "$user" ] || continue
+        found=1
+        email="$(email_for "$user")"
+        if [ -z "$email" ]; then
+            log "skipping $user: no email"
+            continue
+        fi
+        if ! usable_email "$email"; then
+            log "error: skipping $user: not a usable email: $email" >&2
+            rc=1
+            continue
+        fi
+        if ! write_credentials "$user" "$email"; then
+            log "error: cannot write credentials for $user" >&2
+            rc=1
+            continue
+        fi
+        setup_harnesses "$user" "$home" || rc=1
+    done <<EOF_USERS
+$(list_users)
+EOF_USERS
+    [ "$found" = 1 ] || log "no user accounts found"
+    return "$rc"
+}
+
 main() {
     preflight
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/arize-mdm.XXXXXX")" || fail 1 "cannot create a temp folder"
@@ -304,9 +442,9 @@ main() {
     system_install
     COMMITTING=0
 
-    # Per-user setup goes here.
-
-    exit 0
+    # Past the commit window: a user's failure never rolls back the system install.
+    setup_users
+    exit "$?"
 }
 
 main "$@"
