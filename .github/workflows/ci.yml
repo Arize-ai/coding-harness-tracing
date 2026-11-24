@@ -68,6 +68,32 @@ jobs:
           SMOKE_INSTALLER: ${{ matrix.installer }}
         run: scripts/smoke-install.sh ${{ matrix.harness }}
 
+  # The MDM install path: scripts/mdm/macos/install.sh as real root on a
+  # throwaway runner, with the wheel built here. Downloads uv and its Python,
+  # so it is not offline.
+  mdm-macos:
+    name: MDM install smoke test (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Tags, so the wheel gets the version a release build would.
+          fetch-depth: 0
+
+      # Only builds the wheel; install.sh uses the uv it installs itself.
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        with:
+          version: "0.13.5"
+          python-version: "3.11"
+
+      - name: Build the wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Smoke-test the MDM install
+        run: scripts/smoke-mdm-macos.sh dist/*.whl
+
   # The PyPI install path: uv tool install of the wheel built here, offline.
   wheel-smoke:
     name: Wheel smoke test (uv tool install, ${{ matrix.os }})
