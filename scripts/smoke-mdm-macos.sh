@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# MDM smoke test: runs scripts/mdm/macos/install.sh as real root on a fresh Mac
-# with two test users, checks the system install and each user's credentials and
-# harness setup, then runs uninstall.sh and checks nothing is left. CI's
+# MDM smoke test: runs scripts/mdm/macos/install.sh as real root on a fresh Mac,
+# checks the Iru email for the Mac's only account, then adds two test users and
+# checks the system install and each user's credentials and harness setup. Last,
+# runs uninstall.sh and checks nothing is left. CI's
 # mdm-macos job runs this script.
 #
 #   scripts/smoke-mdm-macos.sh <wheel>
@@ -35,11 +36,15 @@ VERSION="$(basename "$WHEEL" | cut -d- -f2)"
 CREDS="/Library/Application Support/Arize/harness"
 HARNESSES="claude-code cursor codex"
 USERS="smoke-alice smoke-bob"
+ME="$(id -un)"
+IRU_EMAIL="assigned@example.com"
 PY=/opt/arize/tools/coding-harness-tracing/bin/python
 work="$(mktemp -d)"
 # The checks run as each test user, so they need a copy of the checkout every user can read.
 checks="$(mktemp -d /tmp/smoke-mdm-checks.XXXXXX)"
 LOG="$work/mdm.log"
+IRU_PLIST="$work/iru.plist"  # created by the Iru step; until then there is no plist
+: >"$work/emails.txt"
 trap 'rm -rf "$work" "$checks"' EXIT
 
 installed() { [[ -e /opt/arize ]] || ls /usr/local/bin/arize-* >/dev/null 2>&1; }
@@ -75,7 +80,7 @@ mdm() {
     shift
     echo "--- install.sh PACKAGE_SOURCE=$source $*" >>"$LOG"
     sudo env ARIZE_API_KEY="$KEY" ARIZE_SPACE_ID=smoke-space \
-        ARIZE_MDM_HARNESSES="$HARNESSES" ARIZE_MDM_EMAIL_MAP_FILE="$work/emails.txt" \
+        ARIZE_MDM_HARNESSES="$HARNESSES" ARIZE_MDM_EMAIL_MAP_FILE="$work/emails.txt" ARIZE_MDM_IRU_PLIST="$IRU_PLIST" \
         ARIZE_MDM_PACKAGE_SOURCE="$source" "$@" /bin/bash "$SCRIPT" >>"$LOG" 2>&1 || rc=$?
     return "$rc"
 }
@@ -123,13 +128,9 @@ snapshot() {
         sudo xargs -0 stat -f '%N%t%Su %p %z %m' | sort
 }
 
-step "create test users"
-uid=5001
-for user in $USERS; do
-    add_user "$user" "$uid"
-    uid=$((uid + 1))
-    echo "$user $(email "$user")" >>"$work/emails.txt"
-done
+# creds_email USER: the ARIZE_USER_ID in USER's credentials file.
+creds_email() { sudo sed -n "s/^ARIZE_USER_ID='\(.*\)'$/\1/p" "$CREDS/$1.env"; }
+
 cp -R "$ROOT/core" "$ROOT/tracing" "$ROOT/scripts" "$checks/"
 chmod -R a+rX "$checks"
 
@@ -141,6 +142,9 @@ paths() { sed -n -E 's/ *#.*$//; /^(ARIZE_DIR|TOOL_DIR|PYTHON_DIR|BIN_DIR|HARNES
 step "a missing input exits 2 and installs nothing"
 expect_exit 2 "$WHEEL" ARIZE_API_KEY=
 installed && die "a missing input left files behind"
+expect_exit 2 "$WHEEL" ARIZE_MDM_EMAIL_MAP_FILE=
+grep -q "no email source" "$LOG" || die "no email source wasn't reported"
+installed && die "a missing email source left files behind"
 
 step "a uv that doesn't match the pinned checksum exits 1 and installs nothing"
 case "$(uname -m)" in arm64) target=aarch64-apple-darwin ;; *) target=x86_64-apple-darwin ;; esac
@@ -154,11 +158,32 @@ step "a failed first install exits 1 and leaves nothing"
 expect_exit 1 "$(rebuild_wheel unresolvable)"
 installed && die "a failed first install left files behind"
 
-step "install $VERSION"
+step "$ME, the only account, gets the Iru email; a map entry wins over it"
+plutil -create xml1 "$IRU_PLIST"
+plutil -insert EMAIL -string "$IRU_EMAIL" "$IRU_PLIST"
+echo "$ME $(email "$ME")" >"$work/lone-map.txt"
+expect_exit 0 "$WHEEL" ARIZE_MDM_HARNESSES=claude-code ARIZE_MDM_EMAIL_MAP_FILE="$work/lone-map.txt"
+grep -q "not using the Iru email" "$LOG" && die "$ME isn't the runner's only account"
+[[ "$(creds_email "$ME")" == "$(email "$ME")" ]] || die "the map entry didn't win over the Iru email"
+expect_exit 0 "$WHEEL" ARIZE_MDM_HARNESSES=claude-code
+[[ "$(creds_email "$ME")" == "$IRU_EMAIL" ]] || die "$ME didn't get the Iru email"
+
+step "create test users"
+uid=5001
+for user in $USERS; do
+    add_user "$user" "$uid"
+    uid=$((uid + 1))
+    echo "$user $(email "$user")" >>"$work/emails.txt"
+done
+
+step "install $VERSION for the test users"
+before_log="$(wc -l <"$LOG")"
 expect_exit 0 "$WHEEL"
+tail -n +"$((before_log + 1))" "$LOG" | grep -q "not using the Iru email" ||
+    die "the Iru email was used with several accounts"
 [[ "$(stat -f %Su /opt/arize/tools/coding-harness-tracing)" == root ]] || die "the install isn't owned by root"
 "$BIN" --version | grep -qF "$VERSION" || die "$BIN --version, run as $(id -un), doesn't report $VERSION"
-grep -q "skipping $(id -un): no email" "$LOG" || die "$(id -un) has no email but wasn't skipped"
+grep -q "skipping $ME: no email" "$LOG" || die "$ME has no email but wasn't skipped"
 
 for user in $USERS; do
     step "$user: credentials file"

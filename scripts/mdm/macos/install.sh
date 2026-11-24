@@ -7,6 +7,8 @@
 # Email map file (EMAIL_MAP_FILE): one "username email" pair per line, e.g.
 #   alice alice@example.com
 # Blank lines and lines starting with # are ignored; the first line for a user wins.
+# Without a map entry, the only account on the Mac gets EMAIL from the Iru Global
+# Variables plist (IRU_PLIST). One of the two sources is required.
 
 # ---------------------------------------------------------------------------
 # Settings. IT sets these in the library item; an empty value falls back to
@@ -144,6 +146,9 @@ preflight() {
 
     if [ -n "$EMAIL_MAP_FILE" ] && { [ ! -f "$EMAIL_MAP_FILE" ] || [ ! -r "$EMAIL_MAP_FILE" ]; }; then
         fail 2 "email map file missing or unreadable: $EMAIL_MAP_FILE"
+    fi
+    if [ -z "$EMAIL_MAP_FILE" ] && [ ! -f "$IRU_PLIST" ]; then
+        fail 2 "no email source: set EMAIL_MAP_FILE or deploy the Iru global variables profile ($IRU_PLIST)"
     fi
 
     local h
@@ -337,10 +342,33 @@ list_users() {
     done
 }
 
-# Prints user $1's email, or nothing. Sources: EMAIL_MAP_FILE.
+# Sets IRU_EMAIL and IRU_USER, the one account it goes to, from the plist and list_users output $1.
+pick_iru_user() {
+    IRU_EMAIL=""
+    IRU_USER=""
+    [ -f "$IRU_PLIST" ] || return 0
+    IRU_EMAIL="$("$PLISTBUDDY" -c "Print :EMAIL" "$IRU_PLIST" 2>/dev/null)" || IRU_EMAIL=""
+    [ -n "$IRU_EMAIL" ] || return 0
+    # The plist's USERNAME is the Iru username, not a macOS short name, so only a lone account qualifies.
+    local count
+    count="$(printf '%s\n' "$1" | grep -c .)"
+    if [ "$count" = 1 ]; then
+        IRU_USER="${1%%$(printf '\t')*}"
+    elif [ "$count" -gt 1 ]; then
+        log "not using the Iru email: $count user accounts, so the assigned user is unknown"
+    fi
+}
+
+# Prints user $1's email, or nothing. The map file wins; then the Iru email for IRU_USER only.
 email_for() {
-    [ -n "$EMAIL_MAP_FILE" ] || return 0
-    awk -v user="$1" '{ sub(/\r$/, "") } /^[ \t]*(#|$)/ { next } $1 == user { print $2; exit }' "$EMAIL_MAP_FILE"
+    local email=""
+    if [ -n "$EMAIL_MAP_FILE" ]; then
+        email="$(awk -v user="$1" '{ sub(/\r$/, "") } /^[ \t]*(#|$)/ { next } $1 == user { print $2; exit }' "$EMAIL_MAP_FILE")"
+    fi
+    if [ -z "$email" ] && [ -n "$IRU_USER" ] && [ "$1" = "$IRU_USER" ]; then
+        email="$IRU_EMAIL"
+    fi
+    [ -z "$email" ] || echo "$email"
 }
 
 # True if $1 has one @, not at either end, and no quote or backslash.
@@ -396,10 +424,12 @@ setup_harnesses() {
 
 # Sets up every real account with an email; returns 1 if any user failed.
 setup_users() {
-    local user home email rc=0 found=0
+    local user home email users rc=0 found=0
     if [ ! -d "$CREDENTIALS_DIR" ]; then
         mkdir -p "$CREDENTIALS_DIR" && chmod 0755 "$CREDENTIALS_DIR" || fail 1 "cannot create $CREDENTIALS_DIR"
     fi
+    users="$(list_users)"
+    pick_iru_user "$users"
     while IFS="$(printf '\t')" read -r user home; do
         [ -n "$user" ] || continue
         found=1
@@ -420,7 +450,7 @@ setup_users() {
         fi
         setup_harnesses "$user" "$home" || rc=1
     done <<EOF_USERS
-$(list_users)
+$users
 EOF_USERS
     [ "$found" = 1 ] || log "no user accounts found"
     return "$rc"
