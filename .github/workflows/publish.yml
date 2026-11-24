@@ -95,43 +95,19 @@ jobs:
           uv python install 3.11
           scripts/smoke-wheel.sh dist/*.whl
 
-      # Only the wheel is compared: the sdist's tar and gzip headers carry build-time timestamps.
+      # From main, not the tag: tags older than the script don't have it.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: release-tools
+          sparse-checkout: scripts/compare_pypi.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Compare with PyPI
         id: pypi
         env:
           TAG: ${{ inputs.tag }}
-        shell: uv run --no-project python {0}
-        run: |
-          import hashlib, json, os, pathlib, shutil, sys, urllib.error, urllib.request
-
-          version = os.environ["TAG"][1:]
-          url = f"https://pypi.org/pypi/coding-harness-tracing/{version}/json"
-          try:
-              with urllib.request.urlopen(url, timeout=30) as r:
-                  released = {f["filename"]: f["digests"]["sha256"] for f in json.load(r)["urls"]}
-          except urllib.error.HTTPError as e:
-              if e.code != 404:
-                  raise
-              released = {}
-
-          upload = pathlib.Path("upload")
-          upload.mkdir()
-          mismatched = []
-          for f in sorted(pathlib.Path("dist").iterdir()):
-              digest = hashlib.sha256(f.read_bytes()).hexdigest()
-              theirs = released.get(f.name)
-              print(f"{f.name}\n  built: {digest}\n  PyPI:  {theirs or 'not uploaded'}")
-              if theirs is None:
-                  shutil.copy2(f, upload)
-              elif f.suffix == ".whl" and theirs != digest:
-                  mismatched.append(f.name)
-          if mismatched:
-              sys.exit(f"::error::{', '.join(mismatched)} differs from the file on PyPI")
-
-          todo = sorted(p.name for p in upload.iterdir())
-          print(f"to upload: {', '.join(todo) or 'nothing, all files are on PyPI'}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"upload={'true' if todo else 'false'}\nversion={version}\n")
+        run: uv run --no-project python release-tools/scripts/compare_pypi.py "$TAG" dist upload
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
