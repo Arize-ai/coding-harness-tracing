@@ -145,7 +145,13 @@ To release:
    git tag v0.2.0rc1 && git push origin v0.2.0rc1
    ```
 
-2. In GitHub, go to **Actions → Publish to PyPI → Run workflow**, leave "Use workflow from" on `main`, and enter the tag. The workflow checks the tag is on main, builds the tag, runs `twine check`, checks the built version matches the tag, and uploads.
+2. In GitHub, go to **Actions → Publish to PyPI → Run workflow**, leave "Use workflow from" on `main`, and enter the tag. The workflow checks the tag is on main, builds the tag, runs `twine check`, checks the built version matches the tag, runs `scripts/smoke-wheel.sh` on the wheel, uploads any files not already on PyPI, then installs the version from PyPI with `uv tool install` and checks `arize-harness --version`.
+
+Tick **dry-run** to run every step except the upload and the install from PyPI.
+
+If a run fails or is cancelled, re-run it or dispatch it again with the same tag. Builds are reproducible, so files already on PyPI aren't uploaded again; the run fails if the rebuilt wheel's SHA-256 differs from PyPI's (wheel only; the sdist isn't reproducible). `0.1.0rc1` predates reproducible builds, so a re-run of it always fails this check.
+
+PyPI never lets a file be replaced. To withdraw a bad version, yank it on PyPI (**Manage → Releases → Options → Yank**) with a reason, then release a fix under a new version. A yanked version still installs when pinned with `==`.
 
 Pushing a tag alone publishes nothing. Pre-releases (`aN`, `bN`, `rcN`) and dev releases (`.devN`) install only with `pip install --pre`.
 

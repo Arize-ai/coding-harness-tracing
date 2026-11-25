@@ -9,6 +9,11 @@ on:
         description: "Release tag to publish, e.g. v0.2.0rc1"
         required: true
         type: string
+      dry-run:
+        description: "Run every check but upload nothing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -25,8 +30,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      upload: ${{ steps.pypi.outputs.upload }}
+      version: ${{ steps.pypi.outputs.version }}
     steps:
       - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        with:
+          version: "0.13.5"
 
       - name: Validate tag
         env:
@@ -57,8 +67,13 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: git merge-base --is-ancestor HEAD origin/main || { echo "::error::$TAG is not on main"; exit 1; }
 
+      # Reproducible, so a re-run rebuilds PyPI's wheel byte for byte. Bump the pins with build-system.requires.
       - name: Build
-        run: uv build
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export UV_BUILD_CONSTRAINT="$RUNNER_TEMP/build-constraints.txt"
+          printf '%s\n' setuptools==84.2.1 setuptools-scm==8.3.1 packaging==26.4 > "$UV_BUILD_CONSTRAINT"
+          uv build --python 3.11
 
       - name: Check distributions
         env:
@@ -73,15 +88,44 @@ jobs:
             esac
           done
 
+      - name: Smoke-test the wheel
+        env:
+          UV_PYTHON: "3.11"
+        run: |
+          uv python install 3.11
+          scripts/smoke-wheel.sh dist/*.whl
+
+      # From main, not the tag: tags older than the script don't have it.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: release-tools
+          sparse-checkout: scripts/compare_pypi.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Compare with PyPI
+        id: pypi
+        env:
+          TAG: ${{ inputs.tag }}
+        run: uv run --no-project python release-tools/scripts/compare_pypi.py "$TAG" dist upload
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
           if-no-files-found: error
 
+      - if: steps.pypi.outputs.upload == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: upload
+          path: upload/
+          if-no-files-found: error
+
   publish:
     name: Publish
     needs: build
+    if: ${{ !inputs.dry-run && needs.build.outputs.upload == 'true' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -89,7 +133,39 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: dist
-          path: dist/
+          name: upload
+          path: upload/
 
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: upload/
+
+  verify:
+    name: Install from PyPI
+    needs: [build, publish]
+    # Also runs when publish was skipped because every file was already on PyPI.
+    if: ${{ !cancelled() && !inputs.dry-run && needs.build.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+
+      - name: uv tool install and check --version
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          UV_NO_CACHE: "1"
+          UV_TOOL_DIR: ${{ runner.temp }}/tools
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/bin
+        run: |
+          # PyPI's index can lag the upload by a few minutes.
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if uv tool install --force "coding-harness-tracing==$VERSION"; then
+              out="$("$UV_TOOL_BIN_DIR/arize-harness" --version 2>&1)" || true
+              [[ "$out" == "arize-harness $VERSION" ]] && { echo "$out"; exit 0; }
+              echo "--version printed '$out'"
+            fi
+            echo "attempt $attempt failed; retrying in 30s"
+            sleep 30
+          done
+          echo "::error::could not install coding-harness-tracing==$VERSION from PyPI and get its version"
+          exit 1
