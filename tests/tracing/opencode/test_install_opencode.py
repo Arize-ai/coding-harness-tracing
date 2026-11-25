@@ -55,12 +55,11 @@ def _mock_prompts(monkeypatch, backend=None):
         backend = PHOENIX_BACKEND
 
     monkeypatch.setattr(
-        _install,
-        "prompt_backend",
+        "core.setup.prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-    monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
+    monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+    monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
     monkeypatch.setattr(
         _install,
         "prompt_content_logging",
@@ -267,9 +266,9 @@ class TestInstallSecondHarnessOffersCopyFrom:
             captured["existing_harnesses"] = existing_harnesses
             return ARIZE_BACKEND
 
-        monkeypatch.setattr(_install, "prompt_backend", fake_prompt_backend)
-        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-        monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
+        monkeypatch.setattr("core.setup.prompt_backend", fake_prompt_backend)
+        monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+        monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
         monkeypatch.setattr(
             _install,
             "prompt_content_logging",
@@ -319,7 +318,7 @@ class TestInstallExistingOpencodeEntryOnlyUpdatesProjectName:
         }
         config_path.write_text(json.dumps(seed_config, indent=2))
 
-        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": "my-opencode")
+        monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": "my-opencode")
         monkeypatch.setattr(
             _install,
             "prompt_content_logging",
@@ -649,12 +648,11 @@ class TestInstallPromptsForLogging:
         mock_write_logging = MagicMock()
 
         monkeypatch.setattr(
-            _install,
-            "prompt_backend",
+            "core.setup.prompt_backend",
             lambda existing_harnesses=None: PHOENIX_BACKEND,
         )
-        monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-        monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
+        monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+        monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
         monkeypatch.setattr(_install, "prompt_content_logging", mock_prompt_logging)
         monkeypatch.setattr(_install, "write_logging_config", mock_write_logging)
         monkeypatch.setattr("sys.stdout", _fake_stdout())

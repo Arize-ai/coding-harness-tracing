@@ -15,22 +15,19 @@ from __future__ import annotations
 import json
 import sys
 
-from core.config import get_value, load_config
+from core.config import load_config, write_text_if_changed
 from core.setup import (
+    configure_harness_backend,
     dry_run,
     ensure_shared_runtime,
     filter_our_nested_hooks,
     hook_command_for,
     info,
     is_our_hook_command,
-    merge_harness_entry,
-    prompt_backend,
+    preflight_backend_replacement,
     prompt_content_logging,
-    prompt_project_name,
-    prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    write_config,
     write_logging_config,
 )
 from tracing.gemini.constants import EVENTS, HARNESS_NAME, HOOK_NAME, HOOK_TIMEOUT_MS
@@ -86,7 +83,7 @@ def _write_settings(data: dict) -> None:
     """Write *data* as pretty-printed JSON to settings.json."""
     path = _settings_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    write_text_if_changed(path, json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -182,23 +179,11 @@ def _uninstall_hooks() -> None:
 
 def install() -> None:
     """Install Gemini tracing hooks and register in config.json."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     ensure_shared_runtime()
 
     config = load_config()
-    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-
-    if not existing_entry or not isinstance(existing_entry, dict) or "target" not in existing_entry:
-        existing_harnesses = config.get("harnesses") if config else None
-        target, credentials = prompt_backend(existing_harnesses)
-        user_id = prompt_user_id()
-        project_name = prompt_project_name(HARNESS_NAME, target, config, user_id)
-        if not dry_run():
-            write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
-        else:
-            info("would write config.json with backend credentials")
-    else:
-        project_name = prompt_project_name(HARNESS_NAME, existing_entry["target"], config)
-        merge_harness_entry(HARNESS_NAME, project_name)
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:

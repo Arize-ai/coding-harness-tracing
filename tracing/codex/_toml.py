@@ -11,6 +11,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from core.config import write_text_if_changed
+
 _tomllib = tomllib
 
 _ARIZE_OTLP_ENDPOINT_RE = re.compile(r"^https?://127\.0\.0\.1:\d+/v1/logs$")
@@ -139,7 +141,7 @@ def _toml_write(data: dict, path: Path) -> None:
     """Write a dict as TOML. Hand-rolled — no tomli-w dependency."""
     lines: list[str] = []
     _toml_write_section(data, [], lines)
-    path.write_text("\n".join(lines) + "\n")
+    write_text_if_changed(path, "\n".join(lines) + "\n")
 
 
 _BARE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")

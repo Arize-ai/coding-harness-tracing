@@ -9,9 +9,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from core.config import get_value, load_config
+from core.config import load_config, write_text_if_changed
 from core.setup import (
     INSTALL_DIR,
+    configure_harness_backend,
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
@@ -21,15 +22,11 @@ from core.setup import (
     hook_command_for,
     info,
     install_skills,
-    merge_harness_entry,
     non_interactive,
-    prompt_backend,
+    preflight_backend_replacement,
     prompt_content_logging,
-    prompt_project_name,
-    prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    write_config,
     write_logging_config,
 )
 from tracing.kiro.constants import (
@@ -47,6 +44,7 @@ from tracing.kiro.constants import (
 
 def install(with_skills: bool = False, agent_name: str | None = None) -> None:
     """Install Kiro tracing: configure backend, write hooks into an agent config."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     if not ensure_harness_installed(DISPLAY_NAME, home_subdir=HARNESS_HOME, bin_name=HARNESS_BIN):
         info("Aborted.")
         return
@@ -61,19 +59,7 @@ def install(with_skills: bool = False, agent_name: str | None = None) -> None:
         state_dir.mkdir(parents=True, exist_ok=True)
 
     config = load_config()
-    existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-    if not isinstance(existing_entry, dict) or "target" not in existing_entry:
-        existing_harnesses = config.get("harnesses") if config else None
-        target, credentials = prompt_backend(existing_harnesses)
-        user_id = prompt_user_id()
-        project_name = prompt_project_name(HARNESS_NAME, target, config, user_id)
-        if not dry_run():
-            write_config(target, credentials, HARNESS_NAME, project_name, user_id=user_id)
-        else:
-            info("would write config.json with backend credentials")
-    else:
-        project_name = prompt_project_name(HARNESS_NAME, existing_entry["target"], config)
-        merge_harness_entry(HARNESS_NAME, project_name)
+    configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     if (config.get("logging") if config else None) is None:
         logging_block = prompt_content_logging()
@@ -141,7 +127,7 @@ def _load_agent(path: Path, fallback_name: str) -> dict:
 
 def _save_agent(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    write_text_if_changed(path, json.dumps(data, indent=2) + "\n")
 
 
 def _register_kiro_hooks(agent_path: Path, name: str) -> None:

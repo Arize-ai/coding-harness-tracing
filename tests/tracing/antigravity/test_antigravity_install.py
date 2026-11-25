@@ -53,12 +53,11 @@ def _mock_prompts(monkeypatch, backend=None):
         backend = PHOENIX_BACKEND
 
     monkeypatch.setattr(
-        _install,
-        "prompt_backend",
+        "core.setup.prompt_backend",
         lambda existing_harnesses=None: backend,
     )
-    monkeypatch.setattr(_install, "prompt_project_name", lambda name, target, config, user_id="": name)
-    monkeypatch.setattr(_install, "prompt_user_id", lambda: "")
+    monkeypatch.setattr("core.setup.prompt_project_name", lambda name, target, config, user_id="": name)
+    monkeypatch.setattr("core.setup.prompt_user_id", lambda: "")
     monkeypatch.setattr(
         _install,
         "prompt_content_logging",

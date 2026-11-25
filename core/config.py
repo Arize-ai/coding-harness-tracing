@@ -96,12 +96,32 @@ def delete_value(config, dotted_key):
 
 
 def save_config(config, config_path=None):
-    """Write config dict to the JSON file with chmod 600."""
+    """Write config dict to the JSON file with chmod 600, unless it already holds exactly that."""
     path = config_path or CONFIG_FILE
+    text = json.dumps(config, indent=2)
+    if holds_text(path, text):
+        return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump(config, f, indent=2)
+        f.write(text)
+
+
+def holds_text(path, text, encoding=None):
+    """True if ``path`` already holds exactly ``text``."""
+    try:
+        with open(path, encoding=encoding) as f:
+            return f.read() == text
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def write_text_if_changed(path, text, encoding=None):
+    """``path.write_text(text)`` unless the file already holds ``text``; returns whether it wrote."""
+    if holds_text(path, text, encoding):
+        return False
+    path.write_text(text, encoding=encoding)
+    return True
 
 
 def _coerce_scalar(raw):

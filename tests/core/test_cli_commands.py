@@ -261,18 +261,36 @@ class TestBackendFlag:
         assert "invalid choice: 'datadog'" in result.stderr
         assert _snapshot(home) == before
 
-    @pytest.mark.parametrize("mode, stdin", [([], "\n"), (["-y"], "")])
-    def test_already_configured_keeps_the_saved_backend(self, mode, stdin, tmp_path) -> None:
+    def test_interactive_already_configured_keeps_the_saved_backend(self, tmp_path) -> None:
         home = _home(tmp_path)
         creds = _write_creds(home, "PHOENIX_ENDPOINT=http://phoenix.test:6006\n")
         first = _cli(home, "setup", "claude", "-y", ARIZE_ENV_FILE=creds)
         assert first.returncode == 0, first.stdout + first.stderr
 
-        result = _cli(home, "setup", "claude", "--backend", "arize", *mode, stdin=stdin)
+        result = _cli(home, "setup", "claude", "--backend", "arize", stdin="\n")
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "claude-code is already configured for phoenix; keeping it and ignoring --backend arize" in result.stdout
+        assert "claude-code is already configured for phoenix; keeping it and ignoring --backend arize" in result.stderr
         assert BACKEND_MENU not in result.stdout
         assert _config(home)["harnesses"]["claude-code"]["target"] == "phoenix"
+
+    def test_non_interactive_replaces_the_saved_backend(self, tmp_path) -> None:
+        home = _home(tmp_path)
+        phoenix = _write_creds(home, "PHOENIX_ENDPOINT=http://phoenix.test:6006\n")
+        first = _cli(home, "setup", "claude", "-y", ARIZE_ENV_FILE=phoenix)
+        assert first.returncode == 0, first.stdout + first.stderr
+
+        arize = home / "arize.env"
+        arize.write_text("ARIZE_API_KEY=k\nARIZE_SPACE_ID=s\nARIZE_OTLP_ENDPOINT=otlp.test:443\n")
+        result = _cli(home, "setup", "claude", "--backend", "arize", "-y", ARIZE_ENV_FILE=str(arize))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ignoring --backend" not in result.stdout + result.stderr
+        entry = _config(home)["harnesses"]["claude-code"]
+        assert (entry["target"], entry["endpoint"], entry["api_key"], entry["space_id"]) == (
+            "arize",
+            "otlp.test:443",
+            "k",
+            "s",
+        )
 
 
 class TestPromptBackend:
@@ -354,6 +372,7 @@ def fake_installers(monkeypatch):
     monkeypatch.setattr(install_table, "INSTALLERS", installers)
     monkeypatch.setattr(commands, "migrate_yaml_config", lambda: False)
     monkeypatch.setattr(commands, "load_config", lambda: {})
+    monkeypatch.setattr(commands, "preflight_backend_replacement", lambda key, quiet=False: None)
     return calls
 
 
@@ -365,9 +384,9 @@ class TestWithSkills:
     def test_warns_and_completes_for_an_installer_that_does_not(self, fake_installers, capsys) -> None:
         assert cli.main(["setup", "gemini", "--with-skills", "-y"]) == 0
         assert fake_installers["gemini"] == [("install", {})]
-        out = capsys.readouterr().out
-        assert "gemini has no skills to install; ignoring --with-skills" in out
-        assert "Setup complete!" in out
+        captured = capsys.readouterr()
+        assert "gemini has no skills to install; ignoring --with-skills" in captured.err
+        assert "Setup complete!" in captured.out
 
     def test_kiro_never_gets_an_agent_name(self, fake_installers) -> None:
         assert cli.main(["setup", "kiro", "--with-skills", "-y"]) == 0
@@ -518,7 +537,7 @@ class TestUninstall:
         assert fake_installers["claude-code"] == [("uninstall", {})]
         assert fake_installers["codex"] == [("uninstall", {})]
         assert wipe == [True]
-        assert "Unknown harness: bogus (skipping)" in capsys.readouterr().out
+        assert "Unknown harness: bogus (skipping)" in capsys.readouterr().err
 
     def test_all_continues_past_a_failing_harness(self, wipe, fake_installers, install_state, monkeypatch) -> None:
         def boom():

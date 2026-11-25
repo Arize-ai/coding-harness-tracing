@@ -16,10 +16,11 @@ import re
 import sys
 from pathlib import Path
 
-from core.config import get_value, load_config
+from core.config import get_value, load_config, write_text_if_changed
 from core.setup import (
     CONFIG_FILE,
     NotRegistered,
+    configure_harness_backend,
     dry_run,
     ensure_harness_installed,
     ensure_shared_runtime,
@@ -30,14 +31,11 @@ from core.setup import (
     is_arize_hook_command,
     is_old_venv_hook,
     is_our_hook_command,
-    merge_harness_entry,
-    prompt_backend,
+    non_interactive,
+    preflight_backend_replacement,
     prompt_content_logging,
-    prompt_project_name,
-    prompt_user_id,
     remove_harness_entry,
     remove_harness_files,
-    write_config,
     write_logging_config,
 )
 from core.setup.runner import hook_argv
@@ -201,7 +199,7 @@ def _write_env_file(path: Path, user_id: str = "") -> None:
         lines.append(f"export ARIZE_USER_ID={user_id}")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
+    write_text_if_changed(path, "\n".join(lines) + "\n")
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -229,6 +227,7 @@ def _is_our_env_file(path: Path) -> bool:
 
 def install(with_skills: bool = False) -> None:
     """Install codex tracing harness (hooks-based v2 layout)."""
+    backend = preflight_backend_replacement(HARNESS_NAME)
     codex_home = get_codex_home()
     codex_config_file = codex_home / "config.toml"
     codex_env_file = codex_home / "arize-env.sh"
@@ -246,27 +245,9 @@ def install(with_skills: bool = False) -> None:
     ensure_shared_runtime()
     config = load_config(str(CONFIG_FILE))
     existing_entry = get_value(config, f"harnesses.{HARNESS_NAME}")
-
-    if isinstance(existing_entry, dict) and "target" in existing_entry:
+    if isinstance(existing_entry, dict) and "target" in existing_entry and not non_interactive():
         info(f"Reusing existing backend: {existing_entry.get('target')}")
-        project_name = prompt_project_name(HARNESS_NAME, existing_entry["target"], config)
-        merge_harness_entry(HARNESS_NAME, project_name)
-        user_id = get_value(config, "user_id") or ""
-    else:
-        existing_harnesses = config.get("harnesses", {}) if config else {}
-        target, credentials = prompt_backend(existing_harnesses=existing_harnesses)
-        user_id = prompt_user_id()
-        project_name = prompt_project_name(HARNESS_NAME, target, config, user_id)
-        if not dry_run():
-            write_config(
-                target=target,
-                credentials=credentials,
-                harness_name=HARNESS_NAME,
-                project_name=project_name,
-                user_id=user_id,
-            )
-        else:
-            info("would write config.json with backend credentials")
+    user_id = configure_harness_backend(HARNESS_NAME, config, backend=backend)
 
     # Logging settings are global. Prompt only if no `logging:` block exists yet.
     if (config.get("logging") if config else None) is None:

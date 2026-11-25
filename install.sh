@@ -317,6 +317,8 @@ install_harness() {
     install_repo
     setup_venv "$python_cmd"
     local vp; vp=$(venv_python) || { err "Venv python not found after setup"; exit 1; }
+    # A backend replacement that would fail must fail before the migration writes.
+    "$vp" -m core.setup preflight "$cmd" || exit 1
     info "Migrating legacy config.yaml to config.json (if present)..."
     "$vp" -m core.config migrate || true
     if [[ "$skills" == true ]]; then
@@ -468,6 +470,8 @@ main() {
             # EOFError, so fall back to stored values there — and only there, so an
             # interactive update keeps every prompt it has today.
             [[ -n "$_tty_in" ]] || export ARIZE_NONINTERACTIVE=1
+            # Re-registering keeps each saved backend; only setup replaces it.
+            export ARIZE_KEEP_SAVED_BACKEND=1
             # A wheel install has no repo to pull and no newer wheel to hand us.
             # Silently converting it to a network install would change how it was
             # installed behind the user's back, so refuse and say who can update.
