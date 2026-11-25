@@ -103,6 +103,17 @@ def _iso_to_ms(ts: str) -> int:
         return 0
 
 
+def _user_message_item_text(item: dict) -> str:
+    """Join the text parts of a paginated-mode UserMessage item's content list."""
+    parts = []
+    for part in item.get("content") or []:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
 def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None":
     """Walk the rollout JSONL and extract everything for one turn. Returns None if the
     turn isn't found."""
@@ -208,11 +219,24 @@ def _extract_turn_from_rollout(rollout_path: Path, turn_id: str) -> "dict | None
                         duration_ms = d
                     continue
 
-                # User prompt
+                # User prompt (legacy history mode: Codex < 0.148, or
+                # --ephemeral / Legacy-mode threads)
                 if outer == "event_msg" and ptype == "user_message":
                     msg = payload.get("message")
                     if msg:
                         user_prompt = msg
+                    continue
+
+                # User prompt (paginated history mode: the default for
+                # `codex exec` since 0.148). The prompt is persisted as an
+                # item_completed event whose item is a UserMessage with a
+                # content list; the legacy user_message event is not written.
+                if outer == "event_msg" and ptype == "item_completed":
+                    item = payload.get("item") or {}
+                    if isinstance(item, dict) and item.get("type") == "UserMessage":
+                        text = _user_message_item_text(item)
+                        if text:
+                            user_prompt = text
                     continue
 
                 # Intermediate assistant message (overwritten by task_complete if both present)

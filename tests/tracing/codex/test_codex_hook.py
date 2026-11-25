@@ -62,6 +62,15 @@ def _resp(payload, ts="2026-05-20T00:00:01.000Z"):
     return {"timestamp": ts, "type": "response_item", "payload": payload}
 
 
+def _item_completed(*content, item_type="UserMessage"):
+    """Paginated history mode (Codex >= 0.148) item_completed event."""
+    return _evt({"type": "item_completed", "item": {"type": item_type, "content": list(content)}})
+
+
+def _text(text):
+    return {"type": "text", "text": text}
+
+
 def _attrs_of_span(span):
     return {a["key"]: a["value"] for a in span["attributes"]}
 
@@ -158,6 +167,52 @@ class TestExtractTurnFromRollout:
         assert turn["turn_start_ms"] == 1000 * 1000
         assert turn["turn_end_ms"] == 1010 * 1000
         assert turn["duration_ms"] == 10000
+
+    def test_extracts_user_prompt_from_paginated_item_completed(self, tmp_path):
+        """Without this, Codex >= 0.148 Turn spans have an empty input.value: in
+        paginated history mode (the default for `codex exec`) the prompt is
+        persisted as item_completed(UserMessage), not user_message."""
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            # Injected context also arrives as a user response_item; it must not
+            # be mistaken for the prompt.
+            _resp(
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "<environment_context>...</environment_context>"}],
+                }
+            ),
+            _item_completed(_text("fix the bug")),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "fix the bug"
+
+    def test_paginated_prompt_joins_text_parts_and_skips_others(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _item_completed(_text("first"), {"type": "local_image", "path": "/tmp/x.png"}, _text("second")),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "first\nsecond"
+
+    def test_other_item_completed_items_do_not_set_prompt(self, tmp_path):
+        path = _write_rollout(
+            tmp_path,
+            "s1",
+            _evt({"type": "task_started", "turn_id": "t1"}),
+            _evt({"type": "user_message", "message": "hello"}),
+            _item_completed(_text("nope"), item_type="AgentMessage"),
+            _evt({"type": "task_complete", "turn_id": "t1"}),
+        )
+        turn = _extract_turn_from_rollout(path, "t1")
+        assert turn["user_prompt"] == "hello"
 
     def test_task_complete_overrides_intermediate_agent_message(self, tmp_path):
         path = _write_rollout(
@@ -1069,6 +1124,28 @@ class TestHandleNotify:
         assert parent_attrs["llm.token_count.total"]["intValue"] == 6
         child_attrs = _attrs_of_span(spans[1])
         assert child_attrs["tool.name"]["stringValue"] == "exec_command"
+
+    def test_turn_span_input_value_populated_on_codex_0_148_plus(self, _isolate_sessions_root):
+        """Codex >= 0.148 rollouts carry the prompt only in item_completed(UserMessage).
+        The Turn span's input.value must still be populated from it; before this was
+        handled, every such span had an empty input.value."""
+        _write_rollout(
+            _isolate_sessions_root,
+            "sess-new",
+            _evt({"type": "task_started", "turn_id": "turn-1"}),
+            _item_completed(_text("do something")),
+            _evt({"type": "task_complete", "turn_id": "turn-1", "last_agent_message": "done"}),
+        )
+
+        sent = []
+        with mock.patch(
+            "tracing.codex.hooks.handlers.send_span_to_backend",
+            side_effect=lambda p: (sent.append(p), True)[1],
+        ):
+            _handle_notify({"type": "agent-turn-complete", "thread-id": "sess-new", "turn-id": "turn-1"})
+
+        parent = sent[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert _attrs_of_span(parent)["input.value"]["stringValue"] == "do something"
 
 
 # ---------------------------------------------------------------------------
