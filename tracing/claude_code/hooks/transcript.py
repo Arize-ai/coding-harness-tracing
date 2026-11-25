@@ -72,8 +72,7 @@ def parse_claude_transcript(
             continue
         # Only assistant and user records are the conversation. Newer Claude Code
         # versions also write bookkeeping records, such as api-request-blob, that
-        # carry a copy of a message but no uuid. Reading them as model calls gives
-        # the graph unstable ids, which drops every tool span from the trace.
+        # carry a copy of a message but no uuid.
         entry_type = entry.get("type")
         if entry_type is not None and entry_type not in ("assistant", "user"):
             continue
