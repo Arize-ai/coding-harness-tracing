@@ -70,6 +70,12 @@ def parse_claude_transcript(
             continue
         if not isinstance(entry, dict):
             continue
+        # Only assistant and user records are the conversation. Newer Claude Code
+        # versions also write bookkeeping records, such as api-request-blob, that
+        # carry a copy of a message but no uuid.
+        entry_type = entry.get("type")
+        if entry_type is not None and entry_type not in ("assistant", "user"):
+            continue
 
         message = entry.get("message")
         if not isinstance(message, dict):
