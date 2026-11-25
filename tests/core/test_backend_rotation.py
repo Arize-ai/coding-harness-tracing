@@ -192,6 +192,30 @@ def test_phoenix_without_api_key_warns(home):
     assert _config(home)["harnesses"]["claude-code"]["api_key"] == ""
 
 
+PHOENIX_NO_KEY = "ARIZE_BACKEND=phoenix\nPHOENIX_ENDPOINT=http://phoenix.test:6006\n"
+
+
+def test_quiet_preflight_prints_no_backend_lines(home, tmp_path):
+    creds = tmp_path / "quiet.env"
+    creds.write_text(PHOENIX_NO_KEY)
+    result = _run(
+        home,
+        [sys.executable, "-m", "core.setup", "preflight", "claude"],
+        ARIZE_ENV_FILE=str(creds),
+        ARIZE_NONINTERACTIVE="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Backend:" not in result.stdout
+    assert result.stderr == ""
+
+
+def test_setup_prints_backend_lines_once(home):
+    result = _setup(home, PHOENIX_NO_KEY)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count("Backend: Phoenix at http://phoenix.test:6006") == 1
+    assert result.stderr.count(PHOENIX_KEY_WARNING) == 1
+
+
 def test_default_arize_endpoint_warns(home):
     result = _setup(home, "ARIZE_BACKEND=arize\nARIZE_API_KEY=key-2\nARIZE_SPACE_ID=space-2\n")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -286,3 +310,39 @@ class TestIsSystemUvInstall:
         monkeypatch.setattr(runner, "_is_windows", lambda: True)
         monkeypatch.setattr(runner.os, "access", lambda path, mode: False)
         assert runner.is_system_uv_install() is False
+
+
+# ---------------------------------------------------------------------------
+# _BackendSettings
+# ---------------------------------------------------------------------------
+
+
+def test_backend_ax_selects_arize(tmp_path):
+    home = _home(tmp_path)
+    result = _setup(home, ARIZE.replace("ARIZE_BACKEND=arize", "ARIZE_BACKEND=ax"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _config(home)["harnesses"]["claude-code"]["target"] == "arize"
+
+
+def test_unknown_backend_exits_and_writes_nothing(home, tmp_path):
+    creds = tmp_path / "phx.env"
+    creds.write_text("ARIZE_BACKEND=phx\nPHOENIX_ENDPOINT=http://phoenix.test:6006\n")
+    before = _whole_tree(home)
+    result = _cli(home, "setup", "claude", "-y", ARIZE_ENV_FILE=str(creds))
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Unknown ARIZE_BACKEND 'phx'" in result.stderr
+    assert _whole_tree(home) == before
+
+
+def test_empty_arize_endpoint_uses_the_default(home):
+    result = _setup(home, "ARIZE_BACKEND=arize\nARIZE_API_KEY=key-2\nARIZE_SPACE_ID=space-2\nARIZE_OTLP_ENDPOINT=\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[arize] warning: ARIZE_OTLP_ENDPOINT is not set; using the default Arize endpoint" in result.stderr
+    assert _config(home)["harnesses"]["claude-code"]["endpoint"] == "otlp.arize.com:443"
+
+
+def test_env_file_backend_beats_the_exported_one(tmp_path):
+    home = _home(tmp_path)
+    result = _setup(home, "ARIZE_BACKEND=phoenix\nPHOENIX_ENDPOINT=http://phoenix.test:6006\n", ARIZE_BACKEND="arize")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _config(home)["harnesses"]["claude-code"]["target"] == "phoenix"

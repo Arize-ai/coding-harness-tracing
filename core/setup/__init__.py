@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from getpass import getpass
 from pathlib import Path
 from typing import Callable, Optional
@@ -226,9 +227,37 @@ def prompt_backend(
     )
 
 
-def _backend_choice() -> str:
+@dataclass(frozen=True)
+class _BackendSettings:
+    """The six backend-selection settings, read once through ``_env``; empty is None."""
+
+    backend: str | None
+    arize_api_key: str | None
+    arize_space_id: str | None
+    arize_otlp_endpoint: str | None
+    phoenix_endpoint: str | None
+    phoenix_api_key: str | None
+
+    @classmethod
+    def load(cls) -> "_BackendSettings":
+        def read(name: str) -> str | None:
+            return _env(name) or None
+
+        return cls(
+            backend=read("ARIZE_BACKEND"),
+            arize_api_key=read("ARIZE_API_KEY"),
+            arize_space_id=read("ARIZE_SPACE_ID"),
+            arize_otlp_endpoint=read("ARIZE_OTLP_ENDPOINT"),
+            phoenix_endpoint=read("PHOENIX_ENDPOINT"),
+            phoenix_api_key=read("PHOENIX_API_KEY"),
+        )
+
+
+def _backend_choice(settings: _BackendSettings | None = None) -> str:
     """``ARIZE_BACKEND`` as ``"arize"`` or ``"phoenix"``, or ``""`` when unset. Exits on any other value."""
-    target = _env("ARIZE_BACKEND").lower()
+    if settings is None:
+        settings = _BackendSettings.load()
+    target = (settings.backend or "").lower()
     if target in ("ax", "arize"):
         return "arize"
     if target and target != "phoenix":
@@ -259,7 +288,8 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
     Exits with an actionable message when a required value is missing; this
     path must never fall back to a prompt, because there is nobody to answer it.
     """
-    target = _backend_choice()
+    settings = _BackendSettings.load()
+    target = _backend_choice(settings)
 
     if not target and strict:
         err(
@@ -269,7 +299,7 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
         sys.exit(1)
 
     if not target:
-        if _env("ARIZE_SPACE_ID") and _env("PHOENIX_ENDPOINT"):
+        if settings.arize_space_id and settings.phoenix_endpoint:
             # Both backends signalled. Picking one would silently discard the
             # other's credentials — a dev running Phoenix locally for their app
             # has PHOENIX_ENDPOINT in its .env while wanting Arize AX here.
@@ -278,9 +308,9 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
                 "backend is ambiguous. Set ARIZE_BACKEND to 'arize' or 'phoenix'."
             )
             sys.exit(1)
-        if _env("ARIZE_SPACE_ID"):
+        if settings.arize_space_id:
             target = "arize"
-        elif _env("ARIZE_API_KEY") and _env("PHOENIX_ENDPOINT"):
+        elif settings.arize_api_key and settings.phoenix_endpoint:
             # An Arize key with only a Phoenix endpoint: inferring Phoenix would
             # throw the key away, which is never what the caller meant.
             err(
@@ -288,9 +318,9 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
                 "for Arize AX, or set ARIZE_BACKEND=phoenix to use Phoenix deliberately."
             )
             sys.exit(1)
-        elif _env("PHOENIX_ENDPOINT"):
+        elif settings.phoenix_endpoint:
             target = "phoenix"
-        elif _env("ARIZE_API_KEY"):
+        elif settings.arize_api_key:
             # Both backends take an API key, so a key on its own is ambiguous.
             err(
                 "Found an API key but cannot tell which backend it is for. Add "
@@ -306,10 +336,10 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
 
     if target == "phoenix":
         if strict:
-            endpoint = _require_env("PHOENIX_ENDPOINT", "A Phoenix endpoint")
+            endpoint = _require_env(settings.phoenix_endpoint, "PHOENIX_ENDPOINT", "A Phoenix endpoint")
         else:
-            endpoint = _env("PHOENIX_ENDPOINT") or _DEFAULT_PHOENIX_ENDPOINT
-        api_key = _env("PHOENIX_API_KEY")
+            endpoint = settings.phoenix_endpoint or _DEFAULT_PHOENIX_ENDPOINT
+        api_key = settings.phoenix_api_key or ""
         info(f"Backend: Phoenix at {endpoint} (from {_source_of('PHOENIX_ENDPOINT', fallback='default')})", quiet)
         info(
             f"  API key: {'found' if api_key else 'none'} (from {_source_of('PHOENIX_API_KEY', fallback='unset')})",
@@ -321,9 +351,9 @@ def _backend_from_env(strict: bool = False, quiet: bool = False) -> tuple[str, d
 
     # Arize AX. Read the key but never echo it — only report that it was found
     # and where from, so a wrong-credentials install is diagnosable.
-    api_key = _require_env("ARIZE_API_KEY", "An Arize API key")
-    space_id = _require_env("ARIZE_SPACE_ID", "An Arize space ID")
-    endpoint = _env("ARIZE_OTLP_ENDPOINT")
+    api_key = _require_env(settings.arize_api_key, "ARIZE_API_KEY", "An Arize API key")
+    space_id = _require_env(settings.arize_space_id, "ARIZE_SPACE_ID", "An Arize space ID")
+    endpoint = settings.arize_otlp_endpoint or ""
     if not endpoint:
         endpoint = _DEFAULT_ARIZE_ENDPOINT
         if strict:
@@ -885,9 +915,8 @@ def env_flag(name: str, default: bool = True) -> bool:
     return raw in ("1", "true", "yes", "y", "on")
 
 
-def _require_env(name: str, what: str) -> str:
-    """Resolve a required value, or exit with an actionable message."""
-    value = _env(name)
+def _require_env(value: str | None, name: str, what: str) -> str:
+    """Return the required ``name`` setting's ``value``, or exit with an actionable message."""
     if not value:
         err(
             f"{what} is required for a non-interactive install — set {name}, or add it to the file\n"
