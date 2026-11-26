@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from core.common import StateManager
+from tracing.claude_code.hooks import tool_buffer
 from tracing.claude_code.hooks.tool_buffer import ToolBuffer, ToolObservation
 
 
@@ -201,3 +202,25 @@ def test_malformed_stored_json_fails_soft_to_empty_buffer(state):
 def test_invalid_result_status_is_rejected(buffer):
     with pytest.raises(ValueError, match="status"):
         buffer.record_result("tool-1", status="pending", ended_at_ms=2)
+
+
+def test_buffer_is_bounded_and_keeps_the_most_recently_written_observations(buffer, state, monkeypatch):
+    monkeypatch.setattr(tool_buffer, "MAX_BUFFER_BYTES", 2000, raising=False)
+    buffer.record_start("long-running", tool_name="Agent")
+    for index in range(20):
+        buffer.record_start(f"tool-{index}", tool_name="Read", tool_input={"data": "x" * 300})
+        buffer.record_result("long-running", status="success")
+
+    ids = [item.tool_use_id for item in buffer.all()]
+
+    assert len(state.get(ToolBuffer.STATE_KEY)) <= 2000
+    assert "tool-0" not in ids
+    assert ids[-2:] == ["tool-19", "long-running"]
+
+
+def test_buffer_keeps_the_newest_observation_even_when_it_exceeds_the_limit(buffer, monkeypatch):
+    monkeypatch.setattr(tool_buffer, "MAX_BUFFER_BYTES", 100, raising=False)
+    buffer.record_start("small")
+    buffer.record_result("large", status="success", tool_response="x" * 500)
+
+    assert [item.tool_use_id for item in buffer.all()] == ["large"]

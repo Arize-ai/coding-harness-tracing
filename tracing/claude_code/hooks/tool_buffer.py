@@ -13,6 +13,9 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from core.common import StateManager
 
 _VALID_STATUSES = {"pending", "success", "error"}
+# Observations that no exported turn matches are never acknowledged, and every
+# hook rewrites the whole state file, so the buffer needs a size limit.
+MAX_BUFFER_BYTES = 4 * 1024 * 1024
 
 
 def _json_safe(value: Any) -> Any:
@@ -96,7 +99,7 @@ class ToolBuffer:
         _validate_tool_use_id(tool_use_id)
 
         def update(items: Dict[str, ToolObservation]) -> Tuple[ToolObservation, bool]:
-            observation = items.get(tool_use_id) or ToolObservation(tool_use_id=tool_use_id)
+            observation = items.pop(tool_use_id, None) or ToolObservation(tool_use_id=tool_use_id)
             observation.tool_name = tool_name
             observation.tool_input = _json_safe(tool_input)
             observation.started_at_ms = started_at_ms
@@ -123,7 +126,7 @@ class ToolBuffer:
             raise ValueError("status must be 'success' or 'error'")
 
         def update(items: Dict[str, ToolObservation]) -> Tuple[ToolObservation, bool]:
-            observation = items.get(tool_use_id) or ToolObservation(tool_use_id=tool_use_id)
+            observation = items.pop(tool_use_id, None) or ToolObservation(tool_use_id=tool_use_id)
             observation.status = status
             observation.tool_response = _json_safe(tool_response)
             observation.error = _json_safe(error)
@@ -209,10 +212,18 @@ class ToolBuffer:
 
     @staticmethod
     def _encode(items: Mapping[str, ToolObservation]) -> str:
-        return json.dumps(
-            {tool_use_id: observation.to_dict() for tool_use_id, observation in items.items()},
-            separators=(",", ":"),
-        )
+        # Items are ordered by last write: keep the newest ones that fit, and
+        # always the newest one. json.dumps emits ASCII, so characters are bytes.
+        entries: List[str] = []
+        size = 1  # braces, minus the comma the first entry does not need
+        for tool_use_id, observation in reversed(list(items.items())):
+            value = json.dumps(observation.to_dict(), separators=(",", ":"))
+            entry = f"{json.dumps(tool_use_id)}:{value}"
+            size += len(entry) + 1
+            if entries and size > MAX_BUFFER_BYTES:
+                break
+            entries.append(entry)
+        return "{" + ",".join(reversed(entries)) + "}"
 
     def _mutate(self, operation: Callable[[Dict[str, ToolObservation]], Tuple[Any, bool]]) -> Any:
         """Apply a read/modify/write transaction under StateManager's lock."""
